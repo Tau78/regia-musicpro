@@ -1,4 +1,4 @@
-import { isStillImagePath } from './mediaPaths.ts'
+import { isStillImagePath } from '../mediaPaths.ts'
 import { probeVideoDurationSec } from './probeMediaDurationSec.ts'
 
 export async function probeFileDurationSec(
