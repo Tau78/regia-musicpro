@@ -15,6 +15,10 @@ files:
 
 asar: true
 
+# Su tag, electron-builder altrimenti tenta la "publish" su GitHub e fallisce senza GH_TOKEN.
+# La CI carica l'.exe come artifact; niente upload automatico alle Releases.
+publish: null
+
 win:
   target:
     - target: nsis
