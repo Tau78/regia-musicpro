@@ -207,27 +207,27 @@ export default function SavedPlaylistsPanel({
     void refreshSavedPlaylists()
   }, [refreshSavedPlaylists])
 
-  const backfillFingerprint = useMemo(
-    () =>
-      savedPlaylists
-        .map((pl) => `${pl.id}:${pl.totalDurationSec ?? 'x'}`)
-        .join('|'),
-    [savedPlaylists],
-  )
+  const needsBackfillKey = useMemo(() => {
+    const ids = savedPlaylists
+      .filter(
+        (pl) =>
+          pl.trackCount > 0 &&
+          (pl.totalDurationSec == null || !Number.isFinite(pl.totalDurationSec)),
+      )
+      .map((pl) => pl.id)
+      .sort()
+    return ids.join(',')
+  }, [savedPlaylists])
 
   useEffect(() => {
+    if (!needsBackfillKey) return
     let cancelled = false
-    const missing = savedPlaylists.filter(
-      (pl) =>
-        pl.trackCount > 0 &&
-        (pl.totalDurationSec == null || !Number.isFinite(pl.totalDurationSec)),
-    )
-    if (!missing.length) return
+    const ids = needsBackfillKey.split(',').filter(Boolean)
     void (async () => {
-      for (const pl of missing) {
+      for (const id of ids) {
         if (cancelled) return
         try {
-          const data = await window.electronAPI.playlistsLoad(pl.id)
+          const data = await window.electronAPI.playlistsLoad(id)
           if (!data || cancelled) continue
           const paths =
             data.playlistMode === 'launchpad'
@@ -238,7 +238,7 @@ export default function SavedPlaylistsPanel({
           if (!paths.length) continue
           const total = await sumMediaDurationsSec(paths)
           if (cancelled) return
-          await window.electronAPI.playlistsPatchTotalDuration(pl.id, total)
+          await window.electronAPI.playlistsPatchTotalDuration(id, total)
         } catch {
           /* file non disponibili o errore metadati */
         }
@@ -248,7 +248,7 @@ export default function SavedPlaylistsPanel({
     return () => {
       cancelled = true
     }
-  }, [backfillFingerprint, refreshSavedPlaylists, savedPlaylists])
+  }, [needsBackfillKey, refreshSavedPlaylists])
 
   return (
     <section className="saved-playlists" aria-label="Playlist">
