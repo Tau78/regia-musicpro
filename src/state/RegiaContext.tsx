@@ -14,6 +14,10 @@ import {
 import { isMediaFilePath } from '../lib/isMediaFilePath.ts'
 import { normalizePersistedPadKeyCode } from '../lib/launchPadKeyboard.ts'
 import {
+  readLaunchPadCueEnabled,
+  readLaunchPadDefaultKeyMode,
+} from '../lib/launchPadSettings.ts'
+import {
   isLaunchpadSamplePausedWithSrc,
   pauseLaunchpadSample,
   playLaunchpadSample,
@@ -2422,16 +2426,18 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       }
       padKeyboardGestureRef.current = g
 
-      g.timer = window.setTimeout(() => {
-        const cur = padKeyboardGestureRef.current
-        if (!cur || cur.code !== g.code || cur.cueCommitted) return
-        cur.cueCommitted = true
-        cur.timer = null
-        void loadLaunchPadSlotAndPlayRef.current(
-          cur.sessionId,
-          cur.slotIndex,
-        )
-      }, LAUNCHPAD_CUE_HOLD_MS)
+      if (readLaunchPadCueEnabled()) {
+        g.timer = window.setTimeout(() => {
+          const cur = padKeyboardGestureRef.current
+          if (!cur || cur.code !== g.code || cur.cueCommitted) return
+          cur.cueCommitted = true
+          cur.timer = null
+          void loadLaunchPadSlotAndPlayRef.current(
+            cur.sessionId,
+            cur.slotIndex,
+          )
+        }, LAUNCHPAD_CUE_HOLD_MS)
+      }
     }
 
     const onKeyUp = (e: globalThis.KeyboardEvent) => {
@@ -2528,7 +2534,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         typeof assignKey === 'string' && assignKey.length > 0
           ? prevCells.map((c, i) =>
               i !== slotIndex && c.padKeyCode === assignKey
-                ? { ...c, padKeyCode: null, padKeyMode: 'play' as const }
+                ? {
+                    ...c,
+                    padKeyCode: null,
+                    padKeyMode: readLaunchPadDefaultKeyMode(),
+                  }
                 : { ...c },
             )
           : prevCells.map((c) => ({ ...c }))
@@ -2561,7 +2571,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
               ? null
               : normalizePersistedPadKeyCode(patch.padKeyCode)
           if (patch.padKeyCode === null) {
-            padKeyMode = 'play'
+            padKeyMode = readLaunchPadDefaultKeyMode()
           }
         }
         if ('padKeyMode' in patch && patch.padKeyMode !== undefined) {

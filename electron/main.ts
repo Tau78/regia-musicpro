@@ -85,7 +85,12 @@ function normalizeLaunchPadCellsStored(
       const t = c.padKeyCode.trim()
       if (/^[A-Za-z][A-Za-z0-9]*$/.test(t) && t.length <= 48) padKeyCode = t
     }
-    const padKeyMode = c.padKeyMode === 'toggle' ? 'toggle' : 'play'
+    const padKeyMode =
+      c.padKeyMode === 'toggle'
+        ? 'toggle'
+        : c.padKeyMode === 'play'
+          ? 'play'
+          : 'toggle'
     out.push({ samplePath, padColor, padGain, padKeyCode, padKeyMode })
   }
   return out

@@ -28,6 +28,9 @@ import {
   type SessionSnapDims,
 } from '../lib/planciaSnap.ts'
 import { readPreviewLayoutFromLs } from '../lib/previewLayoutStorage.ts'
+import {
+  useLaunchPadCueEnabled,
+} from '../lib/launchPadSettings.ts'
 import { usePlanciaSnapEnabled } from '../lib/planciaSnapSettings.ts'
 import {
   dataTransferHasFileList,
@@ -457,6 +460,9 @@ function isTypingTarget(el: EventTarget | null): boolean {
 const REORDER_LONG_PRESS_MS = 420
 const REORDER_CANCEL_MOVE_PX = 12
 
+/** Stesso riferimento quando `session` è assente, così gli effetti non dipendono da `[]` nuovo ogni render. */
+const EMPTY_PLAYLIST_PATHS: string[] = []
+
 function pickPlaylistDropIndex(
   ul: HTMLUListElement | null,
   clientX: number,
@@ -563,10 +569,11 @@ export default function FloatingPlaylist({
   } = useRegia()
 
   const snapEnabled = usePlanciaSnapEnabled()
+  const launchPadCueEnabled = useLaunchPadCueEnabled()
 
   const session = floatingPlaylistSessions.find((s) => s.id === sessionId)
   const isLaunchpad = session?.playlistMode === 'launchpad'
-  const paths = session?.paths ?? []
+  const paths = session?.paths ?? EMPTY_PLAYLIST_PATHS
   const trackDurations = usePlaylistMediaDurations(paths)
   const launchPadCells =
     session?.launchPadCells ??
@@ -721,6 +728,44 @@ export default function FloatingPlaylist({
     }
     updateFloatingPlaylistChrome(sessionId, patch)
   }, [sessionId, updateFloatingPlaylistChrome])
+
+  const currentPlayIndexInThisPanel =
+    playbackLoadedTrack?.sessionId === sessionId
+      ? playbackLoadedTrack.index
+      : null
+
+  useLayoutEffect(() => {
+    if (
+      isLaunchpad ||
+      collapsed ||
+      currentPlayIndexInThisPanel == null ||
+      paths.length === 0
+    )
+      return
+    const root = listRef.current
+    if (!root) return
+    const row = root.querySelector(
+      `li.floating-playlist-item[data-pl-idx="${currentPlayIndexInThisPanel}"]`,
+    ) as HTMLElement | null
+    if (!row) return
+    const rootRect = root.getBoundingClientRect()
+    const rowRect = row.getBoundingClientRect()
+    const margin = 6
+    const fullyVisible =
+      rowRect.top >= rootRect.top + margin &&
+      rowRect.bottom <= rootRect.bottom - margin
+    if (fullyVisible) return
+    row.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' })
+  }, [
+    collapsed,
+    currentPlayIndexInThisPanel,
+    draggingIndex,
+    dragOverIndex,
+    isLaunchpad,
+    paths,
+    pendingReorderIndex,
+    sessionId,
+  ])
 
   const reclampIntoView = useCallback(() => {
     const el = panelRef.current
@@ -1449,17 +1494,19 @@ export default function FloatingPlaylist({
         }
       }
 
-      gesture.timer = setTimeout(() => {
-        const g = launchPadSampleGestureRef.current
-        if (!g || g.slotIndex !== slotIndex || g.cancelled) return
-        g.cueActive = true
-        g.timer = null
-        setPadFlashSlot(slotIndex)
-        window.setTimeout(() => {
-          setPadFlashSlot((cur) => (cur === slotIndex ? null : cur))
-        }, 200)
-        void loadLaunchPadSlotAndPlay(sessionId, slotIndex)
-      }, LAUNCHPAD_CUE_HOLD_MS)
+      if (launchPadCueEnabled) {
+        gesture.timer = setTimeout(() => {
+          const g = launchPadSampleGestureRef.current
+          if (!g || g.slotIndex !== slotIndex || g.cancelled) return
+          g.cueActive = true
+          g.timer = null
+          setPadFlashSlot(slotIndex)
+          window.setTimeout(() => {
+            setPadFlashSlot((cur) => (cur === slotIndex ? null : cur))
+          }, 200)
+          void loadLaunchPadSlotAndPlay(sessionId, slotIndex)
+        }, LAUNCHPAD_CUE_HOLD_MS)
+      }
 
       el.addEventListener('pointermove', onMove)
       el.addEventListener('pointerup', onUpOrCancel)
@@ -1472,6 +1519,7 @@ export default function FloatingPlaylist({
       loadLaunchPadSlotAndPlay,
       stopLaunchPadCueRelease,
       armSuppressNextLaunchPadClick,
+      launchPadCueEnabled,
     ],
   )
 
@@ -2015,10 +2063,16 @@ export default function FloatingPlaylist({
           {isLaunchpad ? (
             <span className="floating-playlist-launchpad-toolbar-hint">
               Griglia 4×4: slot vuoto → dialog file · trascina file su slot o griglia
-              · Maiusc+clic file · Alt+clic colore · tap breve = play intero · tenere
-              premuto = CUE (audio fino al rilascio) · tasto destro: gain / tasto /
-              svuota · tasto: Play sempre play, Toggle play/stop · tenere premuto il
-              tasto = CUE (senza modificatori)
+              · Maiusc+clic file · Alt+clic colore ·{' '}
+              {launchPadCueEnabled
+                ? 'tap breve = play intero · tenere premuto = CUE (audio fino al rilascio)'
+                : 'clic = play intero (CUE disattivato in Impostazioni)'}
+              {' '}
+              · tasto destro: gain / tasto / svuota · tasto: Play sempre play, Toggle
+              play/stop
+              {launchPadCueEnabled
+                ? ' · tenere premuto il tasto = CUE (senza modificatori)'
+                : ''}
             </span>
           ) : null}
           {launchPadCtx && isLaunchpad && launchPadCells ? (
@@ -2220,8 +2274,20 @@ export default function FloatingPlaylist({
                     onContextMenu={(ev) => onLaunchPadCellContextMenu(i, ev)}
                     title={
                       cell.samplePath
-                        ? `Slot ${i + 1}: ${name} — tap breve play intero · tenere premuto CUE (stop al rilascio) · tasto destro: gain / tasto / svuota${cell.padKeyCode ? ` · tasto: ${cell.padKeyCode} (${cell.padKeyMode === 'toggle' ? 'Toggle' : 'Play'})` : ''}`
-                        : `Slot ${i + 1} vuoto — clic per file · tasto destro: gain / tasto${cell.padKeyCode ? ` (${cell.padKeyCode} ${cell.padKeyMode === 'toggle' ? 'Toggle' : 'Play'})` : ''}`
+                        ? `Slot ${i + 1}: ${name} — ${
+                            launchPadCueEnabled
+                              ? 'tap breve play intero · tenere premuto CUE (stop al rilascio)'
+                              : 'clic = play intero'
+                          } · tasto destro: gain / tasto / svuota${
+                            cell.padKeyCode
+                              ? ` · tasto: ${cell.padKeyCode} (${cell.padKeyMode === 'toggle' ? 'Toggle' : 'Play'})`
+                              : ''
+                          }`
+                        : `Slot ${i + 1} vuoto — clic per file · tasto destro: gain / tasto${
+                            cell.padKeyCode
+                              ? ` (${cell.padKeyCode} ${cell.padKeyMode === 'toggle' ? 'Toggle' : 'Play'})`
+                              : ''
+                          }`
                     }
                   >
                     <span className="launchpad-cell-glow" aria-hidden />

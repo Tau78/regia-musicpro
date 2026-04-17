@@ -1,3 +1,5 @@
+import { readLaunchPadDefaultKeyMode } from '../lib/launchPadSettings.ts'
+
 export type FloatingPlaylistPos = { x: number; y: number }
 
 /** Dimensioni pannello espanso (in comprimi l’altezza è automatica). */
@@ -20,7 +22,9 @@ export type PlaylistMode = 'tracks' | 'launchpad'
 export type LaunchPadKeyMode = 'play' | 'toggle'
 
 export function normalizeLaunchPadKeyMode(v: unknown): LaunchPadKeyMode {
-  return v === 'toggle' ? 'toggle' : 'play'
+  if (v === 'toggle') return 'toggle'
+  if (v === 'play') return 'play'
+  return readLaunchPadDefaultKeyMode()
 }
 
 export type LaunchPadCell = {
@@ -61,12 +65,13 @@ const DEFAULT_LAUNCHPAD_PAD_COLORS: readonly string[] = [
 ]
 
 export function defaultLaunchPadCells(): LaunchPadCell[] {
+  const defaultMode = readLaunchPadDefaultKeyMode()
   return Array.from({ length: LAUNCHPAD_CELL_COUNT }, (_, i) => ({
     samplePath: null,
     padColor: DEFAULT_LAUNCHPAD_PAD_COLORS[i] ?? '#444cf7',
     padGain: 1,
     padKeyCode: null,
-    padKeyMode: 'play' as const,
+    padKeyMode: defaultMode,
   }))
 }
 

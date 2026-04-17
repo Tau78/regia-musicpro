@@ -6,6 +6,13 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import {
+  readLaunchPadCueEnabled,
+  readLaunchPadDefaultKeyMode,
+  writeLaunchPadCueEnabled,
+  writeLaunchPadDefaultKeyMode,
+  type LaunchPadKeyModePref,
+} from '../lib/launchPadSettings.ts'
+import {
   readPlanciaSnapEnabled,
   writePlanciaSnapEnabled,
 } from '../lib/planciaSnapSettings.ts'
@@ -32,6 +39,9 @@ export default function SettingsModal({
   })
   const [busy, setBusy] = useState(false)
   const [snapEnabled, setSnapEnabled] = useState(true)
+  const [launchPadDefaultKeyMode, setLaunchPadDefaultKeyMode] =
+    useState<LaunchPadKeyModePref>('toggle')
+  const [launchPadCueEnabled, setLaunchPadCueEnabled] = useState(true)
   const [stillDraft, setStillDraft] = useState(
     String(DEFAULT_STILL_IMAGE_DURATION_SEC),
   )
@@ -55,6 +65,8 @@ export default function SettingsModal({
   useEffect(() => {
     if (!open) return
     setSnapEnabled(readPlanciaSnapEnabled())
+    setLaunchPadDefaultKeyMode(readLaunchPadDefaultKeyMode())
+    setLaunchPadCueEnabled(readLaunchPadCueEnabled())
   }, [open])
 
   useEffect(() => {
@@ -72,6 +84,20 @@ export default function SettingsModal({
     const v = e.target.checked
     writePlanciaSnapEnabled(v)
     setSnapEnabled(v)
+  }, [])
+
+  const onLaunchPadDefaultKeyModeChange = useCallback(
+    (mode: LaunchPadKeyModePref) => {
+      writeLaunchPadDefaultKeyMode(mode)
+      setLaunchPadDefaultKeyMode(mode)
+    },
+    [],
+  )
+
+  const onLaunchPadCueChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.checked
+    writeLaunchPadCueEnabled(v)
+    setLaunchPadCueEnabled(v)
   }, [])
 
   const onPickResolution = useCallback(
@@ -159,6 +185,54 @@ export default function SettingsModal({
                 onChange={onSnapChange}
               />
               <span>SNAP</span>
+            </label>
+          </section>
+          <section
+            className="settings-modal-section"
+            aria-labelledby="settings-launchpad-label"
+          >
+            <h3
+              id="settings-launchpad-label"
+              className="settings-modal-section-title"
+            >
+              Launchpad
+            </h3>
+            <p className="settings-modal-hint">
+              Comportamento predefinito per i tasti assegnati ai pad (solo tastiera) e
+              modalità CUE (tenere premuto pad o tasto per ascoltare fino al rilascio).
+              I pad già configurati restano come salvati; il default vale per i pad nuovi
+              e quando rimuovi un tasto.
+            </p>
+            <fieldset className="settings-modal-fieldset">
+              <legend className="settings-modal-fieldset-legend">
+                Tasto predefinito sui pad
+              </legend>
+              <label className="settings-modal-checkbox-row">
+                <input
+                  type="radio"
+                  name="launchpad-default-key-mode"
+                  checked={launchPadDefaultKeyMode === 'toggle'}
+                  onChange={() => onLaunchPadDefaultKeyModeChange('toggle')}
+                />
+                <span>Toggle (play / stop sullo stesso slot)</span>
+              </label>
+              <label className="settings-modal-checkbox-row">
+                <input
+                  type="radio"
+                  name="launchpad-default-key-mode"
+                  checked={launchPadDefaultKeyMode === 'play'}
+                  onChange={() => onLaunchPadDefaultKeyModeChange('play')}
+                />
+                <span>Play (ogni pressione corta = play intero)</span>
+              </label>
+            </fieldset>
+            <label className="settings-modal-checkbox-row settings-modal-checkbox-row--spaced">
+              <input
+                type="checkbox"
+                checked={launchPadCueEnabled}
+                onChange={onLaunchPadCueChange}
+              />
+              <span>Abilita CUE (tenere premuto)</span>
             </label>
           </section>
           <section

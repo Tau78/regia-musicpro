@@ -255,6 +255,25 @@ button {
   cursor: pointer;
 }
 
+.settings-modal-checkbox-row--spaced {
+  margin-top: 0.65rem;
+}
+
+.settings-modal-fieldset {
+  margin: 0 0 0.35rem;
+  padding: 0;
+  border: none;
+  min-width: 0;
+}
+
+.settings-modal-fieldset-legend {
+  padding: 0;
+  margin: 0 0 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
 .settings-modal-numeric-row {
   display: flex;
   flex-wrap: wrap;
