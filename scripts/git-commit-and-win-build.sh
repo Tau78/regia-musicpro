@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 1) Stesso flusso di git-commit.sh
+# 1) Se ci sono modifiche: stesso flusso di git-commit.sh. Se il working tree è pulito,
+#    salta il commit e crea solo il tag (utile quando il codice è già stato pushato).
 # 2) Crea il tag v<version> da package.json e fa push del branch + tag.
 #    Su GitHub parte il workflow che genera l'installer Windows (.exe).
 #
@@ -17,7 +18,11 @@ if [ "$#" -lt 1 ]; then
   exit 1
 fi
 
-"$ROOT/scripts/git-commit.sh" "$@"
+if [ -n "$(git status --porcelain)" ]; then
+  "$ROOT/scripts/git-commit.sh" "$@"
+else
+  echo "Nessuna modifica da committare: salto il commit e creo solo il tag per far partire la build CI."
+fi
 
 VERSION="$(node -p "require('./package.json').version")"
 TAG="v${VERSION}"
