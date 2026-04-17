@@ -10,3 +10,5 @@ export type PlaybackCommand =
   | { type: 'setSinkId'; sinkId: string }
   | { type: 'setLoopOne'; loop: boolean }
   | { type: 'setCrossfade'; enabled: boolean }
+  /** Durata immagine fissa in playlist (secondi, clamp 1–600 in uscita). */
+  | { type: 'setStillImageDurationSec'; seconds: number }

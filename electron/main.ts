@@ -17,17 +17,78 @@ type SavedPlaylistMeta = {
   label: string
   trackCount: number
   updatedAt: string
+  totalDurationSec?: number
   themeColor?: string
+  /** Assente = elenco brani; `launchpad` = griglia 4×4. */
+  playlistMode?: 'tracks' | 'launchpad'
 }
+
+type LaunchPadCellStored = {
+  samplePath: string | null
+  padColor: string
+  padGain: number
+  /** `KeyboardEvent.code` (opzionale). */
+  padKeyCode?: string | null
+  padKeyMode?: 'play' | 'toggle'
+}
+
+const LAUNCHPAD_CELL_COUNT = 16
+
+type StoredPlaylistLoopMode = 'off' | 'one' | 'all'
 
 type StoredPlaylistEntry = {
   label: string
   paths: string[]
   updatedAt: string
+  /** Somma durate file in secondi (opzionale; calcolata lato renderer). */
+  totalDurationSec?: number
   /** Dissolvenza incrociata tra brani (solo stesso tipo: video/video o immagine/immagine). */
   crossfade?: boolean
+  /** Loop elenco brani (solo `playlistMode: 'tracks'`). */
+  loopMode?: StoredPlaylistLoopMode
   /** Hex #rrggbb tema playlist (opzionale). */
   themeColor?: string
+  playlistMode?: 'tracks' | 'launchpad'
+  launchPadCells?: LaunchPadCellStored[]
+}
+
+function normalizeStoredLoopMode(
+  v: unknown,
+): StoredPlaylistLoopMode | undefined {
+  if (v === 'off' || v === 'one' || v === 'all') return v
+  return undefined
+}
+
+function normalizeLaunchPadCellsStored(
+  raw: unknown,
+): LaunchPadCellStored[] | undefined {
+  if (!Array.isArray(raw) || raw.length < LAUNCHPAD_CELL_COUNT) return undefined
+  const out: LaunchPadCellStored[] = []
+  for (let i = 0; i < LAUNCHPAD_CELL_COUNT; i++) {
+    const cell = raw[i]
+    if (!cell || typeof cell !== 'object') return undefined
+    const c = cell as Record<string, unknown>
+    const samplePath =
+      c.samplePath === null
+        ? null
+        : typeof c.samplePath === 'string'
+          ? c.samplePath
+          : null
+    const padColor =
+      typeof c.padColor === 'string' && c.padColor.trim() ? c.padColor : '#444cf7'
+    const padGain =
+      typeof c.padGain === 'number' && Number.isFinite(c.padGain)
+        ? Math.min(1, Math.max(0, c.padGain))
+        : 1
+    let padKeyCode: string | null = null
+    if (typeof c.padKeyCode === 'string') {
+      const t = c.padKeyCode.trim()
+      if (/^[A-Za-z][A-Za-z0-9]*$/.test(t) && t.length <= 48) padKeyCode = t
+    }
+    const padKeyMode = c.padKeyMode === 'toggle' ? 'toggle' : 'play'
+    out.push({ samplePath, padColor, padGain, padKeyCode, padKeyMode })
+  }
+  return out
 }
 
 function normalizeStoredThemeColor(v: unknown): string | undefined {
@@ -74,13 +135,36 @@ function listSavedPlaylists(): SavedPlaylistMeta[] {
   return Object.entries(s.items)
     .map(([id, v]) => {
       const tc = normalizeStoredThemeColor(v.themeColor)
+      const mode =
+        v.playlistMode === 'launchpad' ? ('launchpad' as const) : undefined
+      const cells =
+        mode === 'launchpad'
+          ? normalizeLaunchPadCellsStored(v.launchPadCells)
+          : undefined
+      const padCount =
+        mode === 'launchpad'
+          ? cells
+            ? cells.filter((c) => c.samplePath).length
+            : 0
+          : Array.isArray(v.paths)
+            ? v.paths.length
+            : 0
       const meta: SavedPlaylistMeta = {
         id,
         label: v.label,
-        trackCount: Array.isArray(v.paths) ? v.paths.length : 0,
+        trackCount: padCount,
         updatedAt: v.updatedAt,
       }
+      const td = v.totalDurationSec
+      if (
+        typeof td === 'number' &&
+        Number.isFinite(td) &&
+        td >= 0
+      ) {
+        meta.totalDurationSec = td
+      }
       if (tc) meta.themeColor = tc
+      if (mode) meta.playlistMode = mode
       return meta
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -91,7 +175,11 @@ function saveSavedPlaylist(opts: {
   label: string
   paths: string[]
   crossfade?: boolean
+  loopMode?: StoredPlaylistLoopMode
   themeColor?: string | null
+  playlistMode?: 'tracks' | 'launchpad'
+  launchPadCells?: LaunchPadCellStored[]
+  totalDurationSec?: number
 }): { id: string } {
   const id = opts.id ?? `pl_${Date.now()}`
   const label = opts.label.trim().slice(0, 120) || 'Senza titolo'
@@ -100,16 +188,49 @@ function saveSavedPlaylist(opts: {
     opts.themeColor === '' || opts.themeColor == null
       ? undefined
       : normalizeStoredThemeColor(opts.themeColor)
+  const isLaunchpad = opts.playlistMode === 'launchpad'
+  const cellsNorm = isLaunchpad
+    ? normalizeLaunchPadCellsStored(opts.launchPadCells ?? [])
+    : undefined
   const entry: StoredPlaylistEntry = {
     label,
-    paths: [...opts.paths],
+    paths: isLaunchpad ? [] : [...opts.paths],
     updatedAt: new Date().toISOString(),
     crossfade: Boolean(opts.crossfade),
   }
   if (tc) entry.themeColor = tc
+  if (isLaunchpad) {
+    entry.playlistMode = 'launchpad'
+    entry.launchPadCells = cellsNorm ?? []
+    delete entry.crossfade
+    delete entry.loopMode
+  } else {
+    entry.playlistMode = 'tracks'
+    delete entry.launchPadCells
+    entry.loopMode = normalizeStoredLoopMode(opts.loopMode) ?? 'off'
+  }
+  const tds = opts.totalDurationSec
+  if (typeof tds === 'number' && Number.isFinite(tds) && tds >= 0) {
+    entry.totalDurationSec = tds
+  } else {
+    delete entry.totalDurationSec
+  }
   s.items[id] = entry
   writePlaylistsStore(s)
   return { id }
+}
+
+function patchSavedPlaylistTotalDuration(
+  id: string,
+  totalDurationSec: number,
+): boolean {
+  if (!Number.isFinite(totalDurationSec) || totalDurationSec < 0) return false
+  const s = readPlaylistsStore()
+  const e = s.items[id]
+  if (!e) return false
+  e.totalDurationSec = totalDurationSec
+  writePlaylistsStore(s)
+  return true
 }
 
 function getSavedPlaylist(
@@ -119,18 +240,28 @@ function getSavedPlaylist(
   label: string
   paths: string[]
   crossfade: boolean
+  loopMode: StoredPlaylistLoopMode
   themeColor: string
+  playlistMode: 'tracks' | 'launchpad'
+  launchPadCells: LaunchPadCellStored[]
 } | null {
   const s = readPlaylistsStore()
   const e = s.items[id]
   if (!e) return null
   const tc = normalizeStoredThemeColor(e.themeColor)
+  const isLp = e.playlistMode === 'launchpad'
+  const cells = isLp
+    ? normalizeLaunchPadCellsStored(e.launchPadCells) ?? []
+    : []
   return {
     id,
     label: e.label,
-    paths: [...e.paths],
-    crossfade: Boolean(e.crossfade),
+    paths: isLp ? [] : [...e.paths],
+    crossfade: isLp ? false : Boolean(e.crossfade),
+    loopMode: isLp ? 'off' : (normalizeStoredLoopMode(e.loopMode) ?? 'off'),
     themeColor: tc ?? '',
+    playlistMode: isLp ? 'launchpad' : 'tracks',
+    launchPadCells: cells,
   }
 }
 
@@ -144,17 +275,44 @@ function deleteSavedPlaylist(id: string): boolean {
 
 function duplicateSavedPlaylist(id: string): { id: string } | null {
   const src = getSavedPlaylist(id)
-  if (!src?.paths?.length) return null
+  if (!src) return null
+  if (src.playlistMode === 'launchpad') {
+    const hasPad = src.launchPadCells.some((c) => c.samplePath)
+    if (!hasPad) return null
+  } else if (!src.paths.length) {
+    return null
+  }
+  const store = readPlaylistsStore()
+  const srcEntry = store.items[id]
+  const srcTd = srcEntry?.totalDurationSec
+  const copyTd =
+    typeof srcTd === 'number' && Number.isFinite(srcTd) && srcTd >= 0
+      ? srcTd
+      : undefined
   const raw = src.label.trim() || 'Senza titolo'
   const suffix = ' (copia)'
   const maxBase = Math.max(0, 120 - suffix.length)
   const label = `${raw.slice(0, maxBase)}${suffix}`.slice(0, 120)
   const dupTheme = normalizeStoredThemeColor(src.themeColor)
+  if (src.playlistMode === 'launchpad') {
+    return saveSavedPlaylist({
+      label,
+      paths: [],
+      crossfade: false,
+      themeColor: dupTheme ?? null,
+      playlistMode: 'launchpad',
+      launchPadCells: src.launchPadCells.map((c) => ({ ...c })),
+      totalDurationSec: copyTd,
+    })
+  }
   return saveSavedPlaylist({
     label,
     paths: [...src.paths],
     crossfade: src.crossfade,
+    loopMode: src.loopMode,
     themeColor: dupTheme ?? null,
+    playlistMode: 'tracks',
+    totalDurationSec: copyTd,
   })
 }
 
@@ -247,7 +405,45 @@ function getDevServerUrl(): string {
 }
 
 const MEDIA_EXT =
-  /\.(mp4|webm|mov|m4v|mkv|mp3|wav|aac|ogg|flac|m4a|jpg|jpeg|png)$/i
+  /\.(mp4|webm|mov|m4v|mkv|mp3|wav|aif|aiff|aac|ogg|flac|m4a|jpg|jpeg|png)$/i
+
+type DialogLastDirs = {
+  /** Ultima cartella usata per «Apri cartella» (playlist). */
+  playlistFolder?: string
+  /** Ultima cartella usata per dialog file multipli (playlist). */
+  playlistMediaDir?: string
+  /** Ultima cartella usata per dialog file su Launchpad. */
+  launchpadMediaDir?: string
+}
+
+function dialogLastDirsPath(): string {
+  return path.join(app.getPath('userData'), 'dialog-last-dirs.json')
+}
+
+function readDialogLastDirs(): DialogLastDirs {
+  try {
+    const raw = fs.readFileSync(dialogLastDirsPath(), 'utf8')
+    return JSON.parse(raw) as DialogLastDirs
+  } catch {
+    return {}
+  }
+}
+
+function writeDialogLastDirs(patch: Partial<DialogLastDirs>): void {
+  const next = { ...readDialogLastDirs(), ...patch }
+  const fp = dialogLastDirsPath()
+  fs.mkdirSync(path.dirname(fp), { recursive: true })
+  fs.writeFileSync(fp, JSON.stringify(next, null, 0), 'utf8')
+}
+
+function existingDir(p: string | undefined): string | undefined {
+  if (!p) return undefined
+  try {
+    return fs.existsSync(p) && fs.statSync(p).isDirectory() ? p : undefined
+  } catch {
+    return undefined
+  }
+}
 
 function getSecondaryDisplay() {
   const displays = screen.getAllDisplays()
@@ -345,15 +541,53 @@ function pathToMediaUrl(absPath: string): string {
   return pathToFileURL(absPath).href
 }
 
+/** Sample integrati per «Launchpad base»: dev `public/`, produzione `dist/` dopo vite build. */
+function resolveLaunchpadBaseKitDir(): string | null {
+  const fromPublic = path.join(__dirname, '..', 'public', 'launchpad-base')
+  const fromDist = path.join(__dirname, '..', 'dist', 'launchpad-base')
+  try {
+    if (fs.existsSync(fromPublic) && fs.statSync(fromPublic).isDirectory()) {
+      return fromPublic
+    }
+    if (fs.existsSync(fromDist) && fs.statSync(fromDist).isDirectory()) {
+      return fromDist
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
+function listLaunchpadBaseKitPaths(): string[] {
+  const dir = resolveLaunchpadBaseKitDir()
+  if (!dir) return []
+  let names: string[]
+  try {
+    names = fs.readdirSync(dir).filter((f) => MEDIA_EXT.test(f))
+  } catch {
+    return []
+  }
+  return names
+    .sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }),
+    )
+    .map((f) => path.join(dir, f))
+}
+
 function setupIpc() {
+  ipcMain.handle('launchpad-base:kitPaths', () => listLaunchpadBaseKitPaths())
+
   ipcMain.handle('util:toFileUrl', (_e, absPath: string) => {
     return pathToMediaUrl(absPath)
   })
 
   ipcMain.handle('dialog:selectFolder', async () => {
     const owner = regiaWindow ?? BrowserWindow.getFocusedWindow()
+    const dirs = readDialogLastDirs()
+    const defaultPath = existingDir(dirs.playlistFolder)
     const { canceled, filePaths } = await dialog.showOpenDialog(owner!, {
       properties: ['openDirectory'],
+      ...(defaultPath ? { defaultPath } : {}),
     })
     if (canceled || !filePaths[0]) return null
     const dir = filePaths[0]
@@ -367,13 +601,26 @@ function setupIpc() {
           sensitivity: 'base',
         }),
       )
+    writeDialogLastDirs({ playlistFolder: dir })
     return paths
   })
 
-  ipcMain.handle('dialog:selectMediaFiles', async () => {
+  ipcMain.handle(
+    'dialog:selectMediaFiles',
+    async (
+      _e,
+      opts?: { context?: 'playlist' | 'launchpad' },
+    ) => {
     const owner = regiaWindow ?? BrowserWindow.getFocusedWindow()
+    const ctx = opts?.context === 'launchpad' ? 'launchpad' : 'playlist'
+    const dirs = readDialogLastDirs()
+    const defaultPath =
+      ctx === 'launchpad'
+        ? existingDir(dirs.launchpadMediaDir)
+        : existingDir(dirs.playlistMediaDir) ?? existingDir(dirs.playlistFolder)
     const { canceled, filePaths } = await dialog.showOpenDialog(owner!, {
       properties: ['openFile', 'multiSelections'],
+      ...(defaultPath ? { defaultPath } : {}),
       filters: [
         {
           name: 'Video / audio / immagine',
@@ -385,6 +632,8 @@ function setupIpc() {
             'mkv',
             'mp3',
             'wav',
+            'aif',
+            'aiff',
             'aac',
             'ogg',
             'flac',
@@ -398,7 +647,14 @@ function setupIpc() {
     })
     if (canceled || !filePaths.length) return null
     const paths = filePaths.filter((p) => MEDIA_EXT.test(path.basename(p)))
-    return paths.length ? paths : null
+    if (!paths.length) return null
+    const firstDir = path.dirname(paths[0]!)
+    if (ctx === 'launchpad') {
+      writeDialogLastDirs({ launchpadMediaDir: firstDir })
+    } else {
+      writeDialogLastDirs({ playlistMediaDir: firstDir })
+    }
+    return paths
   })
 
   ipcMain.handle('playback:send', async (_evt, cmd: PlaybackCommand) => {
@@ -428,8 +684,24 @@ function setupIpc() {
     'playlists:save',
     (
       _e,
-      opts: { id?: string; label: string; paths: string[]; crossfade?: boolean },
+      opts: {
+        id?: string
+        label: string
+        paths: string[]
+        crossfade?: boolean
+        loopMode?: StoredPlaylistLoopMode
+        themeColor?: string | null
+        playlistMode?: 'tracks' | 'launchpad'
+        launchPadCells?: LaunchPadCellStored[]
+        totalDurationSec?: number
+      },
     ): { id: string } => saveSavedPlaylist(opts),
+  )
+
+  ipcMain.handle(
+    'playlists:patchTotalDuration',
+    (_e, id: string, totalDurationSec: number) =>
+      patchSavedPlaylistTotalDuration(id, totalDurationSec),
   )
 
   ipcMain.handle('playlists:load', (_e, id: string) => getSavedPlaylist(id))

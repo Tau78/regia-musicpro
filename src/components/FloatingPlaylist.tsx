@@ -1,10 +1,13 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
+  type ChangeEvent,
   type CSSProperties,
+  type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
@@ -13,20 +16,51 @@ import {
   applyResizeDelta,
   clampPanelInViewport,
   clampPosToViewport,
+  hitTestPanelResizeEdge,
   type PanelPos,
   type ResizeEdge,
 } from '../lib/floatingPanelGeometry.ts'
 import {
+  buildPeerDimensionTargets,
+  queryPlanciaContentRect,
+  snapFloatingPanelDragPos,
+  snapFloatingPanelResize,
+  type SessionSnapDims,
+} from '../lib/planciaSnap.ts'
+import { readPreviewLayoutFromLs } from '../lib/previewLayoutStorage.ts'
+import { usePlanciaSnapEnabled } from '../lib/planciaSnapSettings.ts'
+import {
+  dataTransferHasFileList,
+  mediaPathsFromDataTransfer,
+} from '../lib/isMediaFilePath.ts'
+import {
+  canAssignLaunchPadKeyCode,
+  launchPadKeyLabel,
+} from '../lib/launchPadKeyboard.ts'
+import {
+  getLaunchpadSampleProgress,
+  isLaunchpadSamplePausedWithSrc,
+} from '../lib/launchpadSamplePlayer.ts'
+import {
   normalizePlaylistThemeColor,
   PLAYLIST_THEME_COLOR_INPUT_DEFAULT,
 } from '../lib/playlistThemeColor.ts'
-import { useRegia } from '../state/RegiaContext.tsx'
+import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
+import {
+  formatPlaylistDurationLabel,
+  usePlaylistMediaDurations,
+} from '../hooks/usePlaylistMediaDurations.ts'
+import { useRegia, type LoopMode } from '../state/RegiaContext.tsx'
+import MediaDurationRing from './MediaDurationRing.tsx'
 import {
   DEFAULT_FLOATING_PANEL_SIZE,
   LAUNCHPAD_CELL_COUNT,
+  LAUNCHPAD_CUE_HOLD_MS,
   defaultLaunchPadCells,
   type FloatingPlaylistPanelSize,
 } from '../state/floatingPlaylistSession.ts'
+/** Movimento oltre questa distanza annulla tap / CUE in attesa (prima della soglia). */
+const LAUNCHPAD_CANCEL_MOVE_PX = 14
 
 function IconFolder() {
   return (
@@ -101,89 +135,6 @@ function IconSaveDisk() {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M17 21v-8H7v8M7 3v5h8"
-      />
-    </svg>
-  )
-}
-
-function IconLaunchPadGrid() {
-  return (
-    <svg
-      className="floating-playlist-header-icon"
-      viewBox="0 0 24 24"
-      width={16}
-      height={16}
-      aria-hidden="true"
-    >
-      <rect
-        x="3"
-        y="3"
-        width="7.5"
-        height="7.5"
-        rx="1.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-      <rect
-        x="13.5"
-        y="3"
-        width="7.5"
-        height="7.5"
-        rx="1.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-      <rect
-        x="3"
-        y="13.5"
-        width="7.5"
-        height="7.5"
-        rx="1.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-      <rect
-        x="13.5"
-        y="13.5"
-        width="7.5"
-        height="7.5"
-        rx="1.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-    </svg>
-  )
-}
-
-function IconNewPlaylistPanel() {
-  return (
-    <svg
-      className="floating-playlist-header-icon"
-      viewBox="0 0 24 24"
-      width={16}
-      height={16}
-      aria-hidden="true"
-    >
-      <rect
-        x="4"
-        y="6"
-        width="13"
-        height="11"
-        rx="2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        d="M15 3v4M13 5h4"
       />
     </svg>
   )
@@ -383,20 +334,31 @@ function IconOutputSpeaker({ muted }: { muted: boolean }) {
   )
 }
 
-/** Spessore virtuale del bordo: trascinamento pannello senza maniglia dedicata. */
-const PANEL_BORDER_DRAG_INSET = 10
-
-function clientPointOnFloatingPanelBorder(
-  clientX: number,
-  clientY: number,
-  el: HTMLElement,
-  inset: number,
+/**
+ * True se il target non deve avviare resize bordo né trascinamento del pannello.
+ *
+ * IMPORTANTE: in `onPanelChromePointerDownCapture` questa funzione va valutata
+ * **prima** di `hitTestPanelResizeEdge`. Altrimenti un clic sulla lista che cade
+ * nella fascia resize (es. ultima riga nei 6px inferiori) cattura il pointer sul
+ * root e il riordino righe (long-press + document pointer listeners) smette di funzionare.
+ */
+function isFloatingPlaylistPanelDragBlockedTarget(
+  t: HTMLElement,
+  root: HTMLElement,
 ): boolean {
-  const r = el.getBoundingClientRect()
-  const x = clientX - r.left
-  const y = clientY - r.top
-  if (x < 0 || y < 0 || x > r.width || y > r.height) return false
-  return x <= inset || y <= inset || x >= r.width - inset || y >= r.height - inset
+  if (!root.contains(t)) return true
+  if (
+    t.closest(
+      'button, [role="button"], input, textarea, select, a, [role="slider"]',
+    )
+  )
+    return true
+  if (
+    t.closest('ul.floating-playlist-list') &&
+    !t.closest('li.floating-playlist-empty')
+  )
+    return true
+  return false
 }
 
 function lsLayoutKey(sessionId: string): string {
@@ -409,6 +371,7 @@ type LayoutLs = {
   width?: number
   height?: number
   playlistOutputMuted?: boolean
+  playlistOutputVolume?: number
 }
 
 const MIN_PANEL_W = 220
@@ -418,6 +381,7 @@ function loadLayoutFromLs(sessionId: string): Partial<{
   pos: PanelPos
   panelSize: FloatingPlaylistPanelSize
   playlistOutputMuted: boolean
+  playlistOutputVolume: number
 }> | null {
   try {
     const raw = localStorage.getItem(lsLayoutKey(sessionId))
@@ -428,6 +392,7 @@ function loadLayoutFromLs(sessionId: string): Partial<{
       pos: PanelPos
       panelSize: FloatingPlaylistPanelSize
       playlistOutputMuted: boolean
+      playlistOutputVolume: number
     }> = {
       pos: { x: p.x, y: p.y },
     }
@@ -442,6 +407,15 @@ function loadLayoutFromLs(sessionId: string): Partial<{
     if (typeof p.playlistOutputMuted === 'boolean') {
       out.playlistOutputMuted = p.playlistOutputMuted
     }
+    if (
+      typeof p.playlistOutputVolume === 'number' &&
+      Number.isFinite(p.playlistOutputVolume)
+    ) {
+      out.playlistOutputVolume = Math.min(
+        1,
+        Math.max(0, p.playlistOutputVolume),
+      )
+    }
     return out
   } catch {
     /* ignore */
@@ -453,7 +427,7 @@ function persistLayoutToLs(
   sessionId: string,
   pos: PanelPos,
   panelSize: FloatingPlaylistPanelSize,
-  playlistOutputMuted: boolean,
+  output: { muted: boolean; volume: number },
 ): void {
   try {
     localStorage.setItem(
@@ -463,7 +437,8 @@ function persistLayoutToLs(
         y: pos.y,
         width: panelSize.width,
         height: panelSize.height,
-        playlistOutputMuted,
+        playlistOutputMuted: output.muted,
+        playlistOutputVolume: output.volume,
       }),
     )
   } catch {
@@ -549,7 +524,9 @@ export default function FloatingPlaylist({
 }) {
   const {
     floatingPlaylistSessions,
-    activeFloatingSessionId,
+    previewDetached,
+    floatingZOrder,
+    bringFloatingPanelToFront,
     setActiveFloatingSession,
     loadIndexAndPlay,
     openFolder,
@@ -557,36 +534,54 @@ export default function FloatingPlaylist({
     removePathAt,
     reorderPaths,
     removeFloatingPlaylist,
+    floatingCloseWouldInterruptPlay,
     setPlaylistTitle,
     setPlaylistThemeColor,
     setPlaylistCrossfade,
     setPlaylistOutputMuted,
+    setPlaylistOutputVolume,
+    recordUndoPoint,
     savedPlaylistDirty,
     saveLoadedPlaylistOverwrite,
     persistSavedPlaylistAfterFloatingTitleBlur,
-    addFloatingPlaylist,
-    addFloatingLaunchPad,
+    addPathsToPlaylistFromPaths,
+    applyLaunchPadDropFromPaths,
     loadLaunchPadSlotAndPlay,
+    stopLaunchPadCueRelease,
     updateLaunchPadCell,
     updateFloatingPlaylistChrome,
-    recordUndoPoint,
     canUndo,
     canRedo,
     undo,
     redo,
     playbackLoadedTrack,
+    loopMode,
+    setPlaylistLoopMode,
+    launchpadAudioPlaying,
+    previewMediaTimesRef,
+    previewMediaTimesTick,
   } = useRegia()
+
+  const snapEnabled = usePlanciaSnapEnabled()
 
   const session = floatingPlaylistSessions.find((s) => s.id === sessionId)
   const isLaunchpad = session?.playlistMode === 'launchpad'
   const paths = session?.paths ?? []
+  const trackDurations = usePlaylistMediaDurations(paths)
   const launchPadCells =
     session?.launchPadCells ??
     (isLaunchpad ? defaultLaunchPadCells() : null)
   const currentIndex = session?.currentIndex ?? 0
   const playlistTitle = session?.playlistTitle ?? ''
   const playlistCrossfade = session?.playlistCrossfade ?? false
+  const playlistLoopMode = session?.playlistLoopMode
+  const panelLoopEffective: LoopMode = playlistLoopMode ?? loopMode
   const playlistOutputMuted = session?.playlistOutputMuted ?? false
+  const playlistOutputVolume =
+    typeof session?.playlistOutputVolume === 'number' &&
+    Number.isFinite(session.playlistOutputVolume)
+      ? Math.min(1, Math.max(0, session.playlistOutputVolume))
+      : 1
   const collapsed = session?.collapsed ?? false
   const pos = session?.pos ?? { x: 24, y: 96 }
   const panelSize =
@@ -599,6 +594,33 @@ export default function FloatingPlaylist({
   const [padColorPickIndex, setPadColorPickIndex] = useState<number | null>(
     null,
   )
+  const launchPadMenuRef = useRef<HTMLDivElement>(null)
+  const [launchPadCtx, setLaunchPadCtx] = useState<{
+    slot: number
+  } | null>(null)
+  /** Slot index in modalità “impara tasto”, o `null`. */
+  const [padKeyLearnSlot, setPadKeyLearnSlot] = useState<number | null>(null)
+  const launchPadSampleGestureRef = useRef<{
+    slotIndex: number
+    pointerId: number
+    startX: number
+    startY: number
+    cueActive: boolean
+    cancelled: boolean
+    timer: ReturnType<typeof setTimeout> | null
+  } | null>(null)
+  const suppressLaunchPadClickSlotRef = useRef<number | null>(null)
+  const suppressLaunchPadClickClearTimeoutRef = useRef<
+    ReturnType<typeof setTimeout> | null
+  >(null)
+  /** Evita doppia apertura menu se sia pointerdown(tasto destro) sia contextmenu arrivano nello stesso gesto. */
+  const skipLaunchPadCtxMenuDupRef = useRef(false)
+  /** Invio su titolo fa commit poi blur: evita secondo persist (duplicati in PLAYLIST salvate). */
+  const suppressNextTitleBlurPersistRef = useRef(false)
+  const [playlistDropHover, setPlaylistDropHover] = useState(false)
+  const [launchpadDropHover, setLaunchpadDropHover] = useState(false)
+  const playlistDndDepth = useRef(0)
+  const launchpadDndDepth = useRef(0)
   const listRef = useRef<HTMLUListElement>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
@@ -606,12 +628,54 @@ export default function FloatingPlaylist({
     null,
   )
   const [isResizing, setIsResizing] = useState(false)
+  const [closePlayConfirmOpen, setClosePlayConfirmOpen] = useState(false)
+  const closePlayConfirmCancelRef = useRef<HTMLButtonElement>(null)
   const reorderSessionRef = useRef<ReorderSession | null>(null)
   const docListenersRef = useRef<{
     move: (e: globalThis.PointerEvent) => void
     up: (e: globalThis.PointerEvent) => void
   } | null>(null)
   const suppressPlaylistRowClickRef = useRef(false)
+  const padProgressRafRef = useRef<number | null>(null)
+  const [padProgressTick, setPadProgressTick] = useState(0)
+
+  useEffect(() => {
+    if (!isLaunchpad || !launchpadAudioPlaying) {
+      if (padProgressRafRef.current != null) {
+        cancelAnimationFrame(padProgressRafRef.current)
+        padProgressRafRef.current = null
+      }
+      return
+    }
+    const tok = playbackLoadedTrack
+    if (tok?.sessionId !== sessionId) {
+      if (padProgressRafRef.current != null) {
+        cancelAnimationFrame(padProgressRafRef.current)
+        padProgressRafRef.current = null
+      }
+      return
+    }
+    let lastBump = 0
+    const step = (t: number) => {
+      if (t - lastBump >= 72) {
+        lastBump = t
+        setPadProgressTick((n) => n + 1)
+      }
+      padProgressRafRef.current = requestAnimationFrame(step)
+    }
+    padProgressRafRef.current = requestAnimationFrame(step)
+    return () => {
+      if (padProgressRafRef.current != null) {
+        cancelAnimationFrame(padProgressRafRef.current)
+        padProgressRafRef.current = null
+      }
+    }
+  }, [
+    isLaunchpad,
+    launchpadAudioPlaying,
+    playbackLoadedTrack,
+    sessionId,
+  ])
   const drag = useRef<{
     active: boolean
     dx: number
@@ -636,15 +700,25 @@ export default function FloatingPlaylist({
     const hasPos = Boolean(fromLs.pos)
     const hasSize = Boolean(fromLs.panelSize)
     const hasMute = typeof fromLs.playlistOutputMuted === 'boolean'
-    if (!hasPos && !hasSize && !hasMute) return
+    const hasVol =
+      typeof fromLs.playlistOutputVolume === 'number' &&
+      Number.isFinite(fromLs.playlistOutputVolume)
+    if (!hasPos && !hasSize && !hasMute && !hasVol) return
     const patch: {
       pos?: PanelPos
       panelSize?: FloatingPlaylistPanelSize
       playlistOutputMuted?: boolean
+      playlistOutputVolume?: number
     } = {}
     if (fromLs.pos) patch.pos = fromLs.pos
     if (fromLs.panelSize) patch.panelSize = fromLs.panelSize
     if (hasMute) patch.playlistOutputMuted = fromLs.playlistOutputMuted
+    if (hasVol) {
+      patch.playlistOutputVolume = Math.min(
+        1,
+        Math.max(0, fromLs.playlistOutputVolume!),
+      )
+    }
     updateFloatingPlaylistChrome(sessionId, patch)
   }, [sessionId, updateFloatingPlaylistChrome])
 
@@ -693,6 +767,56 @@ export default function FloatingPlaylist({
     return () => window.removeEventListener('resize', onResize)
   }, [reclampIntoView])
 
+  const resizePlaylistWithSnap = useCallback(
+    (
+      edge: ResizeEdge,
+      startPos: PanelPos,
+      startSize: FloatingPlaylistPanelSize,
+      dx: number,
+      dy: number,
+    ) => {
+      const raw = applyResizeDelta(
+        edge,
+        startPos,
+        startSize,
+        dx,
+        dy,
+        MIN_PANEL_W,
+        MIN_PANEL_H,
+      )
+      if (!snapEnabled) return raw
+      const previewDims = previewDetached
+        ? (() => {
+            const L = readPreviewLayoutFromLs()
+            return { width: L.width, height: L.height }
+          })()
+        : null
+      const sessionsMeta: SessionSnapDims[] = floatingPlaylistSessions.map(
+        (s) => ({
+          id: s.id,
+          width: s.panelSize.width,
+          height: s.panelSize.height,
+        }),
+      )
+      const { widths, heights } = buildPeerDimensionTargets(
+        sessionsMeta,
+        sessionId,
+        previewDims,
+        MIN_PANEL_W,
+        MIN_PANEL_H,
+      )
+      const sn = snapFloatingPanelResize(edge, raw.pos, raw.size, {
+        plancia: queryPlanciaContentRect(),
+        peerWidths: widths,
+        peerHeights: heights,
+        minW: MIN_PANEL_W,
+        minH: MIN_PANEL_H,
+      })
+      return clampPanelInViewport(sn.pos, sn.size, MIN_PANEL_W, MIN_PANEL_H)
+    },
+    [floatingPlaylistSessions, previewDetached, sessionId, snapEnabled],
+  )
+
   const onPanelChromePointerDownCapture = useCallback(
     (e: PointerEvent<HTMLDivElement>) => {
       if (e.button !== 0) return
@@ -700,20 +824,43 @@ export default function FloatingPlaylist({
       if (!root) return
       const t = e.target as HTMLElement | null
       if (!t || !root.contains(t)) return
-      if (t.closest('.floating-playlist-resize')) return
-      if (t.closest('input, textarea, button, [role="slider"]')) return
 
-      const onBorder = clientPointOnFloatingPanelBorder(
+      bringFloatingPanelToFront(sessionId)
+
+      if (isFloatingPlaylistPanelDragBlockedTarget(t, root)) return
+
+      const rect = root.getBoundingClientRect()
+      const resizeEdge = hitTestPanelResizeEdge(
         e.clientX,
         e.clientY,
-        root,
-        PANEL_BORDER_DRAG_INSET,
+        rect,
+        collapsed,
       )
-      const onToolbar = Boolean(t.closest('.floating-playlist-toolbar'))
-      if (!onBorder && !onToolbar) return
+      if (resizeEdge) {
+        e.preventDefault()
+        setActiveFloatingSession(sessionId)
+        resizeStateRef.current = {
+          edge: resizeEdge,
+          startX: e.clientX,
+          startY: e.clientY,
+          startPos: { ...pos },
+          startSize: { ...panelSize },
+        }
+        setIsResizing(true)
+        try {
+          root.setPointerCapture(e.pointerId)
+        } catch {
+          /* ignore */
+        }
+        return
+      }
 
       setActiveFloatingSession(sessionId)
-      root.setPointerCapture(e.pointerId)
+      try {
+        root.setPointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
       drag.current = {
         active: true,
         dx: pos.x,
@@ -722,118 +869,166 @@ export default function FloatingPlaylist({
         startY: e.clientY,
       }
     },
-    [pos.x, pos.y, sessionId, setActiveFloatingSession],
+    [
+      bringFloatingPanelToFront,
+      collapsed,
+      panelSize.height,
+      panelSize.width,
+      pos.x,
+      pos.y,
+      sessionId,
+      setActiveFloatingSession,
+    ],
   )
 
   const onPointerMove = useCallback(
     (e: PointerEvent<HTMLDivElement>) => {
+      const rs = resizeStateRef.current
+      if (rs) {
+        const dx = e.clientX - rs.startX
+        const dy = e.clientY - rs.startY
+        const { pos: np, size: ns } = resizePlaylistWithSnap(
+          rs.edge,
+          rs.startPos,
+          rs.startSize,
+          dx,
+          dy,
+        )
+        updateFloatingPlaylistChrome(sessionId, { pos: np, panelSize: ns })
+        return
+      }
       const d = drag.current
       if (!d?.active) return
       const el = panelRef.current
       if (!el) return
       const nx = d.dx + (e.clientX - d.startX)
       const ny = d.dy + (e.clientY - d.startY)
-      const c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
+      const plancia = snapEnabled ? queryPlanciaContentRect() : null
+      let c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
+      if (plancia) {
+        c = snapFloatingPanelDragPos(
+          c,
+          { width: el.offsetWidth, height: el.offsetHeight },
+          plancia,
+        )
+        c = clampPosToViewport(
+          c.x,
+          c.y,
+          el.offsetWidth,
+          el.offsetHeight,
+        )
+      }
       updateFloatingPlaylistChrome(sessionId, { pos: c })
     },
-    [sessionId, updateFloatingPlaylistChrome],
+    [resizePlaylistWithSnap, sessionId, snapEnabled, updateFloatingPlaylistChrome],
   )
 
   const onPointerUp = useCallback(
     (e: PointerEvent<HTMLDivElement>) => {
+      const rs = resizeStateRef.current
+      if (rs) {
+        const dx = e.clientX - rs.startX
+        const dy = e.clientY - rs.startY
+        const { pos: np, size: ns } = resizePlaylistWithSnap(
+          rs.edge,
+          rs.startPos,
+          rs.startSize,
+          dx,
+          dy,
+        )
+        updateFloatingPlaylistChrome(sessionId, { pos: np, panelSize: ns })
+        persistLayoutToLs(sessionId, np, ns, {
+          muted: playlistOutputMuted,
+          volume: playlistOutputVolume,
+        })
+        resizeStateRef.current = null
+        setIsResizing(false)
+        try {
+          panelRef.current?.releasePointerCapture(e.pointerId)
+        } catch {
+          /* ignore */
+        }
+        return
+      }
       const d = drag.current
       if (!d?.active) return
       d.active = false
       const el = panelRef.current
       const nx = d.dx + (e.clientX - d.startX)
       const ny = d.dy + (e.clientY - d.startY)
-      const next = el
+      const plancia = snapEnabled ? queryPlanciaContentRect() : null
+      let next = el
         ? clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
         : { x: nx, y: ny }
+      if (el && plancia) {
+        next = snapFloatingPanelDragPos(
+          next,
+          { width: el.offsetWidth, height: el.offsetHeight },
+          plancia,
+        )
+        next = clampPosToViewport(
+          next.x,
+          next.y,
+          el.offsetWidth,
+          el.offsetHeight,
+        )
+      }
       updateFloatingPlaylistChrome(sessionId, { pos: next })
-      persistLayoutToLs(sessionId, next, panelSize, playlistOutputMuted)
+      persistLayoutToLs(sessionId, next, panelSize, {
+        muted: playlistOutputMuted,
+        volume: playlistOutputVolume,
+      })
       try {
         panelRef.current?.releasePointerCapture(e.pointerId)
       } catch {
         /* ignore */
       }
     },
-    [panelSize, playlistOutputMuted, sessionId, updateFloatingPlaylistChrome],
+    [
+      panelSize,
+      playlistOutputMuted,
+      playlistOutputVolume,
+      resizePlaylistWithSnap,
+      sessionId,
+      snapEnabled,
+      updateFloatingPlaylistChrome,
+    ],
   )
 
-  const onResizePointerDown = useCallback(
-    (edge: ResizeEdge, e: PointerEvent<HTMLDivElement>) => {
-      e.preventDefault()
-      e.stopPropagation()
-      setActiveFloatingSession(sessionId)
-      resizeStateRef.current = {
-        edge,
-        startX: e.clientX,
-        startY: e.clientY,
-        startPos: { ...pos },
-        startSize: { ...panelSize },
-      }
-      setIsResizing(true)
-      e.currentTarget.setPointerCapture(e.pointerId)
-    },
-    [panelSize, pos, sessionId, setActiveFloatingSession],
-  )
+  const onPlaylistPanelVolumePointerDown = useCallback(() => {
+    recordUndoPoint()
+  }, [recordUndoPoint])
 
-  const onResizePointerMove = useCallback(
-    (e: PointerEvent<HTMLDivElement>) => {
-      const rs = resizeStateRef.current
-      if (!rs) return
-      const dx = e.clientX - rs.startX
-      const dy = e.clientY - rs.startY
-      const { pos: np, size: ns } = applyResizeDelta(
-        rs.edge,
-        rs.startPos,
-        rs.startSize,
-        dx,
-        dy,
-        MIN_PANEL_W,
-        MIN_PANEL_H,
-      )
-      updateFloatingPlaylistChrome(sessionId, { pos: np, panelSize: ns })
+  const onPlaylistPanelVolumeChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const v = Number.parseInt(e.target.value, 10) / 100
+      const c = Math.min(1, Math.max(0, v))
+      setPlaylistOutputVolume(c, sessionId)
+      persistLayoutToLs(sessionId, pos, panelSize, {
+        muted: playlistOutputMuted,
+        volume: c,
+      })
     },
-    [sessionId, updateFloatingPlaylistChrome],
-  )
-
-  const onResizePointerUp = useCallback(
-    (e: PointerEvent<HTMLDivElement>) => {
-      const rs = resizeStateRef.current
-      if (!rs) return
-      const dx = e.clientX - rs.startX
-      const dy = e.clientY - rs.startY
-      const { pos: np, size: ns } = applyResizeDelta(
-        rs.edge,
-        rs.startPos,
-        rs.startSize,
-        dx,
-        dy,
-        MIN_PANEL_W,
-        MIN_PANEL_H,
-      )
-      updateFloatingPlaylistChrome(sessionId, { pos: np, panelSize: ns })
-      persistLayoutToLs(sessionId, np, ns, playlistOutputMuted)
-      resizeStateRef.current = null
-      setIsResizing(false)
-      try {
-        e.currentTarget.releasePointerCapture(e.pointerId)
-      } catch {
-        /* ignore */
-      }
-    },
-    [playlistOutputMuted, sessionId, updateFloatingPlaylistChrome],
+    [
+      panelSize,
+      playlistOutputMuted,
+      pos,
+      sessionId,
+      setPlaylistOutputVolume,
+    ],
   )
 
   const onTogglePlaylistOutputMute = useCallback(() => {
     const next = !playlistOutputMuted
     setPlaylistOutputMuted(next, sessionId)
-    persistLayoutToLs(sessionId, pos, panelSize, next)
+    persistLayoutToLs(sessionId, pos, panelSize, {
+      muted: next,
+      volume: playlistOutputVolume,
+    })
   }, [
     panelSize,
     playlistOutputMuted,
+    playlistOutputVolume,
     pos,
     sessionId,
     setPlaylistOutputMuted,
@@ -1015,25 +1210,118 @@ export default function FloatingPlaylist({
       if (e.key !== 'Enter') return
       e.preventDefault()
       const el = e.currentTarget
+      suppressNextTitleBlurPersistRef.current = true
       void (async () => {
-        await commitFloatingPlaylistTitle(el.value)
-        el.blur()
+        try {
+          await commitFloatingPlaylistTitle(el.value)
+        } finally {
+          el.blur()
+        }
       })()
     },
     [commitFloatingPlaylistTitle],
   )
 
+  useEffect(() => {
+    if (!launchPadCtx) return
+    const close = () => setLaunchPadCtx(null)
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    const onMouseDown = (e: globalThis.MouseEvent) => {
+      if (e.button !== 0) return
+      const t = e.target
+      if (t instanceof Node && launchPadMenuRef.current?.contains(t)) return
+      close()
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('mousedown', onMouseDown, true)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('mousedown', onMouseDown, true)
+    }
+  }, [launchPadCtx])
+
+  useEffect(() => {
+    if (!isLaunchpad || collapsed) setPadKeyLearnSlot(null)
+  }, [isLaunchpad, collapsed])
+
+  useEffect(() => {
+    if (padKeyLearnSlot === null) return
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      if (e.code === 'Escape') {
+        setPadKeyLearnSlot(null)
+        return
+      }
+      if (!canAssignLaunchPadKeyCode(e.code)) return
+      void updateLaunchPadCell(sessionId, padKeyLearnSlot, {
+        padKeyCode: e.code,
+      })
+      setPadKeyLearnSlot(null)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [padKeyLearnSlot, sessionId, updateLaunchPadCell])
+
+  const openLaunchPadPlanciaMenu = useCallback(
+    (slotIndex: number) => {
+      setActiveFloatingSession(sessionId)
+      setPadKeyLearnSlot(null)
+      setLaunchPadCtx({ slot: slotIndex })
+    },
+    [sessionId, setActiveFloatingSession],
+  )
+
+  const onLaunchPadCellContextMenu = useCallback(
+    (slotIndex: number, e: MouseEvent<HTMLButtonElement>) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (skipLaunchPadCtxMenuDupRef.current) {
+        skipLaunchPadCtxMenuDupRef.current = false
+        return
+      }
+      openLaunchPadPlanciaMenu(slotIndex)
+    },
+    [openLaunchPadPlanciaMenu],
+  )
+
+  const armSuppressNextLaunchPadClick = useCallback((slotIndex: number) => {
+    if (suppressLaunchPadClickClearTimeoutRef.current) {
+      clearTimeout(suppressLaunchPadClickClearTimeoutRef.current)
+      suppressLaunchPadClickClearTimeoutRef.current = null
+    }
+    suppressLaunchPadClickSlotRef.current = slotIndex
+    suppressLaunchPadClickClearTimeoutRef.current = setTimeout(() => {
+      suppressLaunchPadClickClearTimeoutRef.current = null
+      if (suppressLaunchPadClickSlotRef.current === slotIndex) {
+        suppressLaunchPadClickSlotRef.current = null
+      }
+    }, 500)
+  }, [])
+
   const onLaunchPadCellClick = useCallback(
     (slotIndex: number, e: MouseEvent<HTMLButtonElement>) => {
+      if (suppressLaunchPadClickSlotRef.current === slotIndex) {
+        suppressLaunchPadClickSlotRef.current = null
+        if (suppressLaunchPadClickClearTimeoutRef.current) {
+          clearTimeout(suppressLaunchPadClickClearTimeoutRef.current)
+          suppressLaunchPadClickClearTimeoutRef.current = null
+        }
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       setActiveFloatingSession(sessionId)
       if (e.shiftKey) {
         e.preventDefault()
         void (async () => {
-          const picked = await window.electronAPI.selectMediaFiles()
-          if (!picked?.length) return
-          await updateLaunchPadCell(sessionId, slotIndex, {
-            samplePath: picked[0]!,
+          const picked = await window.electronAPI.selectMediaFiles({
+            context: 'launchpad',
           })
+          if (!picked?.length) return
+          applyLaunchPadDropFromPaths(sessionId, slotIndex, picked)
         })()
         return
       }
@@ -1044,7 +1332,17 @@ export default function FloatingPlaylist({
         return
       }
       const cell = launchPadCells?.[slotIndex]
-      if (!cell?.samplePath) return
+      if (!cell?.samplePath) {
+        e.preventDefault()
+        void (async () => {
+          const picked = await window.electronAPI.selectMediaFiles({
+            context: 'launchpad',
+          })
+          if (!picked?.length) return
+          applyLaunchPadDropFromPaths(sessionId, slotIndex, picked)
+        })()
+        return
+      }
       setPadFlashSlot(slotIndex)
       window.setTimeout(() => {
         setPadFlashSlot((cur) => (cur === slotIndex ? null : cur))
@@ -1056,7 +1354,268 @@ export default function FloatingPlaylist({
       launchPadCells,
       loadLaunchPadSlotAndPlay,
       setActiveFloatingSession,
-      updateLaunchPadCell,
+      applyLaunchPadDropFromPaths,
+    ],
+  )
+
+  const onLaunchPadSamplePointerDown = useCallback(
+    (slotIndex: number, e: PointerEvent<HTMLButtonElement>) => {
+      if (e.button !== 0) return
+      if (e.shiftKey || e.altKey) return
+      const cell = launchPadCells?.[slotIndex]
+      if (!cell?.samplePath) return
+      if (launchPadSampleGestureRef.current) return
+
+      setActiveFloatingSession(sessionId)
+
+      const el = e.currentTarget
+      try {
+        el.setPointerCapture(e.pointerId)
+      } catch {
+        /* setPointerCapture non disponibile */
+      }
+
+      const pointerId = e.pointerId
+      const gesture = {
+        slotIndex,
+        pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        cueActive: false,
+        cancelled: false,
+        timer: null as ReturnType<typeof setTimeout> | null,
+      }
+      launchPadSampleGestureRef.current = gesture
+
+      const clearTimer = () => {
+        const g = launchPadSampleGestureRef.current
+        if (g?.timer != null) {
+          clearTimeout(g.timer)
+          g.timer = null
+        }
+      }
+
+      const onMove = (ev: globalThis.PointerEvent) => {
+        if (ev.pointerId !== pointerId) return
+        const g = launchPadSampleGestureRef.current
+        if (!g || g.slotIndex !== slotIndex || g.cueActive) return
+        const dx = ev.clientX - g.startX
+        const dy = ev.clientY - g.startY
+        if (
+          dx * dx + dy * dy >
+          LAUNCHPAD_CANCEL_MOVE_PX * LAUNCHPAD_CANCEL_MOVE_PX
+        ) {
+          g.cancelled = true
+          clearTimer()
+        }
+      }
+
+      const onUpOrCancel = (ev: globalThis.PointerEvent) => {
+        if (ev.pointerId !== pointerId) return
+        const g = launchPadSampleGestureRef.current
+        if (!g || g.slotIndex !== slotIndex) return
+        if (ev.type === 'pointercancel') {
+          g.cancelled = true
+        }
+        clearTimer()
+        armSuppressNextLaunchPadClick(slotIndex)
+        if (!g.cueActive && g.cancelled) {
+          detachListeners()
+          return
+        }
+        if (g.cueActive) {
+          stopLaunchPadCueRelease()
+        } else {
+          setPadFlashSlot(slotIndex)
+          window.setTimeout(() => {
+            setPadFlashSlot((cur) => (cur === slotIndex ? null : cur))
+          }, 200)
+          void loadLaunchPadSlotAndPlay(sessionId, slotIndex)
+        }
+        detachListeners()
+      }
+
+      const detachListeners = () => {
+        el.removeEventListener('pointermove', onMove)
+        el.removeEventListener('pointerup', onUpOrCancel)
+        el.removeEventListener('pointercancel', onUpOrCancel)
+        try {
+          el.releasePointerCapture(pointerId)
+        } catch {
+          /* */
+        }
+        if (launchPadSampleGestureRef.current?.slotIndex === slotIndex) {
+          launchPadSampleGestureRef.current = null
+        }
+      }
+
+      gesture.timer = setTimeout(() => {
+        const g = launchPadSampleGestureRef.current
+        if (!g || g.slotIndex !== slotIndex || g.cancelled) return
+        g.cueActive = true
+        g.timer = null
+        setPadFlashSlot(slotIndex)
+        window.setTimeout(() => {
+          setPadFlashSlot((cur) => (cur === slotIndex ? null : cur))
+        }, 200)
+        void loadLaunchPadSlotAndPlay(sessionId, slotIndex)
+      }, LAUNCHPAD_CUE_HOLD_MS)
+
+      el.addEventListener('pointermove', onMove)
+      el.addEventListener('pointerup', onUpOrCancel)
+      el.addEventListener('pointercancel', onUpOrCancel)
+    },
+    [
+      sessionId,
+      launchPadCells,
+      setActiveFloatingSession,
+      loadLaunchPadSlotAndPlay,
+      stopLaunchPadCueRelease,
+      armSuppressNextLaunchPadClick,
+    ],
+  )
+
+  const onLaunchPadPadPointerDown = useCallback(
+    (slotIndex: number, e: PointerEvent<HTMLButtonElement>) => {
+      if (e.button === 2) {
+        e.preventDefault()
+        e.stopPropagation()
+        skipLaunchPadCtxMenuDupRef.current = true
+        openLaunchPadPlanciaMenu(slotIndex)
+        return
+      }
+      onLaunchPadSamplePointerDown(slotIndex, e)
+    },
+    [openLaunchPadPlanciaMenu, onLaunchPadSamplePointerDown],
+  )
+
+  const onLaunchPadCellKeyDown = useCallback(
+    (slotIndex: number, e: KeyboardEvent<HTMLButtonElement>) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return
+      const cell = launchPadCells?.[slotIndex]
+      if (!cell?.samplePath) return
+      if (e.shiftKey || e.altKey) return
+      e.preventDefault()
+      setActiveFloatingSession(sessionId)
+      armSuppressNextLaunchPadClick(slotIndex)
+      setPadFlashSlot(slotIndex)
+      window.setTimeout(() => {
+        setPadFlashSlot((cur) => (cur === slotIndex ? null : cur))
+      }, 200)
+      void loadLaunchPadSlotAndPlay(sessionId, slotIndex)
+    },
+    [
+      sessionId,
+      launchPadCells,
+      setActiveFloatingSession,
+      loadLaunchPadSlotAndPlay,
+      armSuppressNextLaunchPadClick,
+    ],
+  )
+
+  const onPlaylistDragEnter = useCallback((e: DragEvent<HTMLUListElement>) => {
+    if (!dataTransferHasFileList(e.dataTransfer)) return
+    e.preventDefault()
+    playlistDndDepth.current += 1
+    setPlaylistDropHover(true)
+  }, [])
+
+  const onPlaylistDragLeave = useCallback((e: DragEvent<HTMLUListElement>) => {
+    if (!dataTransferHasFileList(e.dataTransfer)) return
+    e.preventDefault()
+    playlistDndDepth.current = Math.max(0, playlistDndDepth.current - 1)
+    if (playlistDndDepth.current === 0) setPlaylistDropHover(false)
+  }, [])
+
+  const onPlaylistDragOver = useCallback((e: DragEvent<HTMLUListElement>) => {
+    if (!dataTransferHasFileList(e.dataTransfer)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const onPlaylistDrop = useCallback(
+    (e: DragEvent<HTMLUListElement>) => {
+      if (!dataTransferHasFileList(e.dataTransfer)) return
+      e.preventDefault()
+      playlistDndDepth.current = 0
+      setPlaylistDropHover(false)
+      const paths = mediaPathsFromDataTransfer(e.dataTransfer)
+      if (!paths.length) return
+      setActiveFloatingSession(sessionId)
+      addPathsToPlaylistFromPaths(sessionId, paths)
+    },
+    [addPathsToPlaylistFromPaths, sessionId, setActiveFloatingSession],
+  )
+
+  const onLaunchpadDragEnter = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (!dataTransferHasFileList(e.dataTransfer)) return
+      e.preventDefault()
+      launchpadDndDepth.current += 1
+      setLaunchpadDropHover(true)
+    },
+    [],
+  )
+
+  const onLaunchpadDragLeave = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (!dataTransferHasFileList(e.dataTransfer)) return
+      e.preventDefault()
+      launchpadDndDepth.current = Math.max(0, launchpadDndDepth.current - 1)
+      if (launchpadDndDepth.current === 0) setLaunchpadDropHover(false)
+    },
+    [],
+  )
+
+  const onLaunchpadDragOver = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (!dataTransferHasFileList(e.dataTransfer)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    },
+    [],
+  )
+
+  const onLaunchPadCellDrop = useCallback(
+    (slotIndex: number, e: DragEvent<HTMLDivElement>) => {
+      if (!dataTransferHasFileList(e.dataTransfer)) return
+      e.preventDefault()
+      e.stopPropagation()
+      launchpadDndDepth.current = 0
+      setLaunchpadDropHover(false)
+      const paths = mediaPathsFromDataTransfer(e.dataTransfer)
+      if (!paths.length) return
+      setActiveFloatingSession(sessionId)
+      applyLaunchPadDropFromPaths(sessionId, slotIndex, paths)
+    },
+    [
+      applyLaunchPadDropFromPaths,
+      sessionId,
+      setActiveFloatingSession,
+    ],
+  )
+
+  const onLaunchPadGridBackgroundDrop = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (e.target !== e.currentTarget) return
+      if (!dataTransferHasFileList(e.dataTransfer)) return
+      e.preventDefault()
+      launchpadDndDepth.current = 0
+      setLaunchpadDropHover(false)
+      const paths = mediaPathsFromDataTransfer(e.dataTransfer)
+      if (!paths.length) return
+      setActiveFloatingSession(sessionId)
+      const cells = launchPadCells
+      if (!cells) return
+      const firstEmpty = cells.findIndex((c) => !c.samplePath)
+      const start = firstEmpty >= 0 ? firstEmpty : 0
+      applyLaunchPadDropFromPaths(sessionId, start, paths)
+    },
+    [
+      applyLaunchPadDropFromPaths,
+      launchPadCells,
+      sessionId,
+      setActiveFloatingSession,
     ],
   )
 
@@ -1096,19 +1655,66 @@ export default function FloatingPlaylist({
     ],
   )
 
+  const onBackdropPointerDownClosePlayConfirm = useCallback(
+    (e: PointerEvent<HTMLDivElement>) => {
+      if (e.target === e.currentTarget) setClosePlayConfirmOpen(false)
+    },
+    [],
+  )
+
+  const onRequestClosePanel = useCallback(() => {
+    if (floatingCloseWouldInterruptPlay(sessionId)) {
+      setClosePlayConfirmOpen(true)
+      return
+    }
+    void removeFloatingPlaylist(sessionId)
+  }, [floatingCloseWouldInterruptPlay, removeFloatingPlaylist, sessionId])
+
+  const onConfirmClosePanelDespitePlay = useCallback(() => {
+    setClosePlayConfirmOpen(false)
+    void removeFloatingPlaylist(sessionId)
+  }, [removeFloatingPlaylist, sessionId])
+
+  useEffect(() => {
+    if (!closePlayConfirmOpen) return
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setClosePlayConfirmOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    queueMicrotask(() => {
+      closePlayConfirmCancelRef.current?.focus()
+    })
+    return () => window.removeEventListener('keydown', onKey)
+  }, [closePlayConfirmOpen])
+
+  useEffect(() => {
+    if (!session) setClosePlayConfirmOpen(false)
+  }, [session])
+
   if (!session) return null
 
   const themeHex = normalizePlaylistThemeColor(session.playlistThemeColor)
   const colorPickerValue =
     themeHex || PLAYLIST_THEME_COLOR_INPUT_DEFAULT
 
-  const zIndex = 40 + (activeFloatingSessionId === sessionId ? 10 : 0)
+  const zi = floatingZOrder.indexOf(sessionId)
+  const zIndex = 40 + (zi >= 0 ? zi : 0)
 
-  const resizeEdges: readonly ResizeEdge[] = collapsed
-    ? (['e'] as const)
-    : (['n', 's', 'ne', 'nw', 'se', 'sw'] as const)
+  const ctxSlotCell =
+    launchPadCtx && launchPadCells
+      ? launchPadCells[launchPadCtx.slot]
+      : null
+  const ctxMenuGain =
+    typeof ctxSlotCell?.padGain === 'number' &&
+    Number.isFinite(ctxSlotCell.padGain)
+      ? Math.min(1, Math.max(0, ctxSlotCell.padGain))
+      : 1
 
   return (
+    <Fragment>
     <div
       ref={panelRef}
       className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}`}
@@ -1168,17 +1774,51 @@ export default function FloatingPlaylist({
             value={playlistTitle}
             onChange={(ev) => setPlaylistTitle(ev.target.value, sessionId)}
             onKeyDown={onTitleKeyDown}
-            onBlur={(e) => void commitFloatingPlaylistTitle(e.currentTarget.value)}
+            onBlur={(e) => {
+              if (suppressNextTitleBlurPersistRef.current) {
+                suppressNextTitleBlurPersistRef.current = false
+                return
+              }
+              void commitFloatingPlaylistTitle(e.currentTarget.value)
+            }}
             placeholder={isLaunchpad ? 'Launchpad' : 'Nuova Playlist'}
             aria-label="Nome della playlist"
             maxLength={120}
             spellCheck={false}
           />
+          <div
+            className="floating-playlist-title-strip-chrome"
+            role="group"
+            aria-label="Riduci o chiudi pannello"
+          >
+            <button
+              type="button"
+              className="btn-icon floating-playlist-icon-btn"
+              onClick={() =>
+                updateFloatingPlaylistChrome(sessionId, {
+                  collapsed: !collapsed,
+                })
+              }
+              title={collapsed ? 'Espandi' : 'Riduci'}
+              aria-label={collapsed ? 'Espandi pannello' : 'Riduci pannello'}
+            >
+              {collapsed ? <IconPanelExpand /> : <IconPanelCollapse />}
+            </button>
+            <button
+              type="button"
+              className="btn-icon floating-playlist-icon-btn floating-playlist-close"
+              onClick={onRequestClosePanel}
+              title="Chiudi"
+              aria-label="Chiudi pannello playlist mobile"
+            >
+              <IconClosePanel />
+            </button>
+          </div>
         </div>
         <div className="floating-playlist-toolbar">
           <div className="floating-playlist-actions">
-          <div className="floating-playlist-actions-main">
-            {!isLaunchpad ? (
+            <div className="floating-playlist-actions-main">
+              {!isLaunchpad ? (
               <>
                 <button
                   type="button"
@@ -1199,25 +1839,7 @@ export default function FloatingPlaylist({
                   <IconAddFiles />
                 </button>
               </>
-            ) : null}
-            <button
-              type="button"
-              className="btn-icon floating-playlist-icon-btn"
-              onClick={() => addFloatingPlaylist()}
-              title="Nuovo pannello playlist"
-              aria-label="Nuovo pannello playlist"
-            >
-              <IconNewPlaylistPanel />
-            </button>
-            <button
-              type="button"
-              className="btn-icon floating-playlist-icon-btn"
-              onClick={() => addFloatingLaunchPad()}
-              title="Nuovo pannello Launchpad 4×4"
-              aria-label="Nuovo pannello Launchpad"
-            >
-              <IconLaunchPadGrid />
-            </button>
+              ) : null}
             <button
               type="button"
               className="btn-icon floating-playlist-icon-btn floating-playlist-theme-picker-btn"
@@ -1234,19 +1856,22 @@ export default function FloatingPlaylist({
             >
               <IconPalette />
             </button>
-            {savedPlaylistDirty(sessionId) ? (
-              <button
-                type="button"
-                className="btn-icon floating-playlist-icon-btn floating-playlist-save-overwrite"
-                onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
-                title="Sovrascrive la playlist salvata che hai aperto con Carica"
-                aria-label="Salva sovrascrivendo la playlist caricata"
-              >
-                <IconSaveDisk />
-              </button>
-            ) : null}
-          </div>
-          <div
+            <button
+              type="button"
+              className="btn-icon floating-playlist-icon-btn floating-playlist-save-disk"
+              disabled={!savedPlaylistDirty(sessionId)}
+              onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
+              title={
+                savedPlaylistDirty(sessionId)
+                  ? 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
+                  : 'Nessuna modifica da salvare sul file collegato'
+              }
+              aria-label="Salva sovrascrivendo la voce caricata da PLAYLIST"
+            >
+              <IconSaveDisk />
+            </button>
+            </div>
+            <div
             className="floating-playlist-actions-undo"
             role="group"
             aria-label="Annulla e ripristina"
@@ -1277,55 +1902,42 @@ export default function FloatingPlaylist({
             >
               <IconRedo />
             </button>
-          </div>
-          <div
-            className="floating-playlist-actions-chrome"
-            role="group"
-            aria-label="Comprimi o chiudi pannello"
-          >
-            <button
-              type="button"
-              className="btn-icon floating-playlist-icon-btn"
-              onClick={() =>
-                updateFloatingPlaylistChrome(sessionId, {
-                  collapsed: !collapsed,
-                })
-              }
-              title={collapsed ? 'Espandi' : 'Comprimi'}
-              aria-label={collapsed ? 'Espandi pannello' : 'Comprimi pannello'}
-            >
-              {collapsed ? <IconPanelExpand /> : <IconPanelCollapse />}
-            </button>
-            <button
-              type="button"
-              className="btn-icon floating-playlist-icon-btn floating-playlist-close"
-              onClick={() => removeFloatingPlaylist(sessionId)}
-              title="Chiudi questo pannello playlist"
-              aria-label="Chiudi pannello playlist mobile"
-            >
-              <IconClosePanel />
-            </button>
-          </div>
+            </div>
           </div>
         </div>
       </div>
       {!collapsed && (
         <div className="floating-playlist-crossfade">
           <div className="floating-playlist-crossfade-row">
-            <label
-              className="floating-playlist-crossfade-label"
+            <button
+              type="button"
+              className={`floating-playlist-icon-btn floating-playlist-crossfade-toggle ${playlistCrossfade ? 'is-active' : ''}`}
               title="Crossfade tra brani: dissolvenza incrociata in uscita tra due brani dello stesso tipo (solo video/video o immagine/immagine)."
+              aria-label="Crossfade tra brani"
+              aria-pressed={playlistCrossfade}
+              onClick={() => {
+                setActiveFloatingSession(sessionId)
+                setPlaylistCrossfade(!playlistCrossfade, sessionId)
+              }}
+            >
+              <IconCrossfade />
+            </button>
+            <div
+              className="floating-playlist-panel-volume"
+              title="Volume uscita per questo pannello (moltiplicato con il volume globale in alto)"
             >
               <input
-                type="checkbox"
-                checked={playlistCrossfade}
-                onChange={(ev) =>
-                  setPlaylistCrossfade(ev.target.checked, sessionId)
-                }
-                aria-label="Crossfade tra brani"
+                type="range"
+                className="regia-volume-slider floating-playlist-panel-volume-slider"
+                min={0}
+                max={100}
+                value={Math.round(playlistOutputVolume * 100)}
+                onPointerDown={onPlaylistPanelVolumePointerDown}
+                onChange={onPlaylistPanelVolumeChange}
+                aria-label="Volume uscita per questo pannello playlist"
+                aria-valuetext={`${Math.round(playlistOutputVolume * 100)}% sul pannello`}
               />
-              <IconCrossfade />
-            </label>
+            </div>
             <button
               type="button"
               className={`btn-toggle floating-playlist-icon-btn floating-playlist-mute-output ${playlistOutputMuted ? 'is-on' : ''}`}
@@ -1341,25 +1953,230 @@ export default function FloatingPlaylist({
               <IconOutputSpeaker muted={playlistOutputMuted} />
             </button>
           </div>
+          {!isLaunchpad ? (
+            <div
+              className="floating-playlist-loop-row"
+              role="group"
+              aria-label="Loop playlist (questo pannello)"
+            >
+              <span className="floating-playlist-loop-label">Loop</span>
+              <div className="floating-playlist-loop-toggles">
+                <button
+                  type="button"
+                  className={
+                    panelLoopEffective === 'off'
+                      ? 'floating-playlist-loop-btn is-active'
+                      : 'floating-playlist-loop-btn'
+                  }
+                  onClick={() => {
+                    setActiveFloatingSession(sessionId)
+                    setPlaylistLoopMode(sessionId, 'off')
+                  }}
+                  title="Loop disattivato: a fine brano si ferma o passa al successivo"
+                >
+                  Off
+                </button>
+                <button
+                  type="button"
+                  className={
+                    panelLoopEffective === 'one'
+                      ? 'floating-playlist-loop-btn is-active'
+                      : 'floating-playlist-loop-btn'
+                  }
+                  onClick={() => {
+                    setActiveFloatingSession(sessionId)
+                    setPlaylistLoopMode(sessionId, 'one')
+                  }}
+                  title="Ripeti il file corrente"
+                >
+                  File
+                </button>
+                <button
+                  type="button"
+                  className={
+                    panelLoopEffective === 'all'
+                      ? 'floating-playlist-loop-btn is-active'
+                      : 'floating-playlist-loop-btn'
+                  }
+                  onClick={() => {
+                    setActiveFloatingSession(sessionId)
+                    setPlaylistLoopMode(sessionId, 'all')
+                  }}
+                  title="Alla fine dell’ultimo brano torna al primo"
+                >
+                  Lista
+                </button>
+              </div>
+            </div>
+          ) : null}
           <span className="floating-playlist-crossfade-hint">
             Solo tra video/video o immagine/immagine
           </span>
           {isLaunchpad ? (
             <span className="floating-playlist-launchpad-toolbar-hint">
-              Griglia 4×4: clic riproduce · Maiusc+clic assegna file · Alt+clic
-              colore pad
+              Griglia 4×4: slot vuoto → dialog file · trascina file su slot o griglia
+              · Maiusc+clic file · Alt+clic colore · tap breve = play intero · tenere
+              premuto = CUE (audio fino al rilascio) · tasto destro: gain / tasto /
+              svuota · tasto: Play sempre play, Toggle play/stop · tenere premuto il
+              tasto = CUE (senza modificatori)
             </span>
+          ) : null}
+          {launchPadCtx && isLaunchpad && launchPadCells ? (
+            <div
+              className="launchpad-ctx-menu-plancia-layer"
+              role="presentation"
+              onMouseDown={(ev) => {
+                if (ev.button !== 0) return
+                const t = ev.target
+                if (
+                  t instanceof Node &&
+                  launchPadMenuRef.current?.contains(t)
+                )
+                  return
+                setLaunchPadCtx(null)
+              }}
+            >
+              <div
+                ref={launchPadMenuRef}
+                className="launchpad-ctx-menu"
+                role="menu"
+                aria-label={`Opzioni slot ${launchPadCtx.slot + 1}`}
+                onMouseDown={(ev) => ev.stopPropagation()}
+              >
+                <div className="launchpad-ctx-menu-title">
+                  Slot {launchPadCtx.slot + 1}
+                  {launchPadCells[launchPadCtx.slot]?.samplePath
+                    ? ''
+                    : ' (vuoto)'}
+                </div>
+                <label
+                  className="launchpad-ctx-menu-label"
+                  htmlFor={`lp-gain-${sessionId}-${launchPadCtx.slot}`}
+                >
+                  Gain uscita
+                </label>
+                <div className="launchpad-ctx-menu-gain-row">
+                  <input
+                    id={`lp-gain-${sessionId}-${launchPadCtx.slot}`}
+                    type="range"
+                    className="regia-volume-slider launchpad-ctx-menu-slider"
+                    min={0}
+                    max={100}
+                    value={Math.round(ctxMenuGain * 100)}
+                    onPointerDown={() => recordUndoPoint()}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      const v =
+                        Number.parseInt(e.target.value, 10) / 100
+                      const c = Math.min(1, Math.max(0, v))
+                      void updateLaunchPadCell(
+                        sessionId,
+                        launchPadCtx.slot,
+                        { padGain: c },
+                        { skipUndo: true },
+                      )
+                    }}
+                    aria-valuetext={`${Math.round(ctxMenuGain * 100)}%`}
+                  />
+                  <span className="launchpad-ctx-menu-gain-pct" aria-hidden>
+                    {Math.round(ctxMenuGain * 100)}%
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="launchpad-ctx-menu-learn"
+                  onClick={() => {
+                    const slot = launchPadCtx.slot
+                    setLaunchPadCtx(null)
+                    setPadKeyLearnSlot(slot)
+                  }}
+                >
+                  Learn…
+                </button>
+                {ctxSlotCell?.padKeyCode ? (
+                  <div
+                    className="launchpad-ctx-menu-keymode"
+                    role="group"
+                    aria-label="Comportamento tasto assegnato"
+                  >
+                    <span className="launchpad-ctx-menu-label">Tasto</span>
+                    <div className="launchpad-ctx-menu-keymode-btns">
+                      <button
+                        type="button"
+                        className={`launchpad-ctx-menu-seg ${ctxSlotCell.padKeyMode !== 'toggle' ? 'is-active' : ''}`}
+                        onClick={() =>
+                          void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                            padKeyMode: 'play',
+                          })
+                        }
+                      >
+                        Play
+                      </button>
+                      <button
+                        type="button"
+                        className={`launchpad-ctx-menu-seg ${ctxSlotCell.padKeyMode === 'toggle' ? 'is-active' : ''}`}
+                        onClick={() =>
+                          void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                            padKeyMode: 'toggle',
+                          })
+                        }
+                      >
+                        Toggle
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  className="launchpad-ctx-menu-learn"
+                  disabled={!ctxSlotCell?.padKeyCode}
+                  onClick={() => {
+                    void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                      padKeyCode: null,
+                    })
+                    setLaunchPadCtx(null)
+                  }}
+                >
+                  Rimuovi tasto
+                </button>
+                <button
+                  type="button"
+                  className="launchpad-ctx-menu-clear"
+                  disabled={!ctxSlotCell?.samplePath}
+                  onClick={() => {
+                    void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                      samplePath: null,
+                    })
+                    setLaunchPadCtx(null)
+                  }}
+                >
+                  Svuota pad
+                </button>
+              </div>
+            </div>
           ) : null}
         </div>
       )}
       {!collapsed && isLaunchpad && launchPadCells ? (
         <div
-          className="floating-playlist-launchpad"
+          className={`floating-playlist-launchpad ${launchpadDropHover ? 'is-file-drop-hover' : ''}`}
           role="group"
           aria-label="Launchpad 4 per 4"
+          onDragEnter={onLaunchpadDragEnter}
+          onDragLeave={onLaunchpadDragLeave}
+          onDragOver={onLaunchpadDragOver}
         >
-          <div className="floating-playlist-launchpad-grid">
+          {padKeyLearnSlot !== null ? (
+            <div className="launchpad-key-learn-banner" role="status">
+              Slot {padKeyLearnSlot + 1}: premi un tasto da assegnare (Esc annulla)
+            </div>
+          ) : null}
+          <div
+            className="floating-playlist-launchpad-grid"
+            onDragOver={onLaunchpadDragOver}
+            onDrop={onLaunchPadGridBackgroundDrop}
+          >
             {launchPadCells.slice(0, LAUNCHPAD_CELL_COUNT).map((cell, i) => {
+              void padProgressTick
               const name = cell.samplePath
                 ? cell.samplePath.split(/[/\\]/).pop() ?? cell.samplePath
                 : ''
@@ -1367,40 +2184,85 @@ export default function FloatingPlaylist({
                 playbackLoadedTrack != null &&
                 playbackLoadedTrack.sessionId === sessionId &&
                 playbackLoadedTrack.index === i
+              const padProg = isLoaded
+                ? getLaunchpadSampleProgress()
+                : { currentTime: 0, duration: 0 }
+              const padFrac =
+                padProg.duration > 0
+                  ? Math.min(1, padProg.currentTime / padProg.duration)
+                  : 0
+              const padRingActive =
+                isLoaded &&
+                (launchpadAudioPlaying || isLaunchpadSamplePausedWithSrc())
               return (
-                <div key={`${sessionId}-pad-${i}`} className="launchpad-cell-wrap">
+                <div
+                  key={`${sessionId}-pad-${i}`}
+                  className="launchpad-cell-wrap"
+                  data-launchpad-slot={i}
+                  onDragOver={(ev) => {
+                    if (!dataTransferHasFileList(ev.dataTransfer)) return
+                    ev.preventDefault()
+                    ev.dataTransfer.dropEffect = 'copy'
+                  }}
+                  onDrop={(ev) => onLaunchPadCellDrop(i, ev)}
+                >
                   <button
                     type="button"
-                    className={`launchpad-cell ${padFlashSlot === i ? 'is-lit' : ''} ${isLoaded ? 'is-loaded' : ''} ${cell.samplePath ? 'has-sample' : 'is-empty'}`}
+                    className={`launchpad-cell ${padFlashSlot === i ? 'is-lit' : ''} ${isLoaded && launchpadAudioPlaying ? 'is-pad-playing' : ''} ${isLoaded ? 'is-loaded' : ''} ${cell.samplePath ? 'has-sample' : 'is-empty'}`}
                     style={
                       {
                         ['--launchpad-pad' as string]: cell.padColor,
                       } as CSSProperties
                     }
+                    onPointerDown={(ev) => onLaunchPadPadPointerDown(i, ev)}
+                    onKeyDown={(ev) => onLaunchPadCellKeyDown(i, ev)}
                     onClick={(ev) => onLaunchPadCellClick(i, ev)}
-                    title={`Slot ${i + 1}: ${cell.samplePath ? name : 'vuoto'} — clic play, Maiusc+clic file, Alt+clic colore`}
+                    onContextMenu={(ev) => onLaunchPadCellContextMenu(i, ev)}
+                    title={
+                      cell.samplePath
+                        ? `Slot ${i + 1}: ${name} — tap breve play intero · tenere premuto CUE (stop al rilascio) · tasto destro: gain / tasto / svuota${cell.padKeyCode ? ` · tasto: ${cell.padKeyCode} (${cell.padKeyMode === 'toggle' ? 'Toggle' : 'Play'})` : ''}`
+                        : `Slot ${i + 1} vuoto — clic per file · tasto destro: gain / tasto${cell.padKeyCode ? ` (${cell.padKeyCode} ${cell.padKeyMode === 'toggle' ? 'Toggle' : 'Play'})` : ''}`
+                    }
                   >
                     <span className="launchpad-cell-glow" aria-hidden />
+                    {cell.padKeyCode ? (
+                      <span
+                        className="launchpad-cell-key"
+                        aria-label={`Tasto ${cell.padKeyCode}, ${cell.padKeyMode === 'toggle' ? 'Toggle' : 'Play'}`}
+                      >
+                        {launchPadKeyLabel(cell.padKeyCode)}
+                        <span className="launchpad-cell-key-mode" aria-hidden>
+                          {cell.padKeyMode === 'toggle' ? 'T' : 'P'}
+                        </span>
+                      </span>
+                    ) : null}
                     <span className="launchpad-cell-index">{i + 1}</span>
                     <span className="launchpad-cell-label">
                       {cell.samplePath ? name : '—'}
                     </span>
                   </button>
                   {cell.samplePath ? (
-                    <button
-                      type="button"
-                      className="launchpad-cell-clear"
-                      title="Rimuovi sample"
-                      aria-label={`Rimuovi sample dallo slot ${i + 1}`}
-                      onClick={(ev) => {
-                        ev.stopPropagation()
-                        void updateLaunchPadCell(sessionId, i, {
-                          samplePath: null,
-                        })
-                      }}
-                    >
-                      ×
-                    </button>
+                    <div className="launchpad-cell-trailing">
+                      <MediaDurationRing
+                        fraction={padFrac}
+                        active={padRingActive}
+                        size={16}
+                      />
+                      <button
+                        type="button"
+                        className="launchpad-cell-clear"
+                        title="Rimuovi sample"
+                        aria-label={`Rimuovi sample dallo slot ${i + 1}`}
+                        onClick={(ev) => {
+                          ev.stopPropagation()
+                          void updateLaunchPadCell(sessionId, i, {
+                            samplePath: null,
+                          })
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               )
@@ -1411,9 +2273,13 @@ export default function FloatingPlaylist({
       {!collapsed && !isLaunchpad && (
         <ul
           ref={listRef}
-          className={`floating-playlist-list ${draggingIndex != null ? 'is-reordering' : ''}`}
+          className={`floating-playlist-list ${draggingIndex != null ? 'is-reordering' : ''} ${playlistDropHover ? 'is-file-drop-hover' : ''}`}
           tabIndex={0}
           aria-label="Elenco brani"
+          onDragEnter={onPlaylistDragEnter}
+          onDragLeave={onPlaylistDragLeave}
+          onDragOver={onPlaylistDragOver}
+          onDrop={onPlaylistDrop}
         >
           {draggingIndex != null ? (
             <li className="playlist-drag-status" aria-live="polite">
@@ -1434,11 +2300,25 @@ export default function FloatingPlaylist({
           ) : null}
           {paths.length === 0 && (
             <li className="floating-playlist-empty">
-              Nessun file. Apri una cartella o usa Aggiungi.
+              Nessun file. Apri una cartella, usa Aggiungi o trascina file qui.
             </li>
           )}
           {paths.map((p, i) => {
+            void previewMediaTimesTick
             const name = p.split(/[/\\]/).pop() ?? p
+            const durationLabel = formatPlaylistDurationLabel(
+              trackDurations[p],
+              formatDurationMmSs,
+            )
+            const isCurrentRow =
+              playbackLoadedTrack != null &&
+              playbackLoadedTrack.sessionId === sessionId &&
+              playbackLoadedTrack.index === i
+            const pv = previewMediaTimesRef.current
+            const rowFrac =
+              isCurrentRow && pv.duration > 0
+                ? Math.min(1, pv.currentTime / pv.duration)
+                : 0
             return (
               <li
                 key={`${sessionId}-${i}-${p}`}
@@ -1466,7 +2346,24 @@ export default function FloatingPlaylist({
                 >
                   <span className="playlist-index">{i + 1}</span>
                   <span className="playlist-name">{name}</span>
+                  <span
+                    className="playlist-duration"
+                    title="Durata del file"
+                    aria-label={`Durata: ${durationLabel}`}
+                  >
+                    {durationLabel}
+                  </span>
                 </button>
+                <span
+                  className="floating-playlist-item-duration"
+                  aria-hidden
+                >
+                  <MediaDurationRing
+                    fraction={rowFrac}
+                    active={isCurrentRow}
+                    size={20}
+                  />
+                </span>
                 <button
                   type="button"
                   className="playlist-remove-btn"
@@ -1484,18 +2381,60 @@ export default function FloatingPlaylist({
           })}
         </ul>
       )}
-      {resizeEdges.map((edge) => (
-        <div
-          key={edge}
-          role="presentation"
-          aria-label={`Ridimensiona (${edge})`}
-          className={`floating-playlist-resize floating-playlist-resize--${edge}`}
-          onPointerDown={(e) => onResizePointerDown(edge, e)}
-          onPointerMove={onResizePointerMove}
-          onPointerUp={onResizePointerUp}
-          onPointerCancel={onResizePointerUp}
-        />
-      ))}
     </div>
+    {closePlayConfirmOpen ? (
+      <div
+        className="settings-modal-backdrop floating-close-play-confirm-backdrop"
+        role="presentation"
+        onPointerDown={onBackdropPointerDownClosePlayConfirm}
+      >
+        <div
+          className="settings-modal floating-close-play-confirm-dialog"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="floating-close-play-confirm-title"
+          aria-describedby="floating-close-play-confirm-desc"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <div className="settings-modal-head">
+            <h2
+              id="floating-close-play-confirm-title"
+              className="settings-modal-title"
+            >
+              Chiudere il pannello?
+            </h2>
+          </div>
+          <div className="settings-modal-body">
+            <p
+              id="floating-close-play-confirm-desc"
+              className="settings-modal-hint"
+              style={{ marginBottom: 0 }}
+            >
+              {isLaunchpad
+                ? 'C’è un sample del Launchpad in riproduzione: chiudere il pannello lo interrompe.'
+                : 'C’è un video in uscita da questo pannello in riproduzione: chiudere lo interrompe.'}
+            </p>
+          </div>
+          <div className="floating-close-play-confirm-actions">
+            <button
+              ref={closePlayConfirmCancelRef}
+              type="button"
+              className="floating-close-play-confirm-btn"
+              onClick={() => setClosePlayConfirmOpen(false)}
+            >
+              Annulla
+            </button>
+            <button
+              type="button"
+              className="floating-close-play-confirm-btn floating-close-play-confirm-btn--danger"
+              onClick={onConfirmClosePanelDespitePlay}
+            >
+              Chiudi comunque
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
+    </Fragment>
   )
 }

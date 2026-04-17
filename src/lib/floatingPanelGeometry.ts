@@ -4,6 +4,45 @@ export type PanelSize = { width: number; height: number }
 
 export type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
+/** Hit invisibile sul bordo del pannello (px), senza elementi dedicati in layout. */
+export const PANEL_RESIZE_BORDER_HIT_PX = 6
+
+/**
+ * Rileva se il puntatore è sul bordo del pannello per il ridimensionamento.
+ * In modalità comprimibile solo il bordo destro (larghezza).
+ */
+export function hitTestPanelResizeEdge(
+  clientX: number,
+  clientY: number,
+  panelRect: DOMRect,
+  collapsed: boolean,
+): ResizeEdge | null {
+  const x = clientX - panelRect.left
+  const y = clientY - panelRect.top
+  const w = panelRect.width
+  const h = panelRect.height
+  const b = PANEL_RESIZE_BORDER_HIT_PX
+
+  if (collapsed) {
+    return x >= w - b ? 'e' : null
+  }
+
+  const inL = x <= b
+  const inR = x >= w - b
+  const inT = y <= b
+  const inB = y >= h - b
+
+  if (inT && inL) return 'nw'
+  if (inT && inR) return 'ne'
+  if (inB && inL) return 'sw'
+  if (inB && inR) return 'se'
+  if (inT) return 'n'
+  if (inB) return 's'
+  if (inL) return 'w'
+  if (inR) return 'e'
+  return null
+}
+
 export function clampPanelInViewport(
   pos: PanelPos,
   size: PanelSize,

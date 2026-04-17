@@ -9,8 +9,7 @@ import type { PlaybackCommand } from './playbackTypes'
 import { isStillImagePath } from './mediaPaths.ts'
 
 const CROSSFADE_MS = 480
-/** Durata visualizzazione immagine in playlist (uscita come «brano finito»). */
-const STILL_IMAGE_DURATION_MS = 8000
+const DEFAULT_STILL_IMAGE_DURATION_MS = 8000
 
 type Slot = 0 | 1
 
@@ -74,6 +73,8 @@ export default function OutputApp() {
   )
   const [transportPlaying, setTransportPlaying] = useState(false)
   const [outputLoopOne, setOutputLoopOne] = useState(false)
+  const stillImageDurationMsRef = useRef(DEFAULT_STILL_IMAGE_DURATION_MS)
+  const [stillDurationEpoch, setStillDurationEpoch] = useState(0)
 
   const applySinkToVideo = useCallback((el: HTMLVideoElement) => {
     const setSink = (
@@ -349,7 +350,7 @@ export default function OutputApp() {
     stillAdvanceTimerRef.current = setTimeout(() => {
       stillAdvanceTimerRef.current = null
       window.electronAPI?.notifyVideoEnded()
-    }, STILL_IMAGE_DURATION_MS)
+    }, stillImageDurationMsRef.current)
     return () => {
       clearStillAdvanceTimer()
     }
@@ -361,6 +362,7 @@ export default function OutputApp() {
     opacityTransition,
     transportPlaying,
     outputLoopOne,
+    stillDurationEpoch,
   ])
 
   const apply = useCallback(
@@ -434,6 +436,15 @@ export default function OutputApp() {
           if (vRef0.current) vRef0.current.loop = cmd.loop
           if (vRef1.current) vRef1.current.loop = cmd.loop
           break
+        case 'setStillImageDurationSec': {
+          const raw = Number(cmd.seconds)
+          const sec = Number.isFinite(raw)
+            ? Math.min(600, Math.max(1, Math.floor(raw)))
+            : 8
+          stillImageDurationMsRef.current = sec * 1000
+          setStillDurationEpoch((n) => n + 1)
+          break
+        }
         default:
           break
       }

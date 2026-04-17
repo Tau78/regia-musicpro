@@ -8,3 +8,4 @@ export type PlaybackCommand =
   | { type: 'setSinkId'; sinkId: string }
   | { type: 'setLoopOne'; loop: boolean }
   | { type: 'setCrossfade'; enabled: boolean }
+  | { type: 'setStillImageDurationSec'; seconds: number }

@@ -11,12 +11,34 @@ export const DEFAULT_FLOATING_PANEL_SIZE: FloatingPlaylistPanelSize = {
 export const LAUNCHPAD_GRID = 4 as const
 export const LAUNCHPAD_CELL_COUNT = LAUNCHPAD_GRID * LAUNCHPAD_GRID
 
+/** Dopo questa durata su pad o tasto assegnato parte il CUE (solo fino al rilascio). */
+export const LAUNCHPAD_CUE_HOLD_MS = 380
+
 export type PlaylistMode = 'tracks' | 'launchpad'
+
+/** Comportamento del tasto assegnato (solo tastiera). */
+export type LaunchPadKeyMode = 'play' | 'toggle'
+
+export function normalizeLaunchPadKeyMode(v: unknown): LaunchPadKeyMode {
+  return v === 'toggle' ? 'toggle' : 'play'
+}
 
 export type LaunchPadCell = {
   samplePath: string | null
   /** Hex #rrggbb */
   padColor: string
+  /** Guadagno per questo pad (0–1), moltiplicato a volume globale e volume pannello. */
+  padGain: number
+  /**
+   * Scorciatoia tastiera (`KeyboardEvent.code`), es. `KeyQ`, `Digit1`.
+   * `null` = non assegnato. MIDI sarà un campo separato in seguito.
+   */
+  padKeyCode: string | null
+  /**
+   * Con tasto assegnato: `play` = ogni pressione corta va sempre in play;
+   * `toggle` = play se fermo, stop se già in play su questo slot.
+   */
+  padKeyMode: LaunchPadKeyMode
 }
 
 const DEFAULT_LAUNCHPAD_PAD_COLORS: readonly string[] = [
@@ -42,6 +64,9 @@ export function defaultLaunchPadCells(): LaunchPadCell[] {
   return Array.from({ length: LAUNCHPAD_CELL_COUNT }, (_, i) => ({
     samplePath: null,
     padColor: DEFAULT_LAUNCHPAD_PAD_COLORS[i] ?? '#444cf7',
+    padGain: 1,
+    padKeyCode: null,
+    padKeyMode: 'play' as const,
   }))
 }
 
@@ -58,16 +83,27 @@ export type FloatingPlaylistSession = {
   currentIndex: number
   playlistTitle: string
   playlistCrossfade: boolean
+  /**
+   * Loop per questa playlist (solo elenco brani). Assente = usa il loop globale
+   * dell’header regia.
+   */
+  playlistLoopMode?: 'off' | 'one' | 'all'
   /** Mute uscita (monitor 2) per i brani avviati da questo pannello; si combina con Mute globale in header. */
   playlistOutputMuted: boolean
+  /** Guadagno uscita (monitor 2) per questo pannello, moltiplicato con il volume globale (0–1). */
+  playlistOutputVolume: number
   /** Hex #rrggbb o stringa vuota = tema predefinito del pannello. */
   playlistThemeColor: string
   editingSavedPlaylistId: string | null
   savedEditPathsBaseline: string[] | null
   savedEditTitleBaseline: string
   savedEditCrossfadeBaseline: boolean
+  /** Loop salvato su disco (solo playlist a elenco collegata a salvataggio). */
+  savedEditPlaylistLoopBaseline?: 'off' | 'one' | 'all'
   /** Tema salvato su disco (solo quando si modifica una playlist salvata). */
   savedEditThemeColorBaseline: string
+  /** Copia slot launchpad all’ultimo «Carica» (solo se collegato a salvataggio launchpad). */
+  savedEditLaunchPadBaseline: LaunchPadCell[] | null
 }
 
 function newSessionId(): string {
@@ -87,12 +123,14 @@ export function createEmptyFloatingSession(
     playlistTitle: '',
     playlistCrossfade: true,
     playlistOutputMuted: false,
+    playlistOutputVolume: 1,
     playlistThemeColor: '',
     editingSavedPlaylistId: null,
     savedEditPathsBaseline: null,
     savedEditTitleBaseline: '',
     savedEditCrossfadeBaseline: false,
     savedEditThemeColorBaseline: '',
+    savedEditLaunchPadBaseline: null,
   }
 }
 
@@ -121,6 +159,28 @@ export function createLaunchPadFloatingSession(
   }
 }
 
+/**
+ * Launchpad 4×4 con sample già assegnati (percorsi assoluti verso file su disco).
+ * Usa i colori di default; riempie gli slot da 0 in ordine fino a 16 o alla lunghezza di `absolutePaths`.
+ */
+export function createLaunchPadFloatingSessionWithKit(
+  absolutePaths: string[],
+  pos?: FloatingPlaylistPos,
+): FloatingPlaylistSession {
+  const s = createLaunchPadFloatingSession(pos)
+  if (!absolutePaths.length) return s
+  const cells = defaultLaunchPadCells()
+  const lim = Math.min(absolutePaths.length, LAUNCHPAD_CELL_COUNT)
+  for (let i = 0; i < lim; i++) {
+    cells[i] = { ...cells[i]!, samplePath: absolutePaths[i]! }
+  }
+  return {
+    ...s,
+    playlistTitle: 'Launchpad base',
+    launchPadCells: cells,
+  }
+}
+
 export function cloneFloatingSession(
   s: FloatingPlaylistSession,
   pos?: FloatingPlaylistPos,
@@ -131,5 +191,56 @@ export function cloneFloatingSession(
     pos: pos ?? { x: s.pos.x + 28, y: s.pos.y + 28 },
     paths: [...s.paths],
     launchPadCells: s.launchPadCells?.map((c) => ({ ...c })),
+    savedEditLaunchPadBaseline: s.savedEditLaunchPadBaseline
+      ? s.savedEditLaunchPadBaseline.map((c) => ({ ...c }))
+      : null,
   }
+}
+
+/** Copia profonda celle per snapshot / salvataggio. */
+export function cloneLaunchPadCellsSnapshot(
+  cells: LaunchPadCell[] | undefined,
+): LaunchPadCell[] {
+  const base = defaultLaunchPadCells()
+  return (cells ?? base).map((c, i) => {
+    const d = base[i]!
+    const padGain =
+      typeof c.padGain === 'number' && Number.isFinite(c.padGain)
+        ? Math.min(1, Math.max(0, c.padGain))
+        : 1
+    const padKeyMode = normalizeLaunchPadKeyMode(c.padKeyMode)
+    return {
+      samplePath:
+        typeof c.samplePath === 'string' || c.samplePath === null
+          ? c.samplePath
+          : null,
+      padColor: typeof c.padColor === 'string' ? c.padColor : d.padColor,
+      padGain,
+      padKeyCode: c.padKeyCode ?? null,
+      padKeyMode,
+    }
+  })
+}
+
+export function launchPadCellsEqual(
+  a: LaunchPadCell[] | undefined,
+  b: LaunchPadCell[] | undefined,
+): boolean {
+  const na = a ?? defaultLaunchPadCells()
+  const nb = b ?? defaultLaunchPadCells()
+  if (na.length !== nb.length) return false
+  for (let i = 0; i < na.length; i++) {
+    const x = na[i]!
+    const y = nb[i]!
+    if (x.samplePath !== y.samplePath) return false
+    if (x.padColor !== y.padColor) return false
+    if (x.padGain !== y.padGain) return false
+    const kx = x.padKeyCode ?? null
+    const ky = y.padKeyCode ?? null
+    if (kx !== ky) return false
+    const mx = x.padKeyMode === 'toggle' ? 'toggle' : 'play'
+    const my = y.padKeyMode === 'toggle' ? 'toggle' : 'play'
+    if (mx !== my) return false
+  }
+  return true
 }

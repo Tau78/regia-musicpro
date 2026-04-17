@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-function isTypingTarget(el: EventTarget | null): boolean {
+export function isTypingTarget(el: EventTarget | null): boolean {
   if (!el || !(el instanceof HTMLElement)) return false
   const tag = el.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true

@@ -10,70 +10,13 @@ import {
 import FloatingPlaylist from './components/FloatingPlaylist.tsx'
 import FloatingPreview from './components/FloatingPreview.tsx'
 import PreviewBlock from './components/PreviewBlock.tsx'
-import SavedPlaylistsPanel from './components/SavedPlaylistsPanel.tsx'
+import PlanciaWorkspaceBanner from './components/PlanciaWorkspaceBanner.tsx'
+import SidebarTabsPanel from './components/SidebarTabsPanel.tsx'
 import AudioOutputBar from './components/AudioOutputBar.tsx'
 import SettingsModal, { IconSettingsGear } from './components/SettingsModal.tsx'
+import { clampSidebarWidth } from './lib/sidebarLayout.ts'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
 import { RegiaProvider, useRegia, type LoopMode } from './state/RegiaContext.tsx'
-
-const LS_SIDEBAR = 'regia-sidebar-saved-open'
-const LS_SIDEBAR_WIDTH = 'regia-sidebar-width'
-const LS_PREVIEW_DETACHED = 'regia-preview-detached'
-
-const SIDEBAR_WIDTH_MIN = 260
-
-function sidebarWidthMax(): number {
-  if (typeof window === 'undefined') return 580
-  return Math.min(580, Math.floor(window.innerWidth * 0.72))
-}
-
-function clampSidebarWidth(w: number): number {
-  return Math.round(
-    Math.min(Math.max(w, SIDEBAR_WIDTH_MIN), sidebarWidthMax()),
-  )
-}
-
-function readSidebarWidthPx(): number {
-  try {
-    const v = parseInt(localStorage.getItem(LS_SIDEBAR_WIDTH) || '', 10)
-    if (!Number.isFinite(v)) return 308
-    return clampSidebarWidth(v)
-  } catch {
-    return 308
-  }
-}
-
-function persistSidebarWidthPx(w: number): void {
-  try {
-    localStorage.setItem(LS_SIDEBAR_WIDTH, String(w))
-  } catch {
-    /* ignore */
-  }
-}
-
-function readPreviewDetached(): boolean {
-  try {
-    return localStorage.getItem(LS_PREVIEW_DETACHED) === 'true'
-  } catch {
-    return false
-  }
-}
-
-function persistPreviewDetached(detached: boolean): void {
-  try {
-    localStorage.setItem(LS_PREVIEW_DETACHED, detached ? 'true' : 'false')
-  } catch {
-    /* ignore */
-  }
-}
-
-function readSidebarOpen(): boolean {
-  try {
-    return localStorage.getItem(LS_SIDEBAR) !== 'false'
-  } catch {
-    return true
-  }
-}
 
 function RegiaShell() {
   const {
@@ -90,30 +33,31 @@ function RegiaShell() {
     canRedo,
     undo,
     redo,
+    previewDetached,
+    setPreviewDocked,
+    setPreviewFloating,
+    sidebarOpen,
+    toggleSidebarOpen,
+    sidebarWidthPx,
+    setSidebarWidthPx,
   } = useRegia()
 
-  const [sidebarOpen, setSidebarOpen] = useState(readSidebarOpen)
-  const [sidebarWidthPx, setSidebarWidthPx] = useState(readSidebarWidthPx)
   const [sidebarResizeActive, setSidebarResizeActive] = useState(false)
   const sidebarResizeDragRef = useRef<{
     pointerId: number
     startX: number
     startW: number
   } | null>(null)
-  const [previewDetached, setPreviewDetached] = useState(readPreviewDetached)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     const onWin = () => {
-      setSidebarWidthPx((w) => {
-        const c = clampSidebarWidth(w)
-        if (c !== w) persistSidebarWidthPx(c)
-        return c
-      })
+      const c = clampSidebarWidth(sidebarWidthPx)
+      if (c !== sidebarWidthPx) setSidebarWidthPx(c)
     }
     window.addEventListener('resize', onWin)
     return () => window.removeEventListener('resize', onWin)
-  }, [])
+  }, [sidebarWidthPx, setSidebarWidthPx])
 
   const onSidebarResizePointerDown = useCallback(
     (e: PointerEvent<HTMLDivElement>) => {
@@ -139,9 +83,9 @@ function RegiaShell() {
       const d = sidebarResizeDragRef.current
       if (!d || e.pointerId !== d.pointerId) return
       const dx = e.clientX - d.startX
-      setSidebarWidthPx(clampSidebarWidth(d.startW + dx))
+      setSidebarWidthPx(clampSidebarWidth(d.startW + dx), false)
     },
-    [],
+    [setSidebarWidthPx],
   )
 
   const onSidebarResizeKeyDown = useCallback(
@@ -151,52 +95,28 @@ function RegiaShell() {
       e.preventDefault()
       const step = 16
       const delta = e.key === 'ArrowRight' ? step : -step
-      setSidebarWidthPx((w) => {
-        const c = clampSidebarWidth(w + delta)
-        persistSidebarWidthPx(c)
-        return c
-      })
+      setSidebarWidthPx(clampSidebarWidth(sidebarWidthPx + delta))
     },
-    [sidebarOpen],
+    [sidebarOpen, sidebarWidthPx, setSidebarWidthPx],
   )
 
-  const endSidebarResize = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    const d = sidebarResizeDragRef.current
-    if (!d || e.pointerId !== d.pointerId) return
-    const dx = e.clientX - d.startX
-    const finalW = clampSidebarWidth(d.startW + dx)
-    sidebarResizeDragRef.current = null
-    setSidebarResizeActive(false)
-    setSidebarWidthPx(finalW)
-    persistSidebarWidthPx(finalW)
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId)
-    } catch {
-      /* ignore */
-    }
-  }, [])
-
-  const toggleSidebar = useCallback(() => {
-    setSidebarOpen((v) => {
-      const next = !v
+  const endSidebarResize = useCallback(
+    (e: PointerEvent<HTMLDivElement>) => {
+      const d = sidebarResizeDragRef.current
+      if (!d || e.pointerId !== d.pointerId) return
+      const dx = e.clientX - d.startX
+      const finalW = clampSidebarWidth(d.startW + dx)
+      sidebarResizeDragRef.current = null
+      setSidebarResizeActive(false)
+      setSidebarWidthPx(finalW)
       try {
-        localStorage.setItem(LS_SIDEBAR, next ? 'true' : 'false')
+        e.currentTarget.releasePointerCapture(e.pointerId)
       } catch {
         /* ignore */
       }
-      return next
-    })
-  }, [])
-
-  const setPreviewDocked = useCallback(() => {
-    setPreviewDetached(false)
-    persistPreviewDetached(false)
-  }, [])
-
-  const setPreviewFloating = useCallback(() => {
-    setPreviewDetached(true)
-    persistPreviewDetached(true)
-  }, [])
+    },
+    [setSidebarWidthPx],
+  )
 
   useKeyboardShortcuts({
     onTogglePlay: () => void togglePlay(),
@@ -216,7 +136,6 @@ function RegiaShell() {
         <div className="regia-brand">
           <span className="regia-dot" aria-hidden />
           <h1>REGIA MUSICPRO</h1>
-          <span className="regia-sub">Monitor 1 · uscita su monitor 2</span>
         </div>
         <div className="regia-header-right">
           <div className="regia-header-controls">
@@ -282,7 +201,7 @@ function RegiaShell() {
           style={sidebarOpen ? { width: sidebarWidthPx } : undefined}
         >
           <div className="regia-sidebar-inner">
-            {sidebarOpen ? <SavedPlaylistsPanel /> : null}
+            {sidebarOpen ? <SidebarTabsPanel /> : null}
           </div>
           {sidebarOpen ? (
             <div
@@ -301,7 +220,7 @@ function RegiaShell() {
           <button
             type="button"
             className="regia-sidebar-toggle"
-            onClick={toggleSidebar}
+            onClick={toggleSidebarOpen}
             aria-expanded={sidebarOpen}
             title={
               sidebarOpen
@@ -349,6 +268,8 @@ function RegiaShell() {
       </main>
 
       {previewDetached ? <FloatingPreview onDock={setPreviewDocked} /> : null}
+
+      <PlanciaWorkspaceBanner />
 
       {floatingPlaylistOpen
         ? floatingPlaylistSessions.map((s) => (

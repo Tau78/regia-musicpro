@@ -7,14 +7,31 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import {
+  applyResizeDelta,
   clampPanelInViewport,
   clampPosToViewport,
+  hitTestPanelResizeEdge,
   type PanelPos,
   type PanelSize,
+  type ResizeEdge,
 } from '../lib/floatingPanelGeometry.ts'
+import {
+  buildPeerDimensionTargets,
+  queryPlanciaContentRect,
+  snapFloatingPanelDragPos,
+  snapFloatingPanelResize,
+} from '../lib/planciaSnap.ts'
+import { usePlanciaSnapEnabled } from '../lib/planciaSnapSettings.ts'
+import {
+  REGIA_FLOATING_PREVIEW_ZORDER_KEY,
+  useRegia,
+} from '../state/RegiaContext.tsx'
+import {
+  PREVIEW_LAYOUT_APPLIED_EVENT,
+  readPreviewLayoutFromLs,
+  writePreviewLayoutToLs,
+} from '../lib/previewLayoutStorage.ts'
 import PreviewBlock from './PreviewBlock.tsx'
-
-const LS_LAYOUT = 'regia-preview-layout'
 
 const MIN_W = 280
 const MIN_H = 240
@@ -24,55 +41,35 @@ const DEFAULT_LAYOUT: { pos: PanelPos; size: PanelSize } = {
   size: { width: 520, height: 420 },
 }
 
-type LayoutLs = { x?: number; y?: number; width?: number; height?: number }
-
 function readLayoutFromLs(): { pos: PanelPos; size: PanelSize } {
-  try {
-    const raw = localStorage.getItem(LS_LAYOUT)
-    if (!raw) return { ...DEFAULT_LAYOUT }
-    const p = JSON.parse(raw) as LayoutLs
-    const pos: PanelPos = {
-      x: typeof p.x === 'number' && Number.isFinite(p.x) ? p.x : DEFAULT_LAYOUT.pos.x,
-      y: typeof p.y === 'number' && Number.isFinite(p.y) ? p.y : DEFAULT_LAYOUT.pos.y,
-    }
-    const size: PanelSize = {
-      width:
-        typeof p.width === 'number' && Number.isFinite(p.width)
-          ? p.width
-          : DEFAULT_LAYOUT.size.width,
-      height:
-        typeof p.height === 'number' && Number.isFinite(p.height)
-          ? p.height
-          : DEFAULT_LAYOUT.size.height,
-    }
-    const { pos: np, size: ns } = clampPanelInViewport(pos, size, MIN_W, MIN_H)
-    return { pos: np, size: ns }
-  } catch {
-    return { ...DEFAULT_LAYOUT }
-  }
+  const L = readPreviewLayoutFromLs()
+  const pos: PanelPos = { x: L.x, y: L.y }
+  const size: PanelSize = { width: L.width, height: L.height }
+  const { pos: np, size: ns } = clampPanelInViewport(pos, size, MIN_W, MIN_H)
+  return { pos: np, size: ns }
 }
 
 function persistLayoutToLs(pos: PanelPos, size: PanelSize): void {
-  try {
-    localStorage.setItem(
-      LS_LAYOUT,
-      JSON.stringify({
-        x: pos.x,
-        y: pos.y,
-        width: size.width,
-        height: size.height,
-      }),
-    )
-  } catch {
-    /* ignore */
-  }
+  writePreviewLayoutToLs({
+    x: pos.x,
+    y: pos.y,
+    width: size.width,
+    height: size.height,
+  })
 }
 
 export default function FloatingPreview({ onDock }: { onDock: () => void }) {
+  const {
+    floatingPlaylistSessions,
+    floatingZOrder,
+    bringFloatingPanelToFront,
+  } = useRegia()
+  const snapEnabled = usePlanciaSnapEnabled()
   const [pos, setPos] = useState<PanelPos>(() => DEFAULT_LAYOUT.pos)
   const [panelSize, setPanelSize] = useState<PanelSize>(
     () => DEFAULT_LAYOUT.size,
   )
+  const [isResizing, setIsResizing] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
   const layoutRef = useRef({ pos: DEFAULT_LAYOUT.pos, size: DEFAULT_LAYOUT.size })
   layoutRef.current = { pos, size: panelSize }
@@ -84,12 +81,30 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
     startX: number
     startY: number
   } | null>(null)
+  const resizeStateRef = useRef<{
+    edge: ResizeEdge
+    startX: number
+    startY: number
+    startPos: PanelPos
+    startSize: PanelSize
+  } | null>(null)
 
   useLayoutEffect(() => {
     const { pos: p, size: s } = readLayoutFromLs()
     const { pos: np, size: ns } = clampPanelInViewport(p, s, MIN_W, MIN_H)
     setPos(np)
     setPanelSize(ns)
+  }, [])
+
+  useEffect(() => {
+    const onApplied = () => {
+      const { pos: p, size: s } = readLayoutFromLs()
+      const { pos: np, size: ns } = clampPanelInViewport(p, s, MIN_W, MIN_H)
+      setPos(np)
+      setPanelSize(ns)
+    }
+    window.addEventListener(PREVIEW_LAYOUT_APPLIED_EVENT, onApplied)
+    return () => window.removeEventListener(PREVIEW_LAYOUT_APPLIED_EVENT, onApplied)
   }, [])
 
   useEffect(() => {
@@ -110,6 +125,128 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  const resizePreviewWithSnap = useCallback(
+    (
+      edge: ResizeEdge,
+      startPos: PanelPos,
+      startSize: PanelSize,
+      dx: number,
+      dy: number,
+    ) => {
+      const raw = applyResizeDelta(
+        edge,
+        startPos,
+        startSize,
+        dx,
+        dy,
+        MIN_W,
+        MIN_H,
+      )
+      if (!snapEnabled) return raw
+      const sessionsMeta = floatingPlaylistSessions.map((s) => ({
+        id: s.id,
+        width: s.panelSize.width,
+        height: s.panelSize.height,
+      }))
+      const { widths, heights } = buildPeerDimensionTargets(
+        sessionsMeta,
+        undefined,
+        null,
+        MIN_W,
+        MIN_H,
+      )
+      const sn = snapFloatingPanelResize(edge, raw.pos, raw.size, {
+        plancia: queryPlanciaContentRect(),
+        peerWidths: widths,
+        peerHeights: heights,
+        minW: MIN_W,
+        minH: MIN_H,
+      })
+      return clampPanelInViewport(sn.pos, sn.size, MIN_W, MIN_H)
+    },
+    [floatingPlaylistSessions, snapEnabled],
+  )
+
+  const onPanelPointerDownCapture = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return
+      const root = panelRef.current
+      if (!root) return
+
+      bringFloatingPanelToFront(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
+
+      const rect = root.getBoundingClientRect()
+      const resizeEdge = hitTestPanelResizeEdge(
+        e.clientX,
+        e.clientY,
+        rect,
+        false,
+      )
+      if (!resizeEdge) return
+      e.preventDefault()
+      resizeStateRef.current = {
+        edge: resizeEdge,
+        startX: e.clientX,
+        startY: e.clientY,
+        startPos: { ...pos },
+        startSize: { ...panelSize },
+      }
+      setIsResizing(true)
+      try {
+        root.setPointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+    },
+    [bringFloatingPanelToFront, panelSize.height, panelSize.width, pos.x, pos.y],
+  )
+
+  const onPanelPointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const rs = resizeStateRef.current
+      if (!rs) return
+      const dx = e.clientX - rs.startX
+      const dy = e.clientY - rs.startY
+      const { pos: np, size: ns } = resizePreviewWithSnap(
+        rs.edge,
+        rs.startPos,
+        rs.startSize,
+        dx,
+        dy,
+      )
+      setPos(np)
+      setPanelSize(ns)
+    },
+    [resizePreviewWithSnap],
+  )
+
+  const onPanelPointerUp = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const rs = resizeStateRef.current
+      if (!rs) return
+      const dx = e.clientX - rs.startX
+      const dy = e.clientY - rs.startY
+      const { pos: np, size: ns } = resizePreviewWithSnap(
+        rs.edge,
+        rs.startPos,
+        rs.startSize,
+        dx,
+        dy,
+      )
+      setPos(np)
+      setPanelSize(ns)
+      persistLayoutToLs(np, ns)
+      resizeStateRef.current = null
+      setIsResizing(false)
+      try {
+        panelRef.current?.releasePointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+    },
+    [resizePreviewWithSnap],
+  )
 
   const onPointerDownHeader = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -134,10 +271,24 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
       if (!el) return
       const nx = d.dx + (e.clientX - d.startX)
       const ny = d.dy + (e.clientY - d.startY)
-      const c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
+      const plancia = snapEnabled ? queryPlanciaContentRect() : null
+      let c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
+      if (plancia) {
+        c = snapFloatingPanelDragPos(
+          c,
+          { width: el.offsetWidth, height: el.offsetHeight },
+          plancia,
+        )
+        c = clampPosToViewport(
+          c.x,
+          c.y,
+          el.offsetWidth,
+          el.offsetHeight,
+        )
+      }
       setPos(c)
     },
-    [],
+    [snapEnabled],
   )
 
   const onPointerUp = useCallback(
@@ -148,26 +299,47 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
       const el = panelRef.current
       const nx = d.dx + (e.clientX - d.startX)
       const ny = d.dy + (e.clientY - d.startY)
-      const next = el
+      const plancia = snapEnabled ? queryPlanciaContentRect() : null
+      let next = el
         ? clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
         : { x: nx, y: ny }
+      if (el && plancia) {
+        next = snapFloatingPanelDragPos(
+          next,
+          { width: el.offsetWidth, height: el.offsetHeight },
+          plancia,
+        )
+        next = clampPosToViewport(
+          next.x,
+          next.y,
+          el.offsetWidth,
+          el.offsetHeight,
+        )
+      }
       setPos(next)
       persistLayoutToLs(next, panelSize)
     },
-    [panelSize],
+    [panelSize, snapEnabled],
   )
+
+  const previewZi = floatingZOrder.indexOf(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
+  const previewZIndex = 40 + (previewZi >= 0 ? previewZi : 0)
 
   return (
     <div
       ref={panelRef}
-      className="floating-playlist floating-preview"
+      className={`floating-playlist floating-preview ${isResizing ? 'is-panel-resizing' : ''}`}
       style={{
         left: pos.x,
         top: pos.y,
-        zIndex: 45,
+        zIndex: previewZIndex,
         width: panelSize.width,
         height: panelSize.height,
       }}
+      onPointerDownCapture={onPanelPointerDownCapture}
+      onPointerMove={onPanelPointerMove}
+      onPointerUp={onPanelPointerUp}
+      onPointerCancel={onPanelPointerUp}
     >
       <div
         className="floating-playlist-header floating-preview-header"

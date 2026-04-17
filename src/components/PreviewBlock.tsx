@@ -17,21 +17,25 @@ export default function PreviewBlock({ className, frameClassName }: Props) {
     previewSrc,
     previewSyncKey,
     playing,
+    videoPlaying,
     togglePlay,
     goNext,
     goPrev,
     paths,
     currentIndex,
-    loopMode,
+    outputTrackLoopMode,
+    reportPreviewMediaTimes,
+    stillImageDurationSec,
   } = useRegia()
 
   const stillPreview = previewSrc ? isStillImagePath(previewSrc) : false
 
   const canTransportPrev =
-    paths.length > 0 && (currentIndex > 0 || loopMode === 'all')
+    paths.length > 0 &&
+    (currentIndex > 0 || outputTrackLoopMode === 'all')
   const canTransportNext =
     paths.length > 0 &&
-    (currentIndex < paths.length - 1 || loopMode === 'all')
+    (currentIndex < paths.length - 1 || outputTrackLoopMode === 'all')
 
   const handlePreviewSeekCommitted = useCallback((seconds: number) => {
     void window.electronAPI.sendPlayback({ type: 'seek', seconds })
@@ -55,16 +59,55 @@ export default function PreviewBlock({ className, frameClassName }: Props) {
     const el = previewRef.current
     if (!el || !previewSrc) return
     el.muted = true
-    if (playing) void el.play().catch(() => {})
+    if (videoPlaying) void el.play().catch(() => {})
     else el.pause()
-  }, [playing, previewSrc, stillPreview])
+  }, [videoPlaying, previewSrc, stillPreview])
 
   useEffect(() => {
     if (stillPreview) return
     const el = previewRef.current
     if (!el || !previewSrc) return
-    el.loop = loopMode === 'one'
-  }, [loopMode, previewSrc, previewSyncKey, stillPreview])
+    el.loop = outputTrackLoopMode === 'one'
+  }, [outputTrackLoopMode, previewSrc, previewSyncKey, stillPreview])
+
+  useEffect(() => {
+    if (stillPreview) return
+    const el = previewRef.current
+    if (!el || !previewSrc) return
+    const push = () => {
+      reportPreviewMediaTimes(el.currentTime, el.duration)
+    }
+    el.addEventListener('timeupdate', push)
+    el.addEventListener('durationchange', push)
+    el.addEventListener('loadedmetadata', push)
+    el.addEventListener('seeked', push)
+    push()
+    return () => {
+      el.removeEventListener('timeupdate', push)
+      el.removeEventListener('durationchange', push)
+      el.removeEventListener('loadedmetadata', push)
+      el.removeEventListener('seeked', push)
+    }
+  }, [previewSrc, previewSyncKey, stillPreview, reportPreviewMediaTimes])
+
+  useEffect(() => {
+    if (!stillPreview || !previewSrc || !videoPlaying) return
+    const dur = stillImageDurationSec
+    const t0 = performance.now()
+    reportPreviewMediaTimes(0, dur)
+    const id = window.setInterval(() => {
+      const elapsed = (performance.now() - t0) / 1000
+      reportPreviewMediaTimes(Math.min(elapsed, dur), dur)
+    }, 100)
+    return () => clearInterval(id)
+  }, [
+    stillPreview,
+    previewSrc,
+    previewSyncKey,
+    videoPlaying,
+    stillImageDurationSec,
+    reportPreviewMediaTimes,
+  ])
 
   const rootClass = ['preview-panel', className].filter(Boolean).join(' ')
   const frameClass = ['preview-frame', frameClassName].filter(Boolean).join(' ')
@@ -93,8 +136,9 @@ export default function PreviewBlock({ className, frameClassName }: Props) {
         )}
         {!previewSrc ? (
           <div className="preview-placeholder">
-            Apri una cartella dalla playlist mobile, carica una playlist salvata,
-            poi doppio click su un file per mandarlo in onda.
+            Apri una cartella dalla playlist mobile o carica una playlist salvata:
+            basta un clic su un brano per l'anteprima e l'uscita. Il doppio
+            clic, se lo usi, serve eventualmente solo per partire.
           </div>
         ) : null}
       </div>

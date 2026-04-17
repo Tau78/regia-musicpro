@@ -2,12 +2,19 @@ import {
   useCallback,
   useEffect,
   useState,
+  type ChangeEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
+import {
+  readPlanciaSnapEnabled,
+  writePlanciaSnapEnabled,
+} from '../lib/planciaSnapSettings.ts'
 import {
   SCREEN2_RESOLUTION_OPTIONS,
   resolutionMatchesOption,
 } from '../lib/screen2Resolutions.ts'
+import { DEFAULT_STILL_IMAGE_DURATION_SEC } from '../lib/workspaceShell.ts'
+import { useRegia } from '../state/RegiaContext.tsx'
 
 type OutputResolution = { width: number; height: number }
 
@@ -18,11 +25,16 @@ export default function SettingsModal({
   open: boolean
   onClose: () => void
 }) {
+  const { stillImageDurationSec, setStillImageDurationSec } = useRegia()
   const [resolution, setResolution] = useState<OutputResolution>({
     width: 1280,
     height: 720,
   })
   const [busy, setBusy] = useState(false)
+  const [snapEnabled, setSnapEnabled] = useState(true)
+  const [stillDraft, setStillDraft] = useState(
+    String(DEFAULT_STILL_IMAGE_DURATION_SEC),
+  )
 
   useEffect(() => {
     if (!open) return
@@ -39,6 +51,28 @@ export default function SettingsModal({
       cancelled = true
     }
   }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    setSnapEnabled(readPlanciaSnapEnabled())
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    setStillDraft(String(stillImageDurationSec))
+  }, [open, stillImageDurationSec])
+
+  const onStillSave = useCallback(() => {
+    const n = Number.parseInt(stillDraft.trim(), 10)
+    if (!Number.isFinite(n)) return
+    setStillImageDurationSec(n)
+  }, [stillDraft, setStillImageDurationSec])
+
+  const onSnapChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.checked
+    writePlanciaSnapEnabled(v)
+    setSnapEnabled(v)
+  }, [])
 
   const onPickResolution = useCallback(
     async (width: number, height: number) => {
@@ -103,6 +137,68 @@ export default function SettingsModal({
           </button>
         </div>
         <div className="settings-modal-body">
+          <section
+            className="settings-modal-section"
+            aria-labelledby="settings-plancia-snap-label"
+          >
+            <h3
+              id="settings-plancia-snap-label"
+              className="settings-modal-section-title"
+            >
+              Plancia
+            </h3>
+            <p className="settings-modal-hint">
+              SNAP allinea ridimensionamento e trascinamento delle finestre
+              flottanti (playlist, launchpad, anteprima) alle dimensioni degli
+              altri pannelli e ai bordi dell&apos;area principale.
+            </p>
+            <label className="settings-modal-checkbox-row">
+              <input
+                type="checkbox"
+                checked={snapEnabled}
+                onChange={onSnapChange}
+              />
+              <span>SNAP</span>
+            </label>
+          </section>
+          <section
+            className="settings-modal-section"
+            aria-labelledby="settings-still-image-label"
+          >
+            <h3
+              id="settings-still-image-label"
+              className="settings-modal-section-title"
+            >
+              Immagini in playlist
+            </h3>
+            <p className="settings-modal-hint">
+              Ogni immagine fissa (JPEG/PNG) resta in anteprima e in uscita per il
+              tempo indicato, poi passa al brano successivo come a fine video.
+              Valore attuale salvato nel workspace:{' '}
+              <strong>{stillImageDurationSec}s</strong> (predefinito{' '}
+              {DEFAULT_STILL_IMAGE_DURATION_SEC}s).
+            </p>
+            <div className="settings-modal-numeric-row">
+              <label htmlFor="settings-still-seconds">Secondi</label>
+              <input
+                id="settings-still-seconds"
+                type="number"
+                min={1}
+                max={600}
+                step={1}
+                value={stillDraft}
+                onChange={(e) => setStillDraft(e.target.value)}
+                aria-label="Durata immagine in secondi"
+              />
+              <button
+                type="button"
+                className="settings-modal-save-still-btn"
+                onClick={onStillSave}
+              >
+                Salva
+              </button>
+            </div>
+          </section>
           <section className="settings-modal-section" aria-labelledby="settings-screen2-label">
             <h3 id="settings-screen2-label" className="settings-modal-section-title">
               Schermo 2 (uscita)
@@ -158,8 +254,8 @@ function IconSettingsGear() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
       <circle cx="12" cy="12" r="3" />
-      <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
     </svg>
   )
 }

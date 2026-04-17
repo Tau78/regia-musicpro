@@ -1,10 +1,6 @@
-import {
-  useCallback,
-  useEffect,
-  useState,
-  type CSSProperties,
-  type KeyboardEvent,
-} from 'react'
+import { useEffect, useMemo, type CSSProperties } from 'react'
+import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
+import { sumMediaDurationsSec } from '../lib/sumMediaDurationsSec.ts'
 import { useRegia } from '../state/RegiaContext.tsx'
 
 function IconOpenPlaylist() {
@@ -88,69 +84,208 @@ function IconDelete() {
   )
 }
 
-export default function SavedPlaylistsPanel() {
+/** Icona griglia colorata per voci launchpad nella lista salvati. */
+function IconSavedCardLaunchpad() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={18}
+      height={18}
+      aria-hidden="true"
+    >
+      <rect x="2" y="2" width="9" height="9" rx="2" fill="#e8435c" />
+      <rect x="13" y="2" width="9" height="9" rx="2" fill="#27ae60" />
+      <rect x="2" y="13" width="9" height="9" rx="2" fill="#2980ef" />
+      <rect x="13" y="13" width="9" height="9" rx="2" fill="#f39c12" />
+    </svg>
+  )
+}
+
+function IconNewPlaylistPanel() {
+  return (
+    <svg
+      className="saved-playlists-icon-svg"
+      viewBox="0 0 24 24"
+      width={18}
+      height={18}
+      aria-hidden="true"
+    >
+      <rect
+        x="4"
+        y="6"
+        width="13"
+        height="11"
+        rx="2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        d="M15 3v4M13 5h4"
+      />
+    </svg>
+  )
+}
+
+function IconLaunchPadGrid() {
+  return (
+    <svg
+      className="saved-playlists-icon-svg"
+      viewBox="0 0 24 24"
+      width={18}
+      height={18}
+      aria-hidden="true"
+    >
+      <rect
+        x="3"
+        y="3"
+        width="7.5"
+        height="7.5"
+        rx="1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+      <rect
+        x="13.5"
+        y="3"
+        width="7.5"
+        height="7.5"
+        rx="1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+      <rect
+        x="3"
+        y="13.5"
+        width="7.5"
+        height="7.5"
+        rx="1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+      <rect
+        x="13.5"
+        y="13.5"
+        width="7.5"
+        height="7.5"
+        rx="1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+    </svg>
+  )
+}
+
+type SavedPlaylistsPanelProps = {
+  /** Solo elenco playlist su disco (pulsanti nuovo pannello gestiti fuori). */
+  listOnly?: boolean
+}
+
+export default function SavedPlaylistsPanel({
+  listOnly = false,
+}: SavedPlaylistsPanelProps) {
   const {
-    paths,
     savedPlaylists,
     refreshSavedPlaylists,
-    saveCurrentPlaylist,
     loadSavedPlaylist,
     deleteSavedPlaylist,
     duplicateSavedPlaylist,
+    addFloatingPlaylist,
+    addFloatingLaunchPad,
+    openFloatingPlaylist,
   } = useRegia()
 
   useEffect(() => {
     void refreshSavedPlaylists()
   }, [refreshSavedPlaylists])
-  const [label, setLabel] = useState('')
-  const [busy, setBusy] = useState(false)
 
-  const onSave = useCallback(async () => {
-    if (!paths.length || !label.trim() || busy) return
-    setBusy(true)
-    try {
-      await saveCurrentPlaylist(label.trim())
-      setLabel('')
-    } finally {
-      setBusy(false)
-    }
-  }, [paths.length, label, busy, saveCurrentPlaylist])
-
-  const onSaveLabelKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLInputElement>) => {
-      if (e.key !== 'Enter') return
-      if (!paths.length || busy || !label.trim()) return
-      e.preventDefault()
-      void onSave()
-    },
-    [paths.length, label, busy, onSave],
+  const backfillFingerprint = useMemo(
+    () =>
+      savedPlaylists
+        .map((pl) => `${pl.id}:${pl.totalDurationSec ?? 'x'}`)
+        .join('|'),
+    [savedPlaylists],
   )
 
+  useEffect(() => {
+    let cancelled = false
+    const missing = savedPlaylists.filter(
+      (pl) =>
+        pl.trackCount > 0 &&
+        (pl.totalDurationSec == null || !Number.isFinite(pl.totalDurationSec)),
+    )
+    if (!missing.length) return
+    void (async () => {
+      for (const pl of missing) {
+        if (cancelled) return
+        try {
+          const data = await window.electronAPI.playlistsLoad(pl.id)
+          if (!data || cancelled) continue
+          const paths =
+            data.playlistMode === 'launchpad'
+              ? data.launchPadCells
+                  .map((c) => c.samplePath)
+                  .filter((p): p is string => Boolean(p))
+              : data.paths
+          if (!paths.length) continue
+          const total = await sumMediaDurationsSec(paths)
+          if (cancelled) return
+          await window.electronAPI.playlistsPatchTotalDuration(pl.id, total)
+        } catch {
+          /* file non disponibili o errore metadati */
+        }
+      }
+      if (!cancelled) await refreshSavedPlaylists()
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [backfillFingerprint, refreshSavedPlaylists, savedPlaylists])
+
   return (
-    <section className="saved-playlists" aria-label="Playlist salvate">
-      <div className="saved-playlists-head">
-        <h2 className="saved-playlists-title">Playlist salvate</h2>
-      </div>
-      <div className="saved-playlists-save-row">
-        <input
-          type="text"
-          className="saved-playlists-input"
-          placeholder="Nuova Playlist"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          onKeyDown={onSaveLabelKeyDown}
-          maxLength={120}
-          disabled={!paths.length || busy}
-        />
-        <button
-          type="button"
-          className="saved-playlists-save-btn"
-          disabled={!paths.length || !label.trim() || busy}
-          onClick={() => void onSave()}
+    <section className="saved-playlists" aria-label="Playlist">
+      {!listOnly ? (
+        <div
+          className="saved-playlists-new-row"
+          role="group"
+          aria-label="Crea nuovo pannello"
         >
-          Salva
-        </button>
-      </div>
+          <button
+            type="button"
+            className="btn-icon saved-playlists-icon-btn saved-playlists-new-playlist"
+            onClick={() => {
+              addFloatingPlaylist()
+              openFloatingPlaylist()
+            }}
+            title="Nuovo pannello playlist (elenco brani)"
+            aria-label="Nuovo pannello playlist"
+          >
+            <IconNewPlaylistPanel />
+          </button>
+          <button
+            type="button"
+            className="btn-icon saved-playlists-icon-btn saved-playlists-new-launchpad"
+            onClick={() => {
+              void (async () => {
+                await addFloatingLaunchPad()
+                openFloatingPlaylist()
+              })()
+            }}
+            title="Nuovo Launchpad 4×4 (sample kit base se presenti in app)"
+            aria-label="Nuovo pannello Launchpad"
+          >
+            <IconLaunchPadGrid />
+          </button>
+        </div>
+      ) : null}
       {savedPlaylists.length === 0 ? (
         <p className="saved-playlists-empty">Nessuna playlist salvata.</p>
       ) : (
@@ -166,17 +301,49 @@ export default function SavedPlaylistsPanel() {
               }
             >
               <div className="saved-playlists-meta">
-                <span className="saved-playlists-name">{pl.label}</span>
-                <span className="saved-playlists-count">
-                  {pl.trackCount} brani
-                </span>
+                {pl.playlistMode === 'launchpad' ? (
+                  <span
+                    className="saved-playlists-kind-icon"
+                    title="Launchpad"
+                    aria-hidden
+                  >
+                    <IconSavedCardLaunchpad />
+                  </span>
+                ) : null}
+                <div className="saved-playlists-meta-text">
+                  <span className="saved-playlists-name">{pl.label}</span>
+                  <span className="saved-playlists-count">
+                    {pl.playlistMode === 'launchpad'
+                      ? `${pl.trackCount} sample`
+                      : `${pl.trackCount} brani`}
+                    {pl.trackCount > 0 ? (
+                      <>
+                        {' · '}
+                        <span className="saved-playlists-total-dur">
+                          {pl.totalDurationSec != null &&
+                          Number.isFinite(pl.totalDurationSec)
+                            ? formatDurationMmSs(pl.totalDurationSec)
+                            : '…'}
+                        </span>
+                      </>
+                    ) : null}
+                  </span>
+                </div>
               </div>
               <div className="saved-playlists-actions">
                 <button
                   type="button"
                   className="btn-icon saved-playlists-icon-btn saved-playlists-open"
-                  title={`Apri «${pl.label}» nella playlist mobile`}
-                  aria-label={`Apri playlist ${pl.label} nella playlist mobile`}
+                  title={
+                    pl.playlistMode === 'launchpad'
+                      ? `Apri «${pl.label}» come pannello Launchpad`
+                      : `Apri «${pl.label}» nella playlist mobile`
+                  }
+                  aria-label={
+                    pl.playlistMode === 'launchpad'
+                      ? `Apri launchpad salvato ${pl.label}`
+                      : `Apri playlist ${pl.label} nella playlist mobile`
+                  }
                   onClick={() => void loadSavedPlaylist(pl.id)}
                 >
                   <IconOpenPlaylist />
@@ -184,8 +351,16 @@ export default function SavedPlaylistsPanel() {
                 <button
                   type="button"
                   className="btn-icon saved-playlists-icon-btn saved-playlists-duplicate"
-                  title={`Duplica «${pl.label}» come nuova playlist salvata`}
-                  aria-label={`Duplica playlist ${pl.label}`}
+                  title={
+                    pl.playlistMode === 'launchpad'
+                      ? `Duplica «${pl.label}» come nuovo launchpad salvato`
+                      : `Duplica «${pl.label}» come nuova playlist salvata`
+                  }
+                  aria-label={
+                    pl.playlistMode === 'launchpad'
+                      ? `Duplica launchpad ${pl.label}`
+                      : `Duplica playlist ${pl.label}`
+                  }
                   onClick={() => void duplicateSavedPlaylist(pl.id)}
                 >
                   <IconDuplicate />
@@ -194,11 +369,17 @@ export default function SavedPlaylistsPanel() {
                   type="button"
                   className="btn-icon saved-playlists-icon-btn saved-playlists-delete"
                   title={`Elimina «${pl.label}» dal disco`}
-                  aria-label={`Elimina playlist ${pl.label}`}
+                  aria-label={
+                    pl.playlistMode === 'launchpad'
+                      ? `Elimina launchpad ${pl.label}`
+                      : `Elimina playlist ${pl.label}`
+                  }
                   onClick={() => {
                     if (
                       window.confirm(
-                        `Eliminare la playlist «${pl.label}» dal disco?`,
+                        pl.playlistMode === 'launchpad'
+                          ? `Eliminare il launchpad «${pl.label}» dal disco?`
+                          : `Eliminare la playlist «${pl.label}» dal disco?`,
                       )
                     ) {
                       void deleteSavedPlaylist(pl.id)

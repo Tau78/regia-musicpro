@@ -2,14 +2,20 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { PlaybackCommand } from './types'
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  /** Percorsi assoluti dei sample del kit «Launchpad base» (vuoto se cartella assente). */
+  launchpadBaseKitPaths: (): Promise<string[]> =>
+    ipcRenderer.invoke('launchpad-base:kitPaths'),
+
   toFileUrl: (absPath: string): Promise<string> =>
     ipcRenderer.invoke('util:toFileUrl', absPath),
 
   selectFolder: (): Promise<string[] | null> =>
     ipcRenderer.invoke('dialog:selectFolder'),
 
-  selectMediaFiles: (): Promise<string[] | null> =>
-    ipcRenderer.invoke('dialog:selectMediaFiles'),
+  selectMediaFiles: (opts?: {
+    context?: 'playlist' | 'launchpad'
+  }): Promise<string[] | null> =>
+    ipcRenderer.invoke('dialog:selectMediaFiles', opts ?? {}),
 
   sendPlayback: (cmd: PlaybackCommand): Promise<void> =>
     ipcRenderer.invoke('playback:send', cmd),
@@ -37,6 +43,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       label: string
       trackCount: number
       updatedAt: string
+      totalDurationSec?: number
+      themeColor?: string
+      playlistMode?: 'tracks' | 'launchpad'
     }>
   > => ipcRenderer.invoke('playlists:list'),
 
@@ -45,8 +54,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     label: string
     paths: string[]
     crossfade?: boolean
+    loopMode?: 'off' | 'one' | 'all'
     themeColor?: string | null
+    playlistMode?: 'tracks' | 'launchpad'
+    launchPadCells?: Array<{
+      samplePath: string | null
+      padColor: string
+      padGain: number
+      padKeyCode?: string | null
+      padKeyMode?: 'play' | 'toggle'
+    }>
+    totalDurationSec?: number
   }): Promise<{ id: string }> => ipcRenderer.invoke('playlists:save', opts),
+
+  playlistsPatchTotalDuration: (id: string, totalDurationSec: number) =>
+    ipcRenderer.invoke('playlists:patchTotalDuration', id, totalDurationSec),
 
   playlistsLoad: (
     id: string,
@@ -55,7 +77,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     label: string
     paths: string[]
     crossfade: boolean
+    loopMode: 'off' | 'one' | 'all'
     themeColor: string
+    playlistMode: 'tracks' | 'launchpad'
+    launchPadCells: Array<{
+      samplePath: string | null
+      padColor: string
+      padGain: number
+      padKeyCode?: string | null
+      padKeyMode?: 'play' | 'toggle'
+    }>
   } | null> =>
     ipcRenderer.invoke('playlists:load', id),
 
