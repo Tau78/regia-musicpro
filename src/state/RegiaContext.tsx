@@ -141,6 +141,8 @@ export type RegiaContextValue = {
   saveCurrentPlaylist: (label: string) => Promise<void>
   loadSavedPlaylist: (id: string) => Promise<void>
   deleteSavedPlaylist: (id: string) => Promise<void>
+  /** Persiste l’ordine delle playlist/launchpad salvati (id nell’ordine desiderato). */
+  reorderSavedPlaylists: (orderedIds: string[]) => Promise<void>
   /** Crea una nuova playlist salvata copiando percorsi, nome (con suffisso) e crossfade. */
   duplicateSavedPlaylist: (id: string) => Promise<void>
   loadIndexAndPlay: (index: number, sessionId?: string) => Promise<void>
@@ -2227,6 +2229,14 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     [refreshSavedPlaylists],
   )
 
+  const reorderSavedPlaylists = useCallback(
+    async (orderedIds: string[]) => {
+      await window.electronAPI.playlistsSetOrder(orderedIds)
+      await refreshSavedPlaylists()
+    },
+    [refreshSavedPlaylists],
+  )
+
   const loadIndexAndPlay = useCallback(
     async (index: number, sessionId?: string) => {
       const fallbackPlaybackId =
@@ -3144,6 +3154,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       saveCurrentPlaylist,
       loadSavedPlaylist,
       deleteSavedPlaylist,
+      reorderSavedPlaylists,
       duplicateSavedPlaylist,
       loadIndexAndPlay,
       loadLaunchPadSlotAndPlay,
@@ -3239,6 +3250,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       saveCurrentPlaylist,
       loadSavedPlaylist,
       deleteSavedPlaylist,
+      reorderSavedPlaylists,
       duplicateSavedPlaylist,
       loadIndexAndPlay,
       loadLaunchPadSlotAndPlay,

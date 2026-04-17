@@ -93,6 +93,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   playlistsDelete: (id: string): Promise<boolean> =>
     ipcRenderer.invoke('playlists:delete', id),
 
+  playlistsSetOrder: (orderedIds: string[]): Promise<boolean> =>
+    ipcRenderer.invoke('playlists:setOrder', orderedIds),
+
   playlistsDuplicate: (
     id: string,
   ): Promise<{ id: string } | null> =>

@@ -1,4 +1,11 @@
-import { useEffect, useMemo, type CSSProperties } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+} from 'react'
 import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
 import { sumMediaDurationsSec } from '../lib/sumMediaDurationsSec.ts'
 import { useRegia } from '../state/RegiaContext.tsx'
@@ -189,6 +196,30 @@ type SavedPlaylistsPanelProps = {
   listOnly?: boolean
 }
 
+function reorderSavedIds(ids: string[], from: number, to: number): string[] {
+  if (
+    from === to ||
+    from < 0 ||
+    to < 0 ||
+    from >= ids.length ||
+    to >= ids.length
+  ) {
+    return ids
+  }
+  const next = [...ids]
+  const [moved] = next.splice(from, 1)
+  const insertAt = from < to ? to - 1 : to
+  next.splice(insertAt, 0, moved)
+  return next
+}
+
+function setTransparentDragImage(ev: DragEvent) {
+  const c = document.createElement('canvas')
+  c.width = 1
+  c.height = 1
+  ev.dataTransfer.setDragImage(c, 0, 0)
+}
+
 export default function SavedPlaylistsPanel({
   listOnly = false,
 }: SavedPlaylistsPanelProps) {
@@ -197,6 +228,7 @@ export default function SavedPlaylistsPanel({
     refreshSavedPlaylists,
     loadSavedPlaylist,
     deleteSavedPlaylist,
+    reorderSavedPlaylists,
     duplicateSavedPlaylist,
     addFloatingPlaylist,
     addFloatingLaunchPad,
@@ -250,6 +282,52 @@ export default function SavedPlaylistsPanel({
     }
   }, [needsBackfillKey, refreshSavedPlaylists])
 
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
+
+  const clearDragUi = useCallback(() => {
+    setDraggingIndex(null)
+    setDragOverIndex(null)
+  }, [])
+
+  const handleDragStart = useCallback(
+    (index: number) => (e: DragEvent) => {
+      setTransparentDragImage(e)
+      e.dataTransfer.setData('text/plain', String(index))
+      e.dataTransfer.effectAllowed = 'move'
+      setDraggingIndex(index)
+    },
+    [],
+  )
+
+  const handleDragEnd = useCallback(() => {
+    clearDragUi()
+  }, [clearDragUi])
+
+  const handleDragOver = useCallback((index: number) => (e: DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDragOverIndex(index)
+  }, [])
+
+  const handleDrop = useCallback(
+    (toIndex: number) => (e: DragEvent) => {
+      e.preventDefault()
+      const raw = e.dataTransfer.getData('text/plain')
+      const from = Number.parseInt(raw, 10)
+      if (!Number.isFinite(from)) {
+        clearDragUi()
+        return
+      }
+      const ids = savedPlaylists.map((p) => p.id)
+      const next = reorderSavedIds(ids, from, toIndex)
+      const changed = next.some((id, i) => id !== ids[i])
+      clearDragUi()
+      if (changed) void reorderSavedPlaylists(next)
+    },
+    [savedPlaylists, reorderSavedPlaylists, clearDragUi],
+  )
+
   return (
     <section className="saved-playlists" aria-label="Playlist">
       {!listOnly ? (
@@ -290,15 +368,35 @@ export default function SavedPlaylistsPanel({
         <p className="saved-playlists-empty">Nessuna playlist salvata.</p>
       ) : (
         <ul className="saved-playlists-list">
-          {savedPlaylists.map((pl) => (
+          {savedPlaylists.map((pl, index) => (
             <li
               key={pl.id}
-              className={`saved-playlists-item ${pl.themeColor ? 'saved-playlists-item--themed' : ''}`}
+              draggable={savedPlaylists.length > 1}
+              title="Doppio clic per aprire. Trascina per riordinare."
+              className={[
+                'saved-playlists-item',
+                pl.themeColor ? 'saved-playlists-item--themed' : '',
+                draggingIndex === index ? 'is-dragging' : '',
+                dragOverIndex === index && draggingIndex !== index
+                  ? 'is-drag-over'
+                  : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
               style={
                 pl.themeColor
                   ? ({ ['--pl-theme' as string]: pl.themeColor } as CSSProperties)
                   : undefined
               }
+              onDoubleClick={(e) => {
+                if ((e.target as HTMLElement).closest('.saved-playlists-actions'))
+                  return
+                void loadSavedPlaylist(pl.id)
+              }}
+              onDragStart={handleDragStart(index)}
+              onDragEnd={handleDragEnd}
+              onDragOver={handleDragOver(index)}
+              onDrop={handleDrop(index)}
             >
               <div className="saved-playlists-meta">
                 {pl.playlistMode === 'launchpad' ? (
@@ -330,7 +428,7 @@ export default function SavedPlaylistsPanel({
                   </span>
                 </div>
               </div>
-              <div className="saved-playlists-actions">
+              <div className="saved-playlists-actions" draggable={false}>
                 <button
                   type="button"
                   className="btn-icon saved-playlists-icon-btn saved-playlists-open"

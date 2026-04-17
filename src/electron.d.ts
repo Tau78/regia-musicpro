@@ -58,6 +58,7 @@ declare global {
         }>
       } | null>
       playlistsDelete: (id: string) => Promise<boolean>
+      playlistsSetOrder: (orderedIds: string[]) => Promise<boolean>
       playlistsDuplicate: (id: string) => Promise<{ id: string } | null>
       setOutputPresentationVisible: (visible: boolean) => Promise<void>
       getOutputResolution: () => Promise<{ width: number; height: number }>

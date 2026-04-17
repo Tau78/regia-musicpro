@@ -163,125 +163,25 @@ export default function SettingsModal({
           </button>
         </div>
         <div className="settings-modal-body">
+          <p className="settings-modal-intro">
+            Uscita video, playlist, finestre e Launchpad.
+          </p>
+
           <section
             className="settings-modal-section"
-            aria-labelledby="settings-plancia-snap-label"
+            aria-labelledby="settings-screen2-label"
           >
-            <h3
-              id="settings-plancia-snap-label"
-              className="settings-modal-section-title"
-            >
-              Plancia
-            </h3>
-            <p className="settings-modal-hint">
-              SNAP allinea ridimensionamento e trascinamento delle finestre
-              flottanti (playlist, launchpad, anteprima) alle dimensioni degli
-              altri pannelli e ai bordi dell&apos;area principale.
-            </p>
-            <label className="settings-modal-checkbox-row">
-              <input
-                type="checkbox"
-                checked={snapEnabled}
-                onChange={onSnapChange}
-              />
-              <span>SNAP</span>
-            </label>
-          </section>
-          <section
-            className="settings-modal-section"
-            aria-labelledby="settings-launchpad-label"
-          >
-            <h3
-              id="settings-launchpad-label"
-              className="settings-modal-section-title"
-            >
-              Launchpad
-            </h3>
-            <p className="settings-modal-hint">
-              Comportamento predefinito per i tasti assegnati ai pad (solo tastiera) e
-              modalità CUE (tenere premuto pad o tasto per ascoltare fino al rilascio).
-              I pad già configurati restano come salvati; il default vale per i pad nuovi
-              e quando rimuovi un tasto.
-            </p>
-            <fieldset className="settings-modal-fieldset">
-              <legend className="settings-modal-fieldset-legend">
-                Tasto predefinito sui pad
-              </legend>
-              <label className="settings-modal-checkbox-row">
-                <input
-                  type="radio"
-                  name="launchpad-default-key-mode"
-                  checked={launchPadDefaultKeyMode === 'toggle'}
-                  onChange={() => onLaunchPadDefaultKeyModeChange('toggle')}
-                />
-                <span>Toggle (play / stop sullo stesso slot)</span>
-              </label>
-              <label className="settings-modal-checkbox-row">
-                <input
-                  type="radio"
-                  name="launchpad-default-key-mode"
-                  checked={launchPadDefaultKeyMode === 'play'}
-                  onChange={() => onLaunchPadDefaultKeyModeChange('play')}
-                />
-                <span>Play (ogni pressione corta = play intero)</span>
-              </label>
-            </fieldset>
-            <label className="settings-modal-checkbox-row settings-modal-checkbox-row--spaced">
-              <input
-                type="checkbox"
-                checked={launchPadCueEnabled}
-                onChange={onLaunchPadCueChange}
-              />
-              <span>Abilita CUE (tenere premuto)</span>
-            </label>
-          </section>
-          <section
-            className="settings-modal-section"
-            aria-labelledby="settings-still-image-label"
-          >
-            <h3
-              id="settings-still-image-label"
-              className="settings-modal-section-title"
-            >
-              Immagini in playlist
-            </h3>
-            <p className="settings-modal-hint">
-              Ogni immagine fissa (JPEG/PNG) resta in anteprima e in uscita per il
-              tempo indicato, poi passa al brano successivo come a fine video.
-              Valore attuale salvato nel workspace:{' '}
-              <strong>{stillImageDurationSec}s</strong> (predefinito{' '}
-              {DEFAULT_STILL_IMAGE_DURATION_SEC}s).
-            </p>
-            <div className="settings-modal-numeric-row">
-              <label htmlFor="settings-still-seconds">Secondi</label>
-              <input
-                id="settings-still-seconds"
-                type="number"
-                min={1}
-                max={600}
-                step={1}
-                value={stillDraft}
-                onChange={(e) => setStillDraft(e.target.value)}
-                aria-label="Durata immagine in secondi"
-              />
-              <button
-                type="button"
-                className="settings-modal-save-still-btn"
-                onClick={onStillSave}
-              >
-                Salva
-              </button>
-            </div>
-          </section>
-          <section className="settings-modal-section" aria-labelledby="settings-screen2-label">
             <h3 id="settings-screen2-label" className="settings-modal-section-title">
-              Schermo 2 (uscita)
+              Schermo 2 — Uscita
             </h3>
             <p className="settings-modal-hint">
-              Dimensione della finestra di uscita sul secondo monitor (centrata quando
-              Schermo 2 è attivo).
+              Risoluzione della finestra sul secondo monitor.
             </p>
-            <ul className="settings-resolution-list" role="radiogroup" aria-label="Risoluzione schermo 2">
+            <ul
+              className="settings-resolution-list"
+              role="radiogroup"
+              aria-label="Risoluzione uscita"
+            >
               {SCREEN2_RESOLUTION_OPTIONS.map((opt) => {
                 const selected = resolutionMatchesOption(
                   resolution.width,
@@ -307,6 +207,117 @@ export default function SettingsModal({
                 )
               })}
             </ul>
+          </section>
+
+          <section
+            className="settings-modal-section"
+            aria-labelledby="settings-still-image-label"
+          >
+            <h3
+              id="settings-still-image-label"
+              className="settings-modal-section-title"
+            >
+              Slide in playlist (JPEG / PNG)
+            </h3>
+            <p className="settings-modal-hint">
+              Secondi in anteprima e in uscita prima del brano successivo (come a fine
+              video). Valore salvato nel workspace.
+            </p>
+            <p className="settings-modal-value-line" aria-live="polite">
+              Attivo: <strong>{stillImageDurationSec} s</strong>
+              <span className="settings-modal-value-sep">·</span>
+              Predefinito: {DEFAULT_STILL_IMAGE_DURATION_SEC} s
+            </p>
+            <div className="settings-modal-numeric-row">
+              <label htmlFor="settings-still-seconds">Modifica (s)</label>
+              <input
+                id="settings-still-seconds"
+                type="number"
+                min={1}
+                max={600}
+                step={1}
+                value={stillDraft}
+                onChange={(e) => setStillDraft(e.target.value)}
+                aria-label="Nuova durata in secondi"
+              />
+              <button
+                type="button"
+                className="settings-modal-save-still-btn"
+                onClick={onStillSave}
+              >
+                Salva
+              </button>
+            </div>
+          </section>
+
+          <section
+            className="settings-modal-section"
+            aria-labelledby="settings-plancia-snap-label"
+          >
+            <h3
+              id="settings-plancia-snap-label"
+              className="settings-modal-section-title"
+            >
+              Finestre flottanti
+            </h3>
+            <p className="settings-modal-hint">
+              SNAP: allinea trascinamento e ridimensionamento (playlist, Launchpad,
+              anteprima) a pannelli e bordi area principale.
+            </p>
+            <label className="settings-modal-checkbox-row">
+              <input
+                type="checkbox"
+                checked={snapEnabled}
+                onChange={onSnapChange}
+              />
+              <span>SNAP attivo</span>
+            </label>
+          </section>
+
+          <section
+            className="settings-modal-section"
+            aria-labelledby="settings-launchpad-label"
+          >
+            <h3
+              id="settings-launchpad-label"
+              className="settings-modal-section-title"
+            >
+              Launchpad
+            </h3>
+            <p className="settings-modal-hint">
+              Default per pad nuovi (tastiera). I pad già configurati non cambiano.
+            </p>
+            <fieldset className="settings-modal-fieldset">
+              <legend className="settings-modal-fieldset-legend">
+                Tasto predefinito
+              </legend>
+              <label className="settings-modal-checkbox-row">
+                <input
+                  type="radio"
+                  name="launchpad-default-key-mode"
+                  checked={launchPadDefaultKeyMode === 'toggle'}
+                  onChange={() => onLaunchPadDefaultKeyModeChange('toggle')}
+                />
+                <span>Toggle — play / stop sullo stesso slot</span>
+              </label>
+              <label className="settings-modal-checkbox-row">
+                <input
+                  type="radio"
+                  name="launchpad-default-key-mode"
+                  checked={launchPadDefaultKeyMode === 'play'}
+                  onChange={() => onLaunchPadDefaultKeyModeChange('play')}
+                />
+                <span>Play — ogni pressione corta, brano intero</span>
+              </label>
+            </fieldset>
+            <label className="settings-modal-checkbox-row settings-modal-checkbox-row--spaced">
+              <input
+                type="checkbox"
+                checked={launchPadCueEnabled}
+                onChange={onLaunchPadCueChange}
+              />
+              <span>CUE — tieni premuto per ascolto fino al rilascio</span>
+            </label>
           </section>
         </div>
       </div>

@@ -2337,16 +2337,17 @@ export default function FloatingPlaylist({
         </div>
       ) : null}
       {!collapsed && !isLaunchpad && (
-        <ul
-          ref={listRef}
-          className={`floating-playlist-list ${draggingIndex != null ? 'is-reordering' : ''} ${playlistDropHover ? 'is-file-drop-hover' : ''}`}
-          tabIndex={0}
-          aria-label="Elenco brani"
-          onDragEnter={onPlaylistDragEnter}
-          onDragLeave={onPlaylistDragLeave}
-          onDragOver={onPlaylistDragOver}
-          onDrop={onPlaylistDrop}
-        >
+        <div className="floating-playlist-list-scroll">
+          <ul
+            ref={listRef}
+            className={`floating-playlist-list ${draggingIndex != null ? 'is-reordering' : ''} ${playlistDropHover ? 'is-file-drop-hover' : ''}`}
+            tabIndex={0}
+            aria-label="Elenco brani"
+            onDragEnter={onPlaylistDragEnter}
+            onDragLeave={onPlaylistDragLeave}
+            onDragOver={onPlaylistDragOver}
+            onDrop={onPlaylistDrop}
+          >
           {draggingIndex != null ? (
             <li className="playlist-drag-status" aria-live="polite">
               {dragOverIndex != null && dragOverIndex !== draggingIndex ? (
@@ -2445,7 +2446,8 @@ export default function FloatingPlaylist({
               </li>
             )
           })}
-        </ul>
+          </ul>
+        </div>
       )}
     </div>
     {closePlayConfirmOpen ? (

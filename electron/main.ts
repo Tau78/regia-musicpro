@@ -112,6 +112,8 @@ function normalizeStoredThemeColor(v: unknown): string | undefined {
 type PlaylistsStoreFile = {
   version: 1
   items: Record<string, StoredPlaylistEntry>
+  /** Ordine manuale in elenco (id); voci assenti vengono accodate per `updatedAt`. */
+  listOrder?: string[]
 }
 
 function playlistsFilePath(): string {
@@ -122,7 +124,10 @@ function readPlaylistsStore(): PlaylistsStoreFile {
   try {
     const raw = fs.readFileSync(playlistsFilePath(), 'utf8')
     const j = JSON.parse(raw) as PlaylistsStoreFile
-    if (j?.version === 1 && j.items && typeof j.items === 'object') return j
+    if (j?.version === 1 && j.items && typeof j.items === 'object') {
+      if (!Array.isArray(j.listOrder)) delete j.listOrder
+      return j
+    }
   } catch {
     /* assente o non valido */
   }
@@ -135,44 +140,60 @@ function writePlaylistsStore(s: PlaylistsStoreFile): void {
   fs.writeFileSync(playlistsFilePath(), JSON.stringify(s, null, 2), 'utf8')
 }
 
+function savedEntryToMeta(id: string, v: StoredPlaylistEntry): SavedPlaylistMeta {
+  const tc = normalizeStoredThemeColor(v.themeColor)
+  const mode =
+    v.playlistMode === 'launchpad' ? ('launchpad' as const) : undefined
+  const cells =
+    mode === 'launchpad'
+      ? normalizeLaunchPadCellsStored(v.launchPadCells)
+      : undefined
+  const padCount =
+    mode === 'launchpad'
+      ? cells
+        ? cells.filter((c) => c.samplePath).length
+        : 0
+      : Array.isArray(v.paths)
+        ? v.paths.length
+        : 0
+  const meta: SavedPlaylistMeta = {
+    id,
+    label: v.label,
+    trackCount: padCount,
+    updatedAt: v.updatedAt,
+  }
+  const td = v.totalDurationSec
+  if (typeof td === 'number' && Number.isFinite(td) && td >= 0) {
+    meta.totalDurationSec = td
+  }
+  if (tc) meta.themeColor = tc
+  if (mode) meta.playlistMode = mode
+  return meta
+}
+
 function listSavedPlaylists(): SavedPlaylistMeta[] {
   const s = readPlaylistsStore()
-  return Object.entries(s.items)
-    .map(([id, v]) => {
-      const tc = normalizeStoredThemeColor(v.themeColor)
-      const mode =
-        v.playlistMode === 'launchpad' ? ('launchpad' as const) : undefined
-      const cells =
-        mode === 'launchpad'
-          ? normalizeLaunchPadCellsStored(v.launchPadCells)
-          : undefined
-      const padCount =
-        mode === 'launchpad'
-          ? cells
-            ? cells.filter((c) => c.samplePath).length
-            : 0
-          : Array.isArray(v.paths)
-            ? v.paths.length
-            : 0
-      const meta: SavedPlaylistMeta = {
-        id,
-        label: v.label,
-        trackCount: padCount,
-        updatedAt: v.updatedAt,
-      }
-      const td = v.totalDurationSec
-      if (
-        typeof td === 'number' &&
-        Number.isFinite(td) &&
-        td >= 0
-      ) {
-        meta.totalDurationSec = td
-      }
-      if (tc) meta.themeColor = tc
-      if (mode) meta.playlistMode = mode
-      return meta
-    })
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  const byId = new Map(
+    Object.entries(s.items).map(([id, v]) => [id, savedEntryToMeta(id, v)]),
+  )
+  const sortByUpdatedDesc = (a: SavedPlaylistMeta, b: SavedPlaylistMeta) =>
+    b.updatedAt.localeCompare(a.updatedAt)
+
+  if (!Array.isArray(s.listOrder) || s.listOrder.length === 0) {
+    return [...byId.values()].sort(sortByUpdatedDesc)
+  }
+
+  const out: SavedPlaylistMeta[] = []
+  for (const id of s.listOrder) {
+    const m = byId.get(id)
+    if (m) {
+      out.push(m)
+      byId.delete(id)
+    }
+  }
+  const tail = [...byId.values()].sort(sortByUpdatedDesc)
+  out.push(...tail)
+  return out
 }
 
 function saveSavedPlaylist(opts: {
@@ -220,7 +241,15 @@ function saveSavedPlaylist(opts: {
   } else {
     delete entry.totalDurationSec
   }
+  const isNewEntry = !Object.prototype.hasOwnProperty.call(s.items, id)
   s.items[id] = entry
+  if (isNewEntry) {
+    const lo = Array.isArray(s.listOrder)
+      ? s.listOrder.filter((k) => k in s.items)
+      : []
+    if (!lo.includes(id)) lo.push(id)
+    s.listOrder = lo
+  }
   writePlaylistsStore(s)
   return { id }
 }
@@ -274,6 +303,28 @@ function deleteSavedPlaylist(id: string): boolean {
   const s = readPlaylistsStore()
   if (!s.items[id]) return false
   delete s.items[id]
+  if (Array.isArray(s.listOrder)) {
+    s.listOrder = s.listOrder.filter((x) => x !== id)
+  }
+  writePlaylistsStore(s)
+  return true
+}
+
+function setPlaylistsOrder(orderedIds: string[]): boolean {
+  const s = readPlaylistsStore()
+  const keys = new Set(Object.keys(s.items))
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const id of orderedIds) {
+    if (keys.has(id) && !seen.has(id)) {
+      out.push(id)
+      seen.add(id)
+    }
+  }
+  for (const id of keys) {
+    if (!seen.has(id)) out.push(id)
+  }
+  s.listOrder = out
   writePlaylistsStore(s)
   return true
 }
@@ -713,6 +764,10 @@ function setupIpc() {
 
   ipcMain.handle('playlists:delete', (_e, id: string) =>
     deleteSavedPlaylist(id),
+  )
+
+  ipcMain.handle('playlists:setOrder', (_e, orderedIds: string[]) =>
+    setPlaylistsOrder(Array.isArray(orderedIds) ? orderedIds : []),
   )
 
   ipcMain.handle('playlists:duplicate', (_e, id: string) =>
