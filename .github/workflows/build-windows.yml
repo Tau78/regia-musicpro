@@ -38,7 +38,9 @@ jobs:
       # Obbligatori: GDRIVE_SA_JSON_B64, GDRIVE_FOLDER_ID, GDRIVE_TEAM_DRIVE_ID
       # Google non dà quota "Il mio Drive" agli account di servizio: serve cartella in un
       # Drive condiviso (Workspace) + ID dello shared drive. La cartella va condivisa col client_email del SA.
+      # Non fa fallire la build se Drive fallisce: l’installer è già in Artifact sopra.
       - name: Copia installer su Google Drive (se configurato)
+        continue-on-error: true
         shell: bash
         env:
           GDRIVE_SA_JSON_B64: ${{ secrets.GDRIVE_SA_JSON_B64 }}
@@ -55,12 +57,9 @@ jobs:
             exit 0
           fi
           if [ -z "${GDRIVE_TEAM_DRIVE_ID:-}" ]; then
-            echo ">>> ERRORE: manca il segreto GDRIVE_TEAM_DRIVE_ID."
-            echo "    Senza Drive condiviso (Google Workspace) l'account di servizio riceve 403 storageQuotaExceeded su Il mio Drive."
-            echo "    Crea uno Shared Drive, aggiungi il SA come membro, metti lì la cartella di destinazione, poi:"
-            echo "    - GDRIVE_TEAM_DRIVE_ID = ID dello shared drive (dall'URL quando sei nello shared drive)"
-            echo "    - GDRIVE_FOLDER_ID = ID della cartella *dentro* quello shared drive"
-            exit 1
+            echo ">>> Salto Drive: manca il segreto GDRIVE_TEAM_DRIVE_ID (serve Shared Drive / Workspace)."
+            echo "    L'installer è comunque disponibile nello step \"Upload installer\" → Artifacts → windows-installer."
+            exit 0
           fi
           export GDRIVE_FOLDER_ID="$(python3 -c "import os,re; r=os.environ['GDRIVE_FOLDER_ID'].strip(); m=re.search(r'/folders/([a-zA-Z0-9_-]+)', r); r=m.group(1) if m else r; m=re.search(r'[?&]id=([a-zA-Z0-9_-]+)', r); print(m.group(1) if m else r)")"
           export GDRIVE_TEAM_DRIVE_ID="$(python3 -c "import os,re; r=os.environ['GDRIVE_TEAM_DRIVE_ID'].strip(); m=re.search(r'/folders/([a-zA-Z0-9_-]+)', r); print(m.group(1) if m else r)")"
