@@ -33,3 +33,32 @@ jobs:
           name: windows-installer
           path: release/*.exe
           if-no-files-found: error
+
+      # Opzionale: Google Drive (Git non carica su Drive; qui passa rclone con account di servizio).
+      # Repo → Settings → Secrets: GDRIVE_SA_JSON_B64 (JSON SA in base64), GDRIVE_FOLDER_ID (id cartella).
+      # La cartella su Drive va condivisa con l’email dell’account di servizio (Editor).
+      - name: Copia installer su Google Drive (se configurato)
+        shell: bash
+        env:
+          GDRIVE_SA_JSON_B64: ${{ secrets.GDRIVE_SA_JSON_B64 }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GDRIVE_SA_JSON_B64:-}" ] || [ -z "${GDRIVE_FOLDER_ID:-}" ]; then
+            echo "Segreti GDRIVE_SA_JSON_B64 e/o GDRIVE_FOLDER_ID assenti: salto upload su Google Drive."
+            exit 0
+          fi
+          SA_LOCAL="${GITHUB_WORKSPACE}/.gdrive-sa.json"
+          python3 -c "import base64,os,pathlib; pathlib.Path(os.environ['GITHUB_WORKSPACE'],'.gdrive-sa.json').write_bytes(base64.b64decode(os.environ['GDRIVE_SA_JSON_B64']))"
+          SA_WIN=$(python3 -c "import pathlib,os; print(str(pathlib.Path(os.environ['GITHUB_WORKSPACE']) / '.gdrive-sa.json'))")
+          cd "${RUNNER_TEMP}"
+          curl -fsSL -o rclone.zip "https://downloads.rclone.org/rclone-current-windows-amd64.zip"
+          unzip -qo rclone.zip
+          RCLONE_DIR=$(echo rclone-*-windows-amd64 | head -1)
+          export PATH="${RUNNER_TEMP}/${RCLONE_DIR}:${PATH}"
+          export RCLONE_CONFIG_GD_TYPE=drive
+          export RCLONE_CONFIG_GD_SCOPE=drive
+          export RCLONE_CONFIG_GD_SERVICE_ACCOUNT_FILE="${SA_WIN}"
+          export RCLONE_CONFIG_GD_ROOT_FOLDER_ID="${GDRIVE_FOLDER_ID}"
+          rclone copy "${GITHUB_WORKSPACE}/release/" "gd:" --include "*.exe" -v
+          rm -f "${SA_LOCAL}"
