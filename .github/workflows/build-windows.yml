@@ -34,14 +34,16 @@ jobs:
           path: release/*.exe
           if-no-files-found: error
 
-      # Opzionale: Google Drive (Git non carica su Drive; qui passa rclone con account di servizio).
-      # Repo → Settings → Secrets: GDRIVE_SA_JSON_B64 (JSON SA in base64), GDRIVE_FOLDER_ID (id cartella).
-      # La cartella su Drive va condivisa con l’email dell’account di servizio (Editor).
+      # Opzionale: Google Drive (account di servizio + rclone).
+      # Segreti: GDRIVE_SA_JSON_B64, GDRIVE_FOLDER_ID (solo ID cartella o URL completo).
+      # La cartella deve essere condivisa con client_email del JSON (ruolo Editor).
+      # Se la cartella è in un Drive condiviso (Google Workspace): segreto GDRIVE_TEAM_DRIVE_ID = ID dello shared drive.
       - name: Copia installer su Google Drive (se configurato)
         shell: bash
         env:
           GDRIVE_SA_JSON_B64: ${{ secrets.GDRIVE_SA_JSON_B64 }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_TEAM_DRIVE_ID: ${{ secrets.GDRIVE_TEAM_DRIVE_ID }}
         run: |
           set -euo pipefail
           echo "=== Drive: inizio step ==="
@@ -52,13 +54,15 @@ jobs:
             echo ">>> Salto upload (exit 0)."
             exit 0
           fi
-          echo ">>> Segreti presenti: B64 lunghezza=${#GDRIVE_SA_JSON_B64} caratteri, FOLDER_ID lunghezza=${#GDRIVE_FOLDER_ID}"
+          export GDRIVE_FOLDER_ID="$(python3 -c "import os,re; r=os.environ['GDRIVE_FOLDER_ID'].strip(); m=re.search(r'/folders/([a-zA-Z0-9_-]+)', r); r=m.group(1) if m else r; m=re.search(r'[?&]id=([a-zA-Z0-9_-]+)', r); print(m.group(1) if m else r)")"
+          echo ">>> Segreti: B64 lunghezza=${#GDRIVE_SA_JSON_B64}, FOLDER_ID normalizzato lunghezza=${#GDRIVE_FOLDER_ID}"
           echo "=== Drive: file in release/ prima della copia ==="
           ls -la "${GITHUB_WORKSPACE}/release/" || { echo ">>> ERRORE: cartella release/ assente"; exit 1; }
           SA_LOCAL="${GITHUB_WORKSPACE}/.gdrive-sa.json"
           echo "=== Drive: decodifica JSON account di servizio ==="
-          python3 -c "import base64,os,pathlib; pathlib.Path(os.environ['GITHUB_WORKSPACE'],'.gdrive-sa.json').write_bytes(base64.b64decode(os.environ['GDRIVE_SA_JSON_B64']))"
+          python3 -c "import base64,os,pathlib; pathlib.Path(os.environ['GITHUB_WORKSPACE'],'.gdrive-sa.json').write_bytes(base64.b64decode(os.environ['GDRIVE_SA_JSON_B64'].strip()))"
           echo ">>> File SA scritto, dimensione=$(wc -c < "${SA_LOCAL}" | tr -d ' ') byte"
+          python3 -c "import json,pathlib,os; p=pathlib.Path(os.environ['GITHUB_WORKSPACE'])/'.gdrive-sa.json'; j=json.loads(p.read_text()); print('>>> Condividi la cartella Drive con questa email (Editor):', j.get('client_email','(manca client_email)'))"
           SA_WIN=$(python3 -c "import pathlib,os; print(str(pathlib.Path(os.environ['GITHUB_WORKSPACE']) / '.gdrive-sa.json'))")
           echo "=== Drive: scarico rclone (Windows) ==="
           cd "${RUNNER_TEMP}"
@@ -75,8 +79,19 @@ jobs:
           export RCLONE_CONFIG_GD_SCOPE=drive
           export RCLONE_CONFIG_GD_SERVICE_ACCOUNT_FILE="${SA_WIN}"
           export RCLONE_CONFIG_GD_ROOT_FOLDER_ID="${GDRIVE_FOLDER_ID}"
+          if [ -n "${GDRIVE_TEAM_DRIVE_ID:-}" ]; then
+            export GDRIVE_TEAM_DRIVE_ID="$(python3 -c "import os,re; r=os.environ['GDRIVE_TEAM_DRIVE_ID'].strip(); m=re.search(r'/folders/([a-zA-Z0-9_-]+)', r); print(m.group(1) if m else r)")"
+            export RCLONE_CONFIG_GD_TEAM_DRIVE="${GDRIVE_TEAM_DRIVE_ID}"
+            echo ">>> Team Drive (shared drive) ID configurato, lunghezza=${#GDRIVE_TEAM_DRIVE_ID}"
+          fi
           echo "=== Drive: test lettura remoto (lista file in cartella) ==="
-          rclone ls "gd:" -v --max-depth 1 || { echo ">>> ERRORE: impossibile elencare gd: (permessi Drive / ID cartella / condivisione con SA?)"; exit 1; }
+          rclone ls "gd:" -v --max-depth 1 || {
+            echo ">>> ERRORE 404 / lista vuota: Google non trova la cartella per questo account di servizio."
+            echo "    1) In Drive: tasto destro sulla CARTELLA (non sul file) → Condividi → incolla l'email sopra → Editor."
+            echo "    2) Il segreto GDRIVE_FOLDER_ID deve essere l'ID (da URL .../folders/ID) della STESSA cartella."
+            echo "    3) Se la cartella è in un Drive condiviso Workspace: crea il segreto GDRIVE_TEAM_DRIVE_ID con l'ID dello shared drive."
+            exit 1
+          }
           echo "=== Drive: copia .exe ==="
           rclone copy "${GITHUB_WORKSPACE}/release/" "gd:" --include "*.exe" -v
           echo "=== Drive: elenco dopo copia ==="
