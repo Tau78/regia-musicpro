@@ -1,0 +1,29 @@
+# Pacchetto per utenti finali (Windows installer NSIS).
+# Esegui: npm run dist:win (su Windows) oppure workflow GitHub Actions.
+
+appId: com.regiavideo.musicpro
+productName: REGIA MUSICPRO
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: '${productName}-Setup-${version}.${ext}'
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

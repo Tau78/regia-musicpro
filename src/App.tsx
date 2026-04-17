@@ -1,0 +1,418 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+} from 'react'
+import FloatingPlaylist from './components/FloatingPlaylist.tsx'
+import FloatingPreview from './components/FloatingPreview.tsx'
+import PreviewBlock from './components/PreviewBlock.tsx'
+import SavedPlaylistsPanel from './components/SavedPlaylistsPanel.tsx'
+import AudioOutputBar from './components/AudioOutputBar.tsx'
+import SettingsModal, { IconSettingsGear } from './components/SettingsModal.tsx'
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
+import { RegiaProvider, useRegia, type LoopMode } from './state/RegiaContext.tsx'
+
+const LS_SIDEBAR = 'regia-sidebar-saved-open'
+const LS_SIDEBAR_WIDTH = 'regia-sidebar-width'
+const LS_PREVIEW_DETACHED = 'regia-preview-detached'
+
+const SIDEBAR_WIDTH_MIN = 260
+
+function sidebarWidthMax(): number {
+  if (typeof window === 'undefined') return 580
+  return Math.min(580, Math.floor(window.innerWidth * 0.72))
+}
+
+function clampSidebarWidth(w: number): number {
+  return Math.round(
+    Math.min(Math.max(w, SIDEBAR_WIDTH_MIN), sidebarWidthMax()),
+  )
+}
+
+function readSidebarWidthPx(): number {
+  try {
+    const v = parseInt(localStorage.getItem(LS_SIDEBAR_WIDTH) || '', 10)
+    if (!Number.isFinite(v)) return 308
+    return clampSidebarWidth(v)
+  } catch {
+    return 308
+  }
+}
+
+function persistSidebarWidthPx(w: number): void {
+  try {
+    localStorage.setItem(LS_SIDEBAR_WIDTH, String(w))
+  } catch {
+    /* ignore */
+  }
+}
+
+function readPreviewDetached(): boolean {
+  try {
+    return localStorage.getItem(LS_PREVIEW_DETACHED) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function persistPreviewDetached(detached: boolean): void {
+  try {
+    localStorage.setItem(LS_PREVIEW_DETACHED, detached ? 'true' : 'false')
+  } catch {
+    /* ignore */
+  }
+}
+
+function readSidebarOpen(): boolean {
+  try {
+    return localStorage.getItem(LS_SIDEBAR) !== 'false'
+  } catch {
+    return true
+  }
+}
+
+function RegiaShell() {
+  const {
+    togglePlay,
+    goNext,
+    goPrev,
+    loopMode,
+    setLoopMode,
+    secondScreenOn,
+    toggleSecondScreen,
+    floatingPlaylistOpen,
+    floatingPlaylistSessions,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
+  } = useRegia()
+
+  const [sidebarOpen, setSidebarOpen] = useState(readSidebarOpen)
+  const [sidebarWidthPx, setSidebarWidthPx] = useState(readSidebarWidthPx)
+  const [sidebarResizeActive, setSidebarResizeActive] = useState(false)
+  const sidebarResizeDragRef = useRef<{
+    pointerId: number
+    startX: number
+    startW: number
+  } | null>(null)
+  const [previewDetached, setPreviewDetached] = useState(readPreviewDetached)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  useEffect(() => {
+    const onWin = () => {
+      setSidebarWidthPx((w) => {
+        const c = clampSidebarWidth(w)
+        if (c !== w) persistSidebarWidthPx(c)
+        return c
+      })
+    }
+    window.addEventListener('resize', onWin)
+    return () => window.removeEventListener('resize', onWin)
+  }, [])
+
+  const onSidebarResizePointerDown = useCallback(
+    (e: PointerEvent<HTMLDivElement>) => {
+      if (!sidebarOpen || e.button !== 0) return
+      e.preventDefault()
+      sidebarResizeDragRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startW: sidebarWidthPx,
+      }
+      setSidebarResizeActive(true)
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+    },
+    [sidebarOpen, sidebarWidthPx],
+  )
+
+  const onSidebarResizePointerMove = useCallback(
+    (e: PointerEvent<HTMLDivElement>) => {
+      const d = sidebarResizeDragRef.current
+      if (!d || e.pointerId !== d.pointerId) return
+      const dx = e.clientX - d.startX
+      setSidebarWidthPx(clampSidebarWidth(d.startW + dx))
+    },
+    [],
+  )
+
+  const onSidebarResizeKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      if (!sidebarOpen) return
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      e.preventDefault()
+      const step = 16
+      const delta = e.key === 'ArrowRight' ? step : -step
+      setSidebarWidthPx((w) => {
+        const c = clampSidebarWidth(w + delta)
+        persistSidebarWidthPx(c)
+        return c
+      })
+    },
+    [sidebarOpen],
+  )
+
+  const endSidebarResize = useCallback((e: PointerEvent<HTMLDivElement>) => {
+    const d = sidebarResizeDragRef.current
+    if (!d || e.pointerId !== d.pointerId) return
+    const dx = e.clientX - d.startX
+    const finalW = clampSidebarWidth(d.startW + dx)
+    sidebarResizeDragRef.current = null
+    setSidebarResizeActive(false)
+    setSidebarWidthPx(finalW)
+    persistSidebarWidthPx(finalW)
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((v) => {
+      const next = !v
+      try {
+        localStorage.setItem(LS_SIDEBAR, next ? 'true' : 'false')
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }, [])
+
+  const setPreviewDocked = useCallback(() => {
+    setPreviewDetached(false)
+    persistPreviewDetached(false)
+  }, [])
+
+  const setPreviewFloating = useCallback(() => {
+    setPreviewDetached(true)
+    persistPreviewDetached(true)
+  }, [])
+
+  useKeyboardShortcuts({
+    onTogglePlay: () => void togglePlay(),
+    onPrev: () => void goPrev(),
+    onNext: () => void goNext(),
+    onUndo: () => {
+      if (canUndo) void undo()
+    },
+    onRedo: () => {
+      if (canRedo) void redo()
+    },
+  })
+
+  return (
+    <div className="regia-app">
+      <header className="regia-header">
+        <div className="regia-brand">
+          <span className="regia-dot" aria-hidden />
+          <h1>REGIA MUSICPRO</h1>
+          <span className="regia-sub">Monitor 1 · uscita su monitor 2</span>
+        </div>
+        <div className="regia-header-right">
+          <div className="regia-header-controls">
+            <AudioOutputBar />
+            <button
+              type="button"
+              className={`btn-toggle ${!secondScreenOn ? 'is-screen-off' : ''}`}
+              onClick={toggleSecondScreen}
+              aria-pressed={secondScreenOn}
+              title={
+                secondScreenOn
+                  ? 'Uscita attiva sul secondo schermo: clic per nascondere la finestra (monitor libero)'
+                  : 'Uscita nascosta: clic per mostrare la finestra sul secondo schermo (risoluzione in Impostazioni)'
+              }
+            >
+              Schermo 2: {secondScreenOn ? 'On' : 'Off'}
+            </button>
+            <LoopToggles mode={loopMode} onChange={setLoopMode} />
+            <div className="regia-undo-redo" role="group" aria-label="Annulla e ripristina">
+              <button
+                type="button"
+                className="btn-icon regia-undo-btn"
+                disabled={!canUndo}
+                onClick={() => undo()}
+                title="Annulla (⌘Z / Ctrl+Z)"
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                className="btn-icon regia-redo-btn"
+                disabled={!canRedo}
+                onClick={() => redo()}
+                title="Ripristina (⌘⇧Z / Ctrl+⇧Z)"
+              >
+                Ripristina
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn-icon regia-header-settings-btn"
+            onClick={() => setSettingsOpen(true)}
+            title="Impostazioni"
+            aria-label="Apri impostazioni"
+          >
+            <IconSettingsGear />
+          </button>
+        </div>
+      </header>
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
+
+      <main
+        className={`regia-main ${sidebarOpen ? 'is-sidebar-open' : 'is-sidebar-collapsed'}`}
+      >
+        <aside
+          className="regia-sidebar"
+          aria-label="Playlist salvate e cartelle"
+          style={sidebarOpen ? { width: sidebarWidthPx } : undefined}
+        >
+          <div className="regia-sidebar-inner">
+            {sidebarOpen ? <SavedPlaylistsPanel /> : null}
+          </div>
+          {sidebarOpen ? (
+            <div
+              className={`regia-sidebar-resize-handle ${sidebarResizeActive ? 'is-active' : ''}`}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Trascina per ridimensionare tra playlist e anteprima"
+              tabIndex={0}
+              onPointerDown={onSidebarResizePointerDown}
+              onPointerMove={onSidebarResizePointerMove}
+              onPointerUp={endSidebarResize}
+              onPointerCancel={endSidebarResize}
+              onKeyDown={onSidebarResizeKeyDown}
+            />
+          ) : null}
+          <button
+            type="button"
+            className="regia-sidebar-toggle"
+            onClick={toggleSidebar}
+            aria-expanded={sidebarOpen}
+            title={
+              sidebarOpen
+                ? 'Comprimi pannello sinistro'
+                : 'Espandi playlist salvate'
+            }
+          >
+            {sidebarOpen ? '◀' : '▶'}
+          </button>
+        </aside>
+        <div className="regia-main-content">
+          {!previewDetached ? (
+            <section className="preview-panel" aria-label="Anteprima">
+              <div className="preview-panel-toolbar">
+                <span className="preview-panel-toolbar-label">Anteprima</span>
+                <button
+                  type="button"
+                  className="preview-panel-detach-btn"
+                  onClick={setPreviewFloating}
+                  title="Anteprima in finestra flottante: trascina dall’intestazione per spostarla"
+                >
+                  Stacca
+                </button>
+              </div>
+              <PreviewBlock />
+            </section>
+          ) : (
+            <section
+              className="preview-panel preview-panel--docked-placeholder"
+              aria-label="Anteprima staccata"
+            >
+              <p className="preview-panel-placeholder-text">
+                L’anteprima è in una finestra flottante sopra questa regia.
+              </p>
+              <button
+                type="button"
+                className="preview-panel-reattach-btn"
+                onClick={setPreviewDocked}
+              >
+                Riaggancia nell’area principale
+              </button>
+            </section>
+          )}
+        </div>
+      </main>
+
+      {previewDetached ? <FloatingPreview onDock={setPreviewDocked} /> : null}
+
+      {floatingPlaylistOpen
+        ? floatingPlaylistSessions.map((s) => (
+            <FloatingPlaylist key={s.id} sessionId={s.id} />
+          ))
+        : null}
+    </div>
+  )
+}
+
+function LoopToggles({
+  mode,
+  onChange,
+}: {
+  mode: LoopMode
+  onChange: (m: LoopMode) => void
+}) {
+  return (
+    <div className="loop-toggles" role="group" aria-label="Modalità loop">
+      <button
+        type="button"
+        className={mode === 'off' ? 'is-active' : ''}
+        onClick={() => onChange('off')}
+      >
+        Loop off
+      </button>
+      <button
+        type="button"
+        className={mode === 'one' ? 'is-active' : ''}
+        onClick={() => onChange('one')}
+      >
+        Loop file
+      </button>
+      <button
+        type="button"
+        className={mode === 'all' ? 'is-active' : ''}
+        onClick={() => onChange('all')}
+      >
+        Loop playlist
+      </button>
+    </div>
+  )
+}
+
+function ElectronGate({ children }: { children: ReactNode }) {
+  if (typeof window !== 'undefined' && !window.electronAPI) {
+    return (
+      <div className="regia-fallback">
+        <p>
+          Avvia l&apos;app con <code>npm run dev</code> (Electron + Vite) per
+          usare la regia.
+        </p>
+      </div>
+    )
+  }
+  return children
+}
+
+export default function App() {
+  return (
+    <ElectronGate>
+      <RegiaProvider>
+        <RegiaShell />
+      </RegiaProvider>
+    </ElectronGate>
+  )
+}
