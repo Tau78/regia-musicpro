@@ -4,7 +4,9 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent,
+  type MouseEvent,
   type PointerEvent,
 } from 'react'
 import {
@@ -21,6 +23,8 @@ import {
 import { useRegia } from '../state/RegiaContext.tsx'
 import {
   DEFAULT_FLOATING_PANEL_SIZE,
+  LAUNCHPAD_CELL_COUNT,
+  defaultLaunchPadCells,
   type FloatingPlaylistPanelSize,
 } from '../state/floatingPlaylistSession.ts'
 
@@ -97,6 +101,59 @@ function IconSaveDisk() {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M17 21v-8H7v8M7 3v5h8"
+      />
+    </svg>
+  )
+}
+
+function IconLaunchPadGrid() {
+  return (
+    <svg
+      className="floating-playlist-header-icon"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+    >
+      <rect
+        x="3"
+        y="3"
+        width="7.5"
+        height="7.5"
+        rx="1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+      <rect
+        x="13.5"
+        y="3"
+        width="7.5"
+        height="7.5"
+        rx="1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+      <rect
+        x="3"
+        y="13.5"
+        width="7.5"
+        height="7.5"
+        rx="1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+      <rect
+        x="13.5"
+        y="13.5"
+        width="7.5"
+        height="7.5"
+        rx="1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
       />
     </svg>
   )
@@ -508,6 +565,9 @@ export default function FloatingPlaylist({
     saveLoadedPlaylistOverwrite,
     persistSavedPlaylistAfterFloatingTitleBlur,
     addFloatingPlaylist,
+    addFloatingLaunchPad,
+    loadLaunchPadSlotAndPlay,
+    updateLaunchPadCell,
     updateFloatingPlaylistChrome,
     recordUndoPoint,
     canUndo,
@@ -518,7 +578,11 @@ export default function FloatingPlaylist({
   } = useRegia()
 
   const session = floatingPlaylistSessions.find((s) => s.id === sessionId)
+  const isLaunchpad = session?.playlistMode === 'launchpad'
   const paths = session?.paths ?? []
+  const launchPadCells =
+    session?.launchPadCells ??
+    (isLaunchpad ? defaultLaunchPadCells() : null)
   const currentIndex = session?.currentIndex ?? 0
   const playlistTitle = session?.playlistTitle ?? ''
   const playlistCrossfade = session?.playlistCrossfade ?? false
@@ -530,6 +594,11 @@ export default function FloatingPlaylist({
 
   const panelRef = useRef<HTMLDivElement>(null)
   const playlistColorInputRef = useRef<HTMLInputElement>(null)
+  const padColorInputRef = useRef<HTMLInputElement>(null)
+  const [padFlashSlot, setPadFlashSlot] = useState<number | null>(null)
+  const [padColorPickIndex, setPadColorPickIndex] = useState<number | null>(
+    null,
+  )
   const listRef = useRef<HTMLUListElement>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
@@ -616,7 +685,7 @@ export default function FloatingPlaylist({
 
   useLayoutEffect(() => {
     reclampIntoView()
-  }, [collapsed, paths.length, panelSize, reclampIntoView])
+  }, [collapsed, isLaunchpad, paths.length, panelSize, reclampIntoView])
 
   useEffect(() => {
     const onResize = () => reclampIntoView()
@@ -954,9 +1023,46 @@ export default function FloatingPlaylist({
     [commitFloatingPlaylistTitle],
   )
 
+  const onLaunchPadCellClick = useCallback(
+    (slotIndex: number, e: MouseEvent<HTMLButtonElement>) => {
+      setActiveFloatingSession(sessionId)
+      if (e.shiftKey) {
+        e.preventDefault()
+        void (async () => {
+          const picked = await window.electronAPI.selectMediaFiles()
+          if (!picked?.length) return
+          await updateLaunchPadCell(sessionId, slotIndex, {
+            samplePath: picked[0]!,
+          })
+        })()
+        return
+      }
+      if (e.altKey) {
+        e.preventDefault()
+        setPadColorPickIndex(slotIndex)
+        queueMicrotask(() => padColorInputRef.current?.click())
+        return
+      }
+      const cell = launchPadCells?.[slotIndex]
+      if (!cell?.samplePath) return
+      setPadFlashSlot(slotIndex)
+      window.setTimeout(() => {
+        setPadFlashSlot((cur) => (cur === slotIndex ? null : cur))
+      }, 200)
+      void loadLaunchPadSlotAndPlay(sessionId, slotIndex)
+    },
+    [
+      sessionId,
+      launchPadCells,
+      loadLaunchPadSlotAndPlay,
+      setActiveFloatingSession,
+      updateLaunchPadCell,
+    ],
+  )
+
   const onPanelKeyDownCapture = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
-      if (collapsed || !paths.length) return
+      if (collapsed || isLaunchpad || !paths.length) return
       const root = panelRef.current
       if (!root?.contains(e.target as Node)) return
       const listEl = root.querySelector('ul.floating-playlist-list')
@@ -980,7 +1086,14 @@ export default function FloatingPlaylist({
         void loadIndexAndPlay(next, sessionId)
       }
     },
-    [collapsed, paths.length, currentIndex, loadIndexAndPlay, sessionId],
+    [
+      collapsed,
+      isLaunchpad,
+      paths.length,
+      currentIndex,
+      loadIndexAndPlay,
+      sessionId,
+    ],
   )
 
   if (!session) return null
@@ -998,7 +1111,7 @@ export default function FloatingPlaylist({
   return (
     <div
       ref={panelRef}
-      className={`floating-playlist ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}`}
+      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}`}
       style={{
         left: pos.x,
         top: pos.y,
@@ -1024,6 +1137,29 @@ export default function FloatingPlaylist({
           setPlaylistThemeColor(ev.target.value, sessionId)
         }
       />
+      {isLaunchpad ? (
+        <input
+          ref={padColorInputRef}
+          type="color"
+          className="floating-playlist-color-input"
+          aria-hidden
+          tabIndex={-1}
+          value={
+            padColorPickIndex != null && launchPadCells
+              ? normalizePlaylistThemeColor(
+                  launchPadCells[padColorPickIndex]?.padColor ?? '',
+                ) || PLAYLIST_THEME_COLOR_INPUT_DEFAULT
+              : PLAYLIST_THEME_COLOR_INPUT_DEFAULT
+          }
+          onChange={(ev) => {
+            if (padColorPickIndex == null) return
+            void updateLaunchPadCell(sessionId, padColorPickIndex, {
+              padColor: ev.target.value,
+            })
+          }}
+          onBlur={() => setPadColorPickIndex(null)}
+        />
+      ) : null}
       <div className="floating-playlist-top">
         <div className="floating-playlist-title-strip">
           <input
@@ -1033,7 +1169,7 @@ export default function FloatingPlaylist({
             onChange={(ev) => setPlaylistTitle(ev.target.value, sessionId)}
             onKeyDown={onTitleKeyDown}
             onBlur={(e) => void commitFloatingPlaylistTitle(e.currentTarget.value)}
-            placeholder="Nuova Playlist"
+            placeholder={isLaunchpad ? 'Launchpad' : 'Nuova Playlist'}
             aria-label="Nome della playlist"
             maxLength={120}
             spellCheck={false}
@@ -1042,24 +1178,28 @@ export default function FloatingPlaylist({
         <div className="floating-playlist-toolbar">
           <div className="floating-playlist-actions">
           <div className="floating-playlist-actions-main">
-            <button
-              type="button"
-              className="btn-icon floating-playlist-icon-btn"
-              onClick={() => void openFolder(sessionId)}
-              title="Apri cartella"
-              aria-label="Apri cartella"
-            >
-              <IconFolder />
-            </button>
-            <button
-              type="button"
-              className="btn-icon floating-playlist-icon-btn"
-              onClick={() => void addMediaToPlaylist(sessionId)}
-              title="Aggiungi file alla playlist"
-              aria-label="Aggiungi file alla playlist"
-            >
-              <IconAddFiles />
-            </button>
+            {!isLaunchpad ? (
+              <>
+                <button
+                  type="button"
+                  className="btn-icon floating-playlist-icon-btn"
+                  onClick={() => void openFolder(sessionId)}
+                  title="Apri cartella"
+                  aria-label="Apri cartella"
+                >
+                  <IconFolder />
+                </button>
+                <button
+                  type="button"
+                  className="btn-icon floating-playlist-icon-btn"
+                  onClick={() => void addMediaToPlaylist(sessionId)}
+                  title="Aggiungi file alla playlist"
+                  aria-label="Aggiungi file alla playlist"
+                >
+                  <IconAddFiles />
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               className="btn-icon floating-playlist-icon-btn"
@@ -1068,6 +1208,15 @@ export default function FloatingPlaylist({
               aria-label="Nuovo pannello playlist"
             >
               <IconNewPlaylistPanel />
+            </button>
+            <button
+              type="button"
+              className="btn-icon floating-playlist-icon-btn"
+              onClick={() => addFloatingLaunchPad()}
+              title="Nuovo pannello Launchpad 4×4"
+              aria-label="Nuovo pannello Launchpad"
+            >
+              <IconLaunchPadGrid />
             </button>
             <button
               type="button"
@@ -1195,9 +1344,71 @@ export default function FloatingPlaylist({
           <span className="floating-playlist-crossfade-hint">
             Solo tra video/video o immagine/immagine
           </span>
+          {isLaunchpad ? (
+            <span className="floating-playlist-launchpad-toolbar-hint">
+              Griglia 4×4: clic riproduce · Maiusc+clic assegna file · Alt+clic
+              colore pad
+            </span>
+          ) : null}
         </div>
       )}
-      {!collapsed && (
+      {!collapsed && isLaunchpad && launchPadCells ? (
+        <div
+          className="floating-playlist-launchpad"
+          role="group"
+          aria-label="Launchpad 4 per 4"
+        >
+          <div className="floating-playlist-launchpad-grid">
+            {launchPadCells.slice(0, LAUNCHPAD_CELL_COUNT).map((cell, i) => {
+              const name = cell.samplePath
+                ? cell.samplePath.split(/[/\\]/).pop() ?? cell.samplePath
+                : ''
+              const isLoaded =
+                playbackLoadedTrack != null &&
+                playbackLoadedTrack.sessionId === sessionId &&
+                playbackLoadedTrack.index === i
+              return (
+                <div key={`${sessionId}-pad-${i}`} className="launchpad-cell-wrap">
+                  <button
+                    type="button"
+                    className={`launchpad-cell ${padFlashSlot === i ? 'is-lit' : ''} ${isLoaded ? 'is-loaded' : ''} ${cell.samplePath ? 'has-sample' : 'is-empty'}`}
+                    style={
+                      {
+                        ['--launchpad-pad' as string]: cell.padColor,
+                      } as CSSProperties
+                    }
+                    onClick={(ev) => onLaunchPadCellClick(i, ev)}
+                    title={`Slot ${i + 1}: ${cell.samplePath ? name : 'vuoto'} — clic play, Maiusc+clic file, Alt+clic colore`}
+                  >
+                    <span className="launchpad-cell-glow" aria-hidden />
+                    <span className="launchpad-cell-index">{i + 1}</span>
+                    <span className="launchpad-cell-label">
+                      {cell.samplePath ? name : '—'}
+                    </span>
+                  </button>
+                  {cell.samplePath ? (
+                    <button
+                      type="button"
+                      className="launchpad-cell-clear"
+                      title="Rimuovi sample"
+                      aria-label={`Rimuovi sample dallo slot ${i + 1}`}
+                      onClick={(ev) => {
+                        ev.stopPropagation()
+                        void updateLaunchPadCell(sessionId, i, {
+                          samplePath: null,
+                        })
+                      }}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ) : null}
+      {!collapsed && !isLaunchpad && (
         <ul
           ref={listRef}
           className={`floating-playlist-list ${draggingIndex != null ? 'is-reordering' : ''}`}
