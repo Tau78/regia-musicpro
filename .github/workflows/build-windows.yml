@@ -18,9 +18,13 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # `npm ci` fallisce con questo lockfile (peer/opzionali @emnapi su toolchain diverse).
+      # `npm install` in CI è ok qui; Bash + set -e evita di proseguire se l'install fallisce.
       - name: Install and build installer
+        shell: bash
         run: |
-          npm ci
+          set -euo pipefail
+          npm install --no-audit --no-fund
           npm run dist:win
 
       - name: Upload installer
