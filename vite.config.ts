@@ -7,6 +7,8 @@ const pkgPath = path.resolve(__dirname, 'package.json')
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
   version?: string
   regiaProgramCreatedOn?: string
+  author?: string
+  description?: string
 }
 
 /** Scrive l'URL reale del dev server così Electron non dipende da una porta fissa (es. 5173 già in uso). */
@@ -47,6 +49,12 @@ export default defineConfig({
       typeof pkg.regiaProgramCreatedOn === 'string'
         ? pkg.regiaProgramCreatedOn
         : '',
+    ),
+    __REGIA_APP_AUTHOR__: JSON.stringify(
+      typeof pkg.author === 'string' ? pkg.author : '',
+    ),
+    __REGIA_APP_DESCRIPTION__: JSON.stringify(
+      typeof pkg.description === 'string' ? pkg.description : '',
     ),
   },
   base: './',

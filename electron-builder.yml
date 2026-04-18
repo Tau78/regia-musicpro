@@ -4,6 +4,9 @@
 appId: com.regiavideo.musicpro
 productName: REGIA MUSICPRO
 
+# Icona app (PNG 512×512 o superiore; electron-builder genera .ico per Windows).
+icon: build/icon.png
+
 directories:
   output: release
   buildResources: build

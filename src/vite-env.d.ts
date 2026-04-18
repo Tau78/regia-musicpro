@@ -2,3 +2,5 @@
 
 declare const __REGIA_APP_VERSION__: string
 declare const __REGIA_APP_CREATED__: string
+declare const __REGIA_APP_AUTHOR__: string
+declare const __REGIA_APP_DESCRIPTION__: string

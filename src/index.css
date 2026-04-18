@@ -76,27 +76,60 @@ button {
   gap: 0.65rem;
 }
 
-.regia-brand h1 {
+.regia-brand-logo-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.regia-brand-logo-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 85%, white);
+  outline-offset: 2px;
+}
+
+.regia-brand-logo-btn:hover .regia-brand-logo {
+  opacity: 0.9;
+}
+
+.regia-brand-logo {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.regia-brand-title {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.12rem;
   font-size: 1.15rem;
   font-weight: 600;
   letter-spacing: 0.02em;
+  line-height: 1.15;
   min-width: 0;
+}
+
+.regia-brand-name {
+  font-weight: 600;
 }
 
 .regia-brand-meta {
   font-weight: 500;
-  font-size: 0.88em;
+  font-size: 0.6em;
   color: var(--muted);
   letter-spacing: 0.01em;
-}
-
-.regia-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 16px rgba(61, 139, 253, 0.55);
+  line-height: 1.2;
 }
 
 .regia-header-right {
@@ -154,6 +187,24 @@ button {
 
 .settings-modal.floating-close-play-confirm-dialog {
   max-height: none;
+}
+
+.app-about-modal {
+  max-height: none;
+}
+
+.app-about-modal-product {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.app-about-modal-credits-line {
+  margin-bottom: 0.35rem;
+}
+
+.app-about-modal-description {
+  white-space: pre-wrap;
 }
 
 .floating-close-play-confirm-actions {
@@ -995,7 +1046,7 @@ button {
 .saved-playlists-new-row.regia-sidebar-new-pair-row {
   flex-direction: row;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 0.4rem;
 }
 
@@ -1003,7 +1054,7 @@ button {
 .saved-playlists-new-row.regia-sidebar-workspace-new-row {
   flex-direction: row;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 0.45rem;
 }
 

@@ -16,6 +16,7 @@ function readInitialTab(): MainTab {
   return readSidebarMainTabFromLs()
 }
 
+/** Finestra divisa in quattro (layout plancia / workspace). */
 function IconNewWorkspace() {
   return (
     <svg
@@ -27,28 +28,31 @@ function IconNewWorkspace() {
     >
       <rect
         x="3"
-        y="5"
+        y="4"
         width="14"
-        height="12"
+        height="15"
         rx={2}
         fill="none"
         stroke="currentColor"
         strokeWidth={2}
       />
-      <path
-        fill="none"
+      <line
+        x1="10"
+        y1="4.5"
+        x2="10"
+        y2="18.5"
         stroke="currentColor"
-        strokeWidth={2}
+        strokeWidth={1.75}
         strokeLinecap="round"
-        d="M17 7h4M19 5v4"
       />
-      <path
-        fill="none"
+      <line
+        x1="3.5"
+        y1="11"
+        x2="16.5"
+        y2="11"
         stroke="currentColor"
-        strokeWidth={2}
+        strokeWidth={1.75}
         strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M7 10h6M7 14h4"
       />
     </svg>
   )
@@ -116,6 +120,7 @@ function IconSidebarLaunchpadColors() {
   )
 }
 
+/** Griglia launchpad + badge “pronto” (kit precaricato da cartella). */
 function IconSidebarLaunchpadSfx() {
   return (
     <svg
@@ -125,20 +130,18 @@ function IconSidebarLaunchpadSfx() {
       height={16}
       aria-hidden="true"
     >
+      <rect x="2" y="2" width="6.75" height="6.75" rx="1.4" fill="#e8435c" />
+      <rect x="9.5" y="2" width="6.75" height="6.75" rx="1.4" fill="#27ae60" />
+      <rect x="2" y="9.5" width="6.75" height="6.75" rx="1.4" fill="#2980ef" />
+      <rect x="9.5" y="9.5" width="6.75" height="6.75" rx="1.4" fill="#f39c12" />
+      <circle cx="17.8" cy="17.8" r="3.6" fill="#22c55e" />
       <path
         fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
+        stroke="#ecfdf5"
+        strokeWidth="1.25"
         strokeLinecap="round"
         strokeLinejoin="round"
-        d="M3 9v6M3 12h2.5l4 2.5V7.5L5.5 12H3z"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        d="M13 8.5c1.2.8 1.2 5.4 0 6.3M15 6.5c2 1.5 2 9 0 10.5"
+        d="M16.1 17.9l0.85 0.85 2.35-2.7"
       />
     </svg>
   )
@@ -241,8 +244,8 @@ export default function SidebarTabsPanel() {
                 type="button"
                 className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-playlist"
                 onClick={onNewPlaylistPanel}
-                title="Apri un nuovo pannello playlist (elenco brani)"
-                aria-label="Nuova playlist"
+                title="Nuova PlayList Vuota"
+                aria-label="Nuova playlist vuota"
               >
                 <IconSidebarBulletedList />
               </button>
@@ -250,8 +253,8 @@ export default function SidebarTabsPanel() {
                 type="button"
                 className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad"
                 onClick={onNewLaunchPad}
-                title="Nuovo Launchpad — kit predefinito (reazioni / SFX, cartella launchpad-base)"
-                aria-label="Nuovo Launchpad kit predefinito"
+                title="Nuovo LaunchPad Vuoto"
+                aria-label="Nuovo launchpad vuoto"
               >
                 <IconSidebarLaunchpadColors />
               </button>
@@ -259,8 +262,8 @@ export default function SidebarTabsPanel() {
                 type="button"
                 className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad-sfx"
                 onClick={onNewLaunchPadSfx}
-                title="Nuovo Launchpad — kit reazioni / SFX (cartella launchpad-sfx)"
-                aria-label="Nuovo Launchpad SFX"
+                title="Nuovo LaunchPad Preset"
+                aria-label="Nuovo launchpad preset"
               >
                 <IconSidebarLaunchpadSfx />
               </button>

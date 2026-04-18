@@ -567,7 +567,25 @@ function regiaMainWindowTitle(): string {
   return parts.join(' ')
 }
 
+/** Icona finestra: `dist` dopo build, `public` in dev, `build` per pacchetto. */
+function resolveRegiaIconPath(): string | undefined {
+  const candidates = [
+    path.join(__dirname, '..', 'dist', 'app-icon.png'),
+    path.join(__dirname, '..', 'public', 'app-icon.png'),
+    path.join(__dirname, '..', 'build', 'icon.png'),
+  ]
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p
+    } catch {
+      /* ignore */
+    }
+  }
+  return undefined
+}
+
 function createRegiaWindow(): BrowserWindow {
+  const iconPath = resolveRegiaIconPath()
   const w = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -575,6 +593,7 @@ function createRegiaWindow(): BrowserWindow {
     minHeight: 640,
     title: regiaMainWindowTitle(),
     backgroundColor: '#0c0d10',
+    ...(iconPath ? { icon: iconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -902,6 +921,7 @@ function setupIpc() {
       ) {
         return { ok: false as const }
       }
+      const floaterIcon = resolveRegiaIconPath()
       const w = new BrowserWindow({
         x: Math.round(x),
         y: Math.round(y),
@@ -910,6 +930,7 @@ function setupIpc() {
         frame: false,
         show: false,
         backgroundColor: '#13151a',
+        ...(floaterIcon ? { icon: floaterIcon } : {}),
         webPreferences: {
           preload: path.join(__dirname, 'preload.cjs'),
           contextIsolation: true,

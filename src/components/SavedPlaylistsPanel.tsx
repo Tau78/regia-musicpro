@@ -191,7 +191,7 @@ function IconLaunchPadGrid() {
   )
 }
 
-/** Megafono / onda per kit reazioni SFX. */
+/** Griglia launchpad + badge “pronto” (kit precaricato). */
 function IconLaunchPadSfx() {
   return (
     <svg
@@ -201,20 +201,18 @@ function IconLaunchPadSfx() {
       height={18}
       aria-hidden="true"
     >
+      <rect x="2" y="2" width="6.75" height="6.75" rx="1.4" fill="#e8435c" />
+      <rect x="9.5" y="2" width="6.75" height="6.75" rx="1.4" fill="#27ae60" />
+      <rect x="2" y="9.5" width="6.75" height="6.75" rx="1.4" fill="#2980ef" />
+      <rect x="9.5" y="9.5" width="6.75" height="6.75" rx="1.4" fill="#f39c12" />
+      <circle cx="17.8" cy="17.8" r="3.6" fill="#22c55e" />
       <path
         fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
+        stroke="#ecfdf5"
+        strokeWidth="1.25"
         strokeLinecap="round"
         strokeLinejoin="round"
-        d="M4 10v4M4 12h3l5 3V7L7 12H4z"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        d="M16 9c1.5 1 1.5 5 0 6M18 7c2.5 2 2.5 8 0 10"
+        d="M16.1 17.9l0.85 0.85 2.35-2.7"
       />
     </svg>
   )
@@ -372,8 +370,8 @@ export default function SavedPlaylistsPanel({
               addFloatingPlaylist()
               openFloatingPlaylist()
             }}
-            title="Nuovo pannello playlist (elenco brani)"
-            aria-label="Nuovo pannello playlist"
+            title="Nuova PlayList Vuota"
+            aria-label="Nuova playlist vuota"
           >
             <IconNewPlaylistPanel />
           </button>
@@ -386,8 +384,8 @@ export default function SavedPlaylistsPanel({
                 openFloatingPlaylist()
               })()
             }}
-            title="Nuovo Launchpad 4×4 — kit predefinito reazioni/SFX (se generato in app)"
-            aria-label="Nuovo pannello Launchpad kit predefinito"
+            title="Nuovo LaunchPad Vuoto"
+            aria-label="Nuovo launchpad vuoto"
           >
             <IconLaunchPadGrid />
           </button>
@@ -400,8 +398,8 @@ export default function SavedPlaylistsPanel({
                 openFloatingPlaylist()
               })()
             }}
-            title="Nuovo Launchpad 4×4 — kit reazioni / SFX (applauso, risate, … se generato)"
-            aria-label="Nuovo pannello Launchpad SFX"
+            title="Nuovo LaunchPad Preset"
+            aria-label="Nuovo launchpad preset"
           >
             <IconLaunchPadSfx />
           </button>

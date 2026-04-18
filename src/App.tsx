@@ -13,6 +13,7 @@ import PreviewBlock from './components/PreviewBlock.tsx'
 import PlanciaWorkspaceBanner from './components/PlanciaWorkspaceBanner.tsx'
 import SidebarTabsPanel from './components/SidebarTabsPanel.tsx'
 import DraggableAudioOutputBar from './components/DraggableAudioOutputBar.tsx'
+import AppAboutModal from './components/AppAboutModal.tsx'
 import SettingsModal, { IconSettingsGear } from './components/SettingsModal.tsx'
 import { clampSidebarWidth } from './lib/sidebarLayout.ts'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
@@ -46,6 +47,7 @@ function RegiaShell() {
     startW: number
   } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [aboutOpen, setAboutOpen] = useState(false)
 
   useEffect(() => {
     const onWin = () => {
@@ -131,11 +133,29 @@ function RegiaShell() {
     <div className="regia-app">
       <header className="regia-header">
         <div className="regia-brand">
-          <span className="regia-dot" aria-hidden />
-          <h1>
+          <button
+            type="button"
+            className="regia-brand-logo-btn"
+            onClick={() => setAboutOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={aboutOpen}
+            aria-controls="app-about-modal"
+            title="Informazioni, versione e crediti"
+            aria-label="Apri informazioni su REGIA MUSICPRO"
+          >
+            <img
+              className="regia-brand-logo"
+              src={`${import.meta.env.BASE_URL}app-icon.png`}
+              alt=""
+              width={28}
+              height={28}
+              decoding="async"
+              draggable={false}
+            />
+          </button>
+          <h1 className="regia-brand-title">
             <span className="regia-brand-name">REGIA MUSICPRO</span>
             <span className="regia-brand-meta" aria-label="Versione e data">
-              {' '}
               v{__REGIA_APP_VERSION__}
               {__REGIA_APP_CREATED__
                 ? ` · ${formatRegiaProgramCreatedIt(__REGIA_APP_CREATED__)}`
@@ -163,6 +183,8 @@ function RegiaShell() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
       />
+
+      <AppAboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
 
       <main
         className={`regia-main ${sidebarOpen ? 'is-sidebar-open' : 'is-sidebar-collapsed'}`}
