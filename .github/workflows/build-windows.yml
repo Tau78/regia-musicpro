@@ -9,7 +9,9 @@ jobs:
   dist-win:
     runs-on: windows-latest
     permissions:
-      contents: read
+      # `contents: write` serve a electron-builder per creare/aggiornare la Release e caricare
+      # installer + `latest.yml` (feed usato da electron-updater sulle installazioni già presenti).
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -20,12 +22,14 @@ jobs:
 
       # `npm ci` fallisce con questo lockfile (peer/opzionali @emnapi su toolchain diverse).
       # `npm install` in CI è ok qui; Bash + set -e evita di proseguire se l'install fallisce.
-      - name: Install and build installer
+      - name: Install, build installer, publish to GitHub Release
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           npm install --no-audit --no-fund
-          npm run dist:win
+          npm run dist:win:publish
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
@@ -33,73 +37,3 @@ jobs:
           name: windows-installer
           path: release/*.exe
           if-no-files-found: error
-
-      # Opzionale: Google Drive (account di servizio + rclone).
-      # Obbligatori: GDRIVE_SA_JSON_B64, GDRIVE_FOLDER_ID, GDRIVE_TEAM_DRIVE_ID
-      # Google non dà quota "Il mio Drive" agli account di servizio: serve cartella in un
-      # Drive condiviso (Workspace) + ID dello shared drive. La cartella va condivisa col client_email del SA.
-      # Non fa fallire la build se Drive fallisce: l’installer è già in Artifact sopra.
-      - name: Copia installer su Google Drive (se configurato)
-        continue-on-error: true
-        shell: bash
-        env:
-          GDRIVE_SA_JSON_B64: ${{ secrets.GDRIVE_SA_JSON_B64 }}
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-          GDRIVE_TEAM_DRIVE_ID: ${{ secrets.GDRIVE_TEAM_DRIVE_ID }}
-        run: |
-          set -euo pipefail
-          echo "=== Drive: inizio step ==="
-          if [ -z "${GDRIVE_SA_JSON_B64:-}" ] || [ -z "${GDRIVE_FOLDER_ID:-}" ]; then
-            echo ">>> BLOCCO: uno o entrambi i segreti sono vuoti in questo run."
-            echo "    Controlla: Repo → Settings → Secrets → Actions (nomi esatti: GDRIVE_SA_JSON_B64, GDRIVE_FOLDER_ID)."
-            echo "    I segreti di un *Environment* non si usano se il job non ha 'environment:'."
-            echo ">>> Salto upload (exit 0)."
-            exit 0
-          fi
-          if [ -z "${GDRIVE_TEAM_DRIVE_ID:-}" ]; then
-            echo ">>> Salto Drive: manca il segreto GDRIVE_TEAM_DRIVE_ID (serve Shared Drive / Workspace)."
-            echo "    L'installer è comunque disponibile nello step \"Upload installer\" → Artifacts → windows-installer."
-            exit 0
-          fi
-          export GDRIVE_FOLDER_ID="$(python3 -c "import os,re; r=os.environ['GDRIVE_FOLDER_ID'].strip(); m=re.search(r'/folders/([a-zA-Z0-9_-]+)', r); r=m.group(1) if m else r; m=re.search(r'[?&]id=([a-zA-Z0-9_-]+)', r); print(m.group(1) if m else r)")"
-          export GDRIVE_TEAM_DRIVE_ID="$(python3 -c "import os,re; r=os.environ['GDRIVE_TEAM_DRIVE_ID'].strip(); m=re.search(r'/folders/([a-zA-Z0-9_-]+)', r); print(m.group(1) if m else r)")"
-          echo ">>> Segreti: B64 len=${#GDRIVE_SA_JSON_B64}, FOLDER_ID len=${#GDRIVE_FOLDER_ID}, TEAM_DRIVE len=${#GDRIVE_TEAM_DRIVE_ID}"
-          echo "=== Drive: file in release/ prima della copia ==="
-          ls -la "${GITHUB_WORKSPACE}/release/" || { echo ">>> ERRORE: cartella release/ assente"; exit 1; }
-          SA_LOCAL="${GITHUB_WORKSPACE}/.gdrive-sa.json"
-          echo "=== Drive: decodifica JSON account di servizio ==="
-          python3 -c "import base64,os,pathlib; pathlib.Path(os.environ['GITHUB_WORKSPACE'],'.gdrive-sa.json').write_bytes(base64.b64decode(os.environ['GDRIVE_SA_JSON_B64'].strip()))"
-          echo ">>> File SA scritto, dimensione=$(wc -c < "${SA_LOCAL}" | tr -d ' ') byte"
-          python3 -c "import json,pathlib,os; p=pathlib.Path(os.environ['GITHUB_WORKSPACE'])/'.gdrive-sa.json'; j=json.loads(p.read_text()); print('>>> Condividi la cartella Drive con questa email (Editor):', j.get('client_email','(manca client_email)'))"
-          SA_WIN=$(python3 -c "import pathlib,os; print(str(pathlib.Path(os.environ['GITHUB_WORKSPACE']) / '.gdrive-sa.json'))")
-          echo "=== Drive: scarico rclone (Windows) ==="
-          cd "${RUNNER_TEMP}"
-          curl -fsSL -o rclone.zip "https://downloads.rclone.org/rclone-current-windows-amd64.zip"
-          unzip -qo rclone.zip
-          RCLONE_DIR=$(echo rclone-*-windows-amd64 | head -1)
-          if [ -z "${RCLONE_DIR}" ] || [ ! -d "${RUNNER_TEMP}/${RCLONE_DIR}" ]; then
-            echo ">>> ERRORE: cartella rclone-*-windows-amd64 non trovata dopo unzip"; ls -la; exit 1
-          fi
-          echo ">>> rclone dir: ${RCLONE_DIR}"
-          export PATH="${RUNNER_TEMP}/${RCLONE_DIR}:${PATH}"
-          rclone version
-          export RCLONE_CONFIG_GD_TYPE=drive
-          export RCLONE_CONFIG_GD_SCOPE=drive
-          export RCLONE_CONFIG_GD_SERVICE_ACCOUNT_FILE="${SA_WIN}"
-          export RCLONE_CONFIG_GD_ROOT_FOLDER_ID="${GDRIVE_FOLDER_ID}"
-          export RCLONE_CONFIG_GD_TEAM_DRIVE="${GDRIVE_TEAM_DRIVE_ID}"
-          echo ">>> rclone: team_drive + root_folder_id (cartella nello shared drive)"
-          echo "=== Drive: test lettura remoto (lista file in cartella) ==="
-          rclone ls "gd:" -v --max-depth 1 || {
-            echo ">>> ERRORE 404 / lista vuota: Google non trova la cartella per questo account di servizio."
-            echo "    1) In Drive: tasto destro sulla CARTELLA (non sul file) → Condividi → incolla l'email sopra → Editor."
-            echo "    2) Il segreto GDRIVE_FOLDER_ID deve essere l'ID (da URL .../folders/ID) della STESSA cartella."
-            echo "    3) Verifica GDRIVE_TEAM_DRIVE_ID (shared drive) e che la cartella sia dentro quel drive."
-            exit 1
-          }
-          echo "=== Drive: copia solo installer NSIS (*-Setup-*.exe), senza win-unpacked/ ==="
-          rclone copy "${GITHUB_WORKSPACE}/release/" "gd:" --include "*-Setup-*.exe" --max-depth 1 -v
-          echo "=== Drive: elenco dopo copia ==="
-          rclone ls "gd:" -v --max-depth 1
-          rm -f "${SA_LOCAL}"
-          echo "=== Drive: fine step OK ==="

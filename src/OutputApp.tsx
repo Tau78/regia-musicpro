@@ -11,6 +11,21 @@ import { isStillImagePath } from './mediaPaths.ts'
 const CROSSFADE_MS = 480
 const DEFAULT_STILL_IMAGE_DURATION_MS = 8000
 
+/** Chromium: dopo `createMediaElementSource` l’audio esce solo dal grafo Web Audio (`destination`), non dal sink del `<video>`. */
+type AudioContextWithSink = AudioContext & {
+  setSinkId?: (sinkId: string) => Promise<void>
+}
+
+function applySinkToAudioContext(
+  ctx: AudioContext | null,
+  sinkId: string,
+): void {
+  if (!ctx) return
+  const set = (ctx as AudioContextWithSink).setSinkId
+  if (typeof set !== 'function') return
+  void set.call(ctx, sinkId).catch(() => {})
+}
+
 type Slot = 0 | 1
 
 function preloadImage(src: string): Promise<void> {
@@ -31,6 +46,8 @@ type MediaSnap = {
 export default function OutputApp() {
   const vRef0 = useRef<HTMLVideoElement>(null)
   const vRef1 = useRef<HTMLVideoElement>(null)
+  /** Contesto usato per meter + `destination`; deve usare lo stesso sink dei video altrimenti l’HDMI/dispositivo scelto resta muto. */
+  const meterAudioContextRef = useRef<AudioContext | null>(null)
 
   const [videoSrc, setVideoSrc] = useState<[string | null, string | null]>([
     null,
@@ -108,7 +125,28 @@ export default function OutputApp() {
 
   useLayoutEffect(() => {
     applyVideoAttrsFromState()
-  }, [applyVideoAttrsFromState, videoSrc])
+    /* Dopo ogni load la regia invia subito `play` via IPC: quel comando può essere
+     * eseguito prima che React abbia committato `videoSrc` / `el.src`, quindi
+     * `fel.play()` fallisce e il video resta fermo (le immagini no: non usano play).
+     * Qui riallineiamo play al commit del media sul front. */
+    if (!transportPlaying) return
+    if (opacityTransition) return
+    if (crossfadeIncomingRef.current != null) return
+    if (stillCrossfadePreparingRef.current) return
+    const vid = videoSrc[front]
+    const img = imageSrc[front]
+    if (!vid || img) return
+    const fel = front === 0 ? vRef0.current : vRef1.current
+    if (!fel) return
+    void fel.play().catch(() => {})
+  }, [
+    applyVideoAttrsFromState,
+    videoSrc,
+    imageSrc,
+    front,
+    transportPlaying,
+    opacityTransition,
+  ])
 
   const pauseBoth = useCallback(() => {
     vRef0.current?.pause()
@@ -429,6 +467,7 @@ export default function OutputApp() {
           sinkIdRef.current = cmd.sinkId
           if (vRef0.current) applySinkToVideo(vRef0.current)
           if (vRef1.current) applySinkToVideo(vRef1.current)
+          applySinkToAudioContext(meterAudioContextRef.current, cmd.sinkId)
           break
         case 'setLoopOne':
           loopRef.current = cmd.loop
@@ -477,6 +516,8 @@ export default function OutputApp() {
       try {
         const c = new AudioContext()
         ctx = c
+        meterAudioContextRef.current = c
+        applySinkToAudioContext(c, sinkIdRef.current)
         merger = c.createGain()
         merger.gain.value = 1
         analyser = c.createAnalyser()
@@ -489,6 +530,7 @@ export default function OutputApp() {
         src1.connect(merger)
       } catch {
         ctx = null
+        meterAudioContextRef.current = null
       }
     }
 
@@ -526,6 +568,7 @@ export default function OutputApp() {
       v1?.removeEventListener('playing', onAnyPlay)
       cancelAnimationFrame(raf)
       raf = 0
+      meterAudioContextRef.current = null
       void ctx?.close()
       ctx = null
     }

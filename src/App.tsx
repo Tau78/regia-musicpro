@@ -13,7 +13,8 @@ import PreviewBlock from './components/PreviewBlock.tsx'
 import PlanciaSnapGuidesOverlay from './components/PlanciaSnapGuidesOverlay.tsx'
 import PlanciaWorkspaceBanner from './components/PlanciaWorkspaceBanner.tsx'
 import SidebarTabsPanel from './components/SidebarTabsPanel.tsx'
-import AudioOutputBar from './components/AudioOutputBar.tsx'
+import DraggableAudioOutputBar from './components/DraggableAudioOutputBar.tsx'
+import HeaderTransportBar from './components/HeaderTransportBar.tsx'
 import SettingsModal, { IconSettingsGear } from './components/SettingsModal.tsx'
 import { clampSidebarWidth } from './lib/sidebarLayout.ts'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
@@ -142,7 +143,8 @@ function RegiaShell() {
         </div>
         <div className="regia-header-right">
           <div className="regia-header-controls">
-            <AudioOutputBar />
+            <HeaderTransportBar />
+            <DraggableAudioOutputBar />
             <button
               type="button"
               className={`btn-toggle ${!secondScreenOn ? 'is-screen-off' : ''}`}
@@ -151,7 +153,7 @@ function RegiaShell() {
               title={
                 secondScreenOn
                   ? 'Uscita attiva sul secondo schermo: clic per nascondere la finestra (monitor libero)'
-                  : 'Uscita nascosta: clic per mostrare la finestra sul secondo schermo (risoluzione in Impostazioni)'
+                  : 'Uscita nascosta sul secondo schermo: l’audio resta sul dispositivo scelto in barra; clic per mostrare la finestra (risoluzione in Impostazioni)'
               }
             >
               Schermo 2: {secondScreenOn ? 'On' : 'Off'}

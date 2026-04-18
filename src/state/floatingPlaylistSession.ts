@@ -115,6 +115,11 @@ export type FloatingPlaylistSession = {
   savedEditThemeColorBaseline: string
   /** Copia slot launchpad all’ultimo «Carica» (solo se collegato a salvataggio launchpad). */
   savedEditLaunchPadBaseline: LaunchPadCell[] | null
+  /**
+   * Se true, la finestra principale Regia resta «sempre in primo piano» rispetto alle altre app
+   * (Electron). Opzionale: assente = off.
+   */
+  windowAlwaysOnTopPinned?: boolean
 }
 
 function newSessionId(): string {
@@ -180,6 +185,7 @@ export function createLaunchPadFloatingSession(
 export function createLaunchPadFloatingSessionWithKit(
   absolutePaths: string[],
   pos?: FloatingPlaylistPos,
+  playlistTitle?: string,
 ): FloatingPlaylistSession {
   const s = createLaunchPadFloatingSession(pos)
   if (!absolutePaths.length) return s
@@ -190,9 +196,13 @@ export function createLaunchPadFloatingSessionWithKit(
   }
   const banks = freshLaunchPadBanks()
   banks[0] = cells.map((c) => ({ ...c }))
+  const title =
+    typeof playlistTitle === 'string' && playlistTitle.trim() !== ''
+      ? playlistTitle.trim()
+      : 'Launchpad base'
   return {
     ...s,
-    playlistTitle: 'Launchpad base',
+    playlistTitle: title,
     launchPadBanks: banks,
     launchPadBankIndex: 0,
     launchPadCells: banks[0]!.map((c) => ({ ...c })),

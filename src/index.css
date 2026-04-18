@@ -402,6 +402,145 @@ button {
   max-width: min(380px, 100%);
 }
 
+.regia-audio-dock-wrap {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+.regia-audio-dock-wrap:not(.is-floating) .regia-audio-dock-inner {
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.regia-audio-dock-wrap.is-floating {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(18, 20, 26, 0.97);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px);
+}
+
+.regia-audio-dock-inner {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.5rem;
+  padding: 0.35rem 0.45rem;
+  min-width: 0;
+}
+
+.regia-audio-dock-grip {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 30px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 0.65rem;
+  line-height: 1;
+  letter-spacing: -0.12em;
+  cursor: grab;
+}
+
+.regia-audio-dock-grip:hover:not(:disabled) {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.regia-audio-dock-grip:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.regia-audio-dock-grip:active:not(:disabled) {
+  cursor: grabbing;
+}
+
+.regia-audio-dock-pin {
+  flex-shrink: 0;
+  padding: 0.28rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.regia-audio-dock-pin:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.regia-audio-out--toolbar {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.55rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  max-width: min(720px, 100%);
+  flex: 1;
+  min-width: 0;
+}
+
+.regia-audio-out-meter--toolbar {
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.regia-audio-out-meter--toolbar .regia-audio-out-meter-seg {
+  width: 3px;
+  height: 5px;
+}
+
+.regia-audio-out-meter--toolbar .regia-audio-out-meter-seg.is-on {
+  height: 14px;
+}
+
+.regia-audio-out-toolbar-main {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.45rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.regia-audio-out-toolbar-lbl {
+  flex-shrink: 0;
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.regia-audio-out-toolbar-slider {
+  width: 88px;
+  min-width: 64px;
+  flex: 0 1 120px;
+}
+
+.regia-audio-out-toolbar-pct {
+  width: 2rem;
+  flex-shrink: 0;
+}
+
+.regia-audio-out-toolbar-select {
+  flex: 1 1 140px;
+  min-width: 120px;
+  max-width: 280px;
+}
+
 .regia-audio-out-meter {
   display: flex;
   flex-direction: row;
@@ -696,12 +835,12 @@ button {
   gap: 0.4rem;
 }
 
-/** Due pulsanti solo icona (playlist / launchpad): quadrati compatti, ~metà del blocco precedente. */
+/** Due o tre pulsanti solo icona (playlist / launchpad / SFX): quadrati compatti. */
 .saved-playlists-new-row.regia-sidebar-new-pair-row {
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 0.45rem;
+  gap: 0.4rem;
 }
 
 /** Un solo pulsante icona (nuovo workspace), stessa altezza dei due in playlist. */
@@ -929,6 +1068,11 @@ button {
 .saved-playlists-new-launchpad {
   border-color: rgba(168, 85, 247, 0.45);
   color: #e9d5ff;
+}
+
+.saved-playlists-new-launchpad-sfx {
+  border-color: rgba(251, 191, 36, 0.48);
+  color: #fef3c7;
 }
 
 .saved-playlists-head {
@@ -1497,6 +1641,45 @@ button {
   font-size: 0.9rem;
 }
 
+.transport-bar--header {
+  padding: 0.35rem 0.5rem;
+  gap: 0.5rem;
+}
+
+.transport-bar--header .transport-step {
+  width: 32px;
+  height: 32px;
+}
+
+.transport-bar--header .transport-play {
+  width: 36px;
+  height: 36px;
+  font-size: 0.88rem;
+}
+
+.transport-stop {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.transport-stop:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.transport-stop-icon {
+  font-size: 0.55rem;
+  line-height: 1;
+  transform: translateY(0.5px);
+}
+
 .floating-playlist {
   position: fixed;
   z-index: 50;
@@ -1956,7 +2139,26 @@ button {
   user-select: none;
 }
 
-/** Overlay nella plancia (volume + hint): menu slot centrato, non sulla griglia. */
+/**
+ * Avvolge crossfade + griglia Launchpad così l’overlay del menu contestuale ha
+ * altezza reale (flex 1). Non renderizzare quel menu dentro `.floating-playlist-crossfade`:
+ * con overflow:hidden sul pannello, `align-items:center` su un layer `inset:0` alto pochi px
+ * tagliava metà menu (regressione).
+ */
+.floating-playlist-launchpad-stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/** Wrapper neutro: non altera il flex della playlist (solo crossfade + lista sotto). */
+.floating-playlist-panel-body-slot {
+  display: contents;
+}
+
+/** Overlay: copre crossfade + griglia; il menu resta nel riquadro visibile del pannello. */
 .launchpad-ctx-menu-plancia-layer {
   position: absolute;
   inset: 0;
@@ -1965,6 +2167,8 @@ button {
   align-items: center;
   justify-content: center;
   padding: 0.35rem;
+  box-sizing: border-box;
+  min-height: 0;
   background: rgba(0, 0, 0, 0.24);
   backdrop-filter: blur(2px);
   cursor: default;
@@ -2030,6 +2234,10 @@ button {
   background: transparent;
   box-shadow: none;
   border: none;
+}
+
+.floating-playlist-window-pin.floating-playlist-icon-btn.is-active {
+  color: var(--accent);
 }
 
 .floating-playlist-crossfade-hint-tooltip {
@@ -2129,7 +2337,11 @@ button {
 }
 
 .launchpad-ctx-menu {
+  box-sizing: border-box;
   width: 13.5rem;
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 0.55rem 0.65rem 0.6rem;
   border-radius: 10px;
   background: var(--bg-elevated);

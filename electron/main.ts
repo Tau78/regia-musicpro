@@ -5,6 +5,7 @@ import {
   dialog,
   screen,
 } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
@@ -587,7 +588,8 @@ function setOutputPresentationVisible(visible: boolean): void {
     outputWindow.show()
     outputWindow.setFullScreen(false)
   } else {
-    forwardToOutput({ type: 'pause' })
+    /* Non inviare pause: la regia comanda play/pause; con finestra nascosta
+     * l’audio deve poter continuare (anteprima attiva, Schermo 2 off). */
     outputWindow.setFullScreen(false)
     outputWindow.hide()
   }
@@ -597,10 +599,10 @@ function pathToMediaUrl(absPath: string): string {
   return pathToFileURL(absPath).href
 }
 
-/** Sample integrati per «Launchpad base»: dev `public/`, produzione `dist/` dopo vite build. */
-function resolveLaunchpadBaseKitDir(): string | null {
-  const fromPublic = path.join(__dirname, '..', 'public', 'launchpad-base')
-  const fromDist = path.join(__dirname, '..', 'dist', 'launchpad-base')
+/** Cartelle kit integrati: dev `public/`, produzione `dist/` dopo vite build. */
+function resolveLaunchpadKitDir(subdir: string): string | null {
+  const fromPublic = path.join(__dirname, '..', 'public', subdir)
+  const fromDist = path.join(__dirname, '..', 'dist', subdir)
   try {
     if (fs.existsSync(fromPublic) && fs.statSync(fromPublic).isDirectory()) {
       return fromPublic
@@ -614,8 +616,8 @@ function resolveLaunchpadBaseKitDir(): string | null {
   return null
 }
 
-function listLaunchpadBaseKitPaths(): string[] {
-  const dir = resolveLaunchpadBaseKitDir()
+function listLaunchpadKitPaths(subdir: string): string[] {
+  const dir = resolveLaunchpadKitDir(subdir)
   if (!dir) return []
   let names: string[]
   try {
@@ -631,7 +633,12 @@ function listLaunchpadBaseKitPaths(): string[] {
 }
 
 function setupIpc() {
-  ipcMain.handle('launchpad-base:kitPaths', () => listLaunchpadBaseKitPaths())
+  ipcMain.handle('launchpad-base:kitPaths', () =>
+    listLaunchpadKitPaths('launchpad-base'),
+  )
+  ipcMain.handle('launchpad-sfx:kitPaths', () =>
+    listLaunchpadKitPaths('launchpad-sfx'),
+  )
 
   ipcMain.handle('util:toFileUrl', (_e, absPath: string) => {
     return pathToMediaUrl(absPath)
@@ -799,12 +806,62 @@ function setupIpc() {
       return { ok }
     },
   )
+
+  ipcMain.handle('regia:setWindowAlwaysOnTop', (_e, on: unknown) => {
+    if (!regiaWindow || regiaWindow.isDestroyed()) return
+    const flag = Boolean(on)
+    if (process.platform === 'darwin') {
+      regiaWindow.setAlwaysOnTop(flag, 'floating')
+    } else {
+      regiaWindow.setAlwaysOnTop(flag)
+    }
+  })
+}
+
+/** Aggiornamenti da GitHub Releases (config `publish` in electron-builder.yml). */
+function setupAutoUpdater(): void {
+  if (isDev) return
+
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = false
+
+  autoUpdater.on('error', (err) => {
+    console.error('[autoUpdater]', err)
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    const opts = {
+      type: 'info' as const,
+      title: 'Aggiornamento',
+      message: `È disponibile la versione ${info.version}.`,
+      detail:
+        "L'applicazione si riavvierà per installare l'aggiornamento.",
+      buttons: ['Riavvia ora'],
+      defaultId: 0,
+    }
+    const owner =
+      regiaWindow && !regiaWindow.isDestroyed()
+        ? regiaWindow
+        : BrowserWindow.getFocusedWindow()
+    const finished =
+      owner && !owner.isDestroyed()
+        ? dialog.showMessageBox(owner, opts)
+        : dialog.showMessageBox(opts)
+    void finished.then(() => {
+      setImmediate(() => {
+        autoUpdater.quitAndInstall(false, true)
+      })
+    })
+  })
+
+  void autoUpdater.checkForUpdates()
 }
 
 app.whenReady().then(() => {
   setupIpc()
   outputWindow = createOutputWindow()
   regiaWindow = createRegiaWindow()
+  setupAutoUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

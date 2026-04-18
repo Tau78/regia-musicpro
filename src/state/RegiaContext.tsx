@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from 'react'
 import { isMediaFilePath } from '../lib/isMediaFilePath.ts'
+import { isStillImagePath } from '../mediaPaths.ts'
 import { normalizePersistedPadKeyCode } from '../lib/launchPadKeyboard.ts'
 import {
   readLaunchPadCueEnabled,
@@ -171,6 +172,8 @@ export type RegiaContextValue = {
   /** Cambia pagina pad (0…`LAUNCHPAD_BANK_COUNT`-1) per il launchpad indicato. */
   setLaunchPadBankIndex: (sessionId: string, bankIndex: number) => void
   togglePlay: () => Promise<void>
+  /** Pausa video in uscita e ferma il sample Launchpad (stato riproduzione off). */
+  stopPlayback: () => Promise<void>
   setLoopMode: (m: LoopMode) => void
   setMuted: (m: boolean) => void
   toggleSecondScreen: () => void
@@ -224,8 +227,11 @@ export type RegiaContextValue = {
   floatingZOrder: string[]
   bringFloatingPanelToFront: (key: string) => void
   addFloatingPlaylist: () => void
-  /** Apre un Launchpad 4×4; se esiste il kit in `public/launchpad-base`, lo riempie di sample. */
-  addFloatingLaunchPad: () => Promise<void>
+  /**
+   * Apre un Launchpad 4×4; con `base` usa `public/launchpad-base`, con `sfx`
+   * `public/launchpad-sfx` (se le cartelle ci sono dopo build / gen script).
+   */
+  addFloatingLaunchPad: (kit?: 'base' | 'sfx') => Promise<void>
   removeFloatingPlaylist: (id: string) => Promise<void>
   /** True se chiudere il pannello interromperebbe video o sample launchpad in play. */
   floatingCloseWouldInterruptPlay: (sessionId: string) => boolean
@@ -241,6 +247,7 @@ export type RegiaContextValue = {
       panelSize?: FloatingPlaylistPanelSize
       playlistOutputMuted?: boolean
       playlistOutputVolume?: number
+      windowAlwaysOnTopPinned?: boolean
     },
   ) => void
   /** Dispone i pannelli flottanti a cascata dentro l’area plancia (anti fuori schermo). */
@@ -543,6 +550,9 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
       : {}),
     savedEditThemeColorBaseline,
     savedEditLaunchPadBaseline,
+    ...(r.windowAlwaysOnTopPinned === true
+      ? { windowAlwaysOnTopPinned: true as const }
+      : {}),
   }
 }
 
@@ -1111,6 +1121,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const loopModeRef = useRef(loopMode)
   const loadedIndexRef = useRef<number | null>(null)
   const secondScreenOnRef = useRef(secondScreenOn)
+  const secondScreenToggleSyncSkipFirstRef = useRef(false)
+  const secondScreenToggleGenRef = useRef(0)
   const outputVolumeRef = useRef(outputVolume)
   const outputSinkIdRef = useRef(outputSinkId)
   useLayoutEffect(() => {
@@ -1668,6 +1680,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         panelSize?: FloatingPlaylistPanelSize
         playlistOutputMuted?: boolean
         playlistOutputVolume?: number
+        windowAlwaysOnTopPinned?: boolean
       },
     ) => {
       patchFloatingSession(sessionId, patch)
@@ -1709,6 +1722,17 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
+  useEffect(() => {
+    const anyPinned = floatingSessions.some(
+      (s) => s.windowAlwaysOnTopPinned === true,
+    )
+    void window.electronAPI
+      .setRegiaWindowAlwaysOnTop(anyPinned)
+      .catch(() => {
+        /* ignore */
+      })
+  }, [floatingSessions])
+
   const setActiveFloatingSession = useCallback(
     (id: string) => {
       setActiveFloatingSessionId(id)
@@ -1730,14 +1754,19 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     })
   }, [recordUndoPoint])
 
-  const addFloatingLaunchPad = useCallback(async () => {
+  const addFloatingLaunchPad = useCallback(async (kit: 'base' | 'sfx' = 'base') => {
     recordUndoPoint()
     let kitPaths: string[] = []
     try {
-      kitPaths = await window.electronAPI.launchpadBaseKitPaths()
+      kitPaths =
+        kit === 'sfx'
+          ? await window.electronAPI.launchpadSfxKitPaths()
+          : await window.electronAPI.launchpadBaseKitPaths()
     } catch {
       kitPaths = []
     }
+    const kitTitle =
+      kit === 'sfx' ? 'Launchpad SFX (reazioni)' : 'Launchpad base'
     setFloatingSessions((prev) => {
       const last = prev[prev.length - 1]
       const pos = last
@@ -1745,7 +1774,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         : { x: 24, y: 96 }
       const s =
         kitPaths.length > 0
-          ? createLaunchPadFloatingSessionWithKit(kitPaths, pos)
+          ? createLaunchPadFloatingSessionWithKit(kitPaths, pos, kitTitle)
           : createLaunchPadFloatingSession(pos)
       setActiveFloatingSessionId(s.id)
       return [...prev, s]
@@ -2346,11 +2375,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         volume: outputVolumeRef.current * panelVol,
       })
       await send({ type: 'setSinkId', sinkId: outputSinkIdRef.current })
-      if (secondScreenOnRef.current) {
-        await send({ type: 'play' })
-      } else {
-        await send({ type: 'pause' })
-      }
+      /* Sempre play: finestra uscita può essere nascosta ma deve restare il motore
+       * audio (anteprima muta); Schermo 2 controlla solo la visibilità. */
+      await send({ type: 'play' })
       loadedIndexRef.current = index
       setPlaybackLoadedTrack({ sessionId: sid, index })
       setVideoPlaying(true)
@@ -2796,11 +2823,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           volume: outputVolumeRef.current * panelVol,
         })
         await send({ type: 'setSinkId', sinkId: outputSinkIdRef.current })
-        if (secondScreenOnRef.current) {
-          await send({ type: 'play' })
-        } else {
-          await send({ type: 'pause' })
-        }
+        await send({ type: 'play' })
         setVideoPlaying(true)
         return
       }
@@ -2888,6 +2911,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const stopPlayback = useCallback(async () => {
+    stopLaunchpadSample()
+    setLaunchpadAudioPlaying(false)
+    await send({ type: 'pause' })
+    setVideoPlaying(false)
+  }, [send])
+
   const handleEnded = useCallback(() => {
     const len = pathsRef.current.length
     if (len === 0) return
@@ -2952,10 +2982,34 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     void window.electronAPI.setOutputPresentationVisible(secondScreenOn)
   }, [secondScreenOn])
 
+  /** Ogni accensione/spegnimento Schermo 2: riallinea uscita a tempo e play/pause dell’anteprima. */
   useEffect(() => {
-    if (!secondScreenOn || !videoPlaying) return
-    void send({ type: 'play' })
-  }, [secondScreenOn, videoPlaying, send])
+    if (!secondScreenToggleSyncSkipFirstRef.current) {
+      secondScreenToggleSyncSkipFirstRef.current = true
+      return
+    }
+    const gen = ++secondScreenToggleGenRef.current
+    const src = previewSrcRef.current
+    if (!src) return
+    if (isStillImagePath(src)) {
+      if (!videoPlayingRef.current) void send({ type: 'pause' })
+      return
+    }
+    void (async () => {
+      await new Promise<void>((r) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => r()))
+      })
+      if (gen !== secondScreenToggleGenRef.current) return
+      if (!videoPlayingRef.current) {
+        await send({ type: 'pause' })
+        return
+      }
+      const t = previewMediaTimesRef.current.currentTime
+      await send({ type: 'seek', seconds: t })
+      if (gen !== secondScreenToggleGenRef.current) return
+      await send({ type: 'play' })
+    })()
+  }, [secondScreenOn, send])
 
   useEffect(() => {
     if (!launchpadAudioPlaying || !playbackLoadedTrack) return
@@ -3327,6 +3381,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       updateLaunchPadCell,
       setLaunchPadBankIndex,
       togglePlay,
+      stopPlayback,
       setLoopMode,
       setMuted,
       toggleSecondScreen,
@@ -3425,6 +3480,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       updateLaunchPadCell,
       setLaunchPadBankIndex,
       togglePlay,
+      stopPlayback,
       setLoopMode,
       setMuted,
       setOutputVolume,

@@ -116,6 +116,34 @@ function IconSidebarLaunchpadColors() {
   )
 }
 
+function IconSidebarLaunchpadSfx() {
+  return (
+    <svg
+      className="regia-sidebar-primary-svg"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+    >
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3 9v6M3 12h2.5l4 2.5V7.5L5.5 12H3z"
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        d="M13 8.5c1.2.8 1.2 5.4 0 6.3M15 6.5c2 1.5 2 9 0 10.5"
+      />
+    </svg>
+  )
+}
+
 export default function SidebarTabsPanel() {
   const [tab, setTab] = useState<MainTab>(() => readInitialTab())
   const {
@@ -152,7 +180,12 @@ export default function SidebarTabsPanel() {
   }, [addFloatingPlaylist, openFloatingPlaylist])
 
   const onNewLaunchPad = useCallback(async () => {
-    await addFloatingLaunchPad()
+    await addFloatingLaunchPad('base')
+    openFloatingPlaylist()
+  }, [addFloatingLaunchPad, openFloatingPlaylist])
+
+  const onNewLaunchPadSfx = useCallback(async () => {
+    await addFloatingLaunchPad('sfx')
     openFloatingPlaylist()
   }, [addFloatingLaunchPad, openFloatingPlaylist])
 
@@ -217,10 +250,19 @@ export default function SidebarTabsPanel() {
                 type="button"
                 className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad"
                 onClick={onNewLaunchPad}
-                title="Nuovo Launchpad 4×4 con sample kit base (se la cartella è nell’app)"
-                aria-label="Nuovo Launchpad"
+                title="Nuovo Launchpad — kit toni base (cartella launchpad-base)"
+                aria-label="Nuovo Launchpad toni base"
               >
                 <IconSidebarLaunchpadColors />
+              </button>
+              <button
+                type="button"
+                className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad-sfx"
+                onClick={onNewLaunchPadSfx}
+                title="Nuovo Launchpad — kit reazioni / SFX (cartella launchpad-sfx)"
+                aria-label="Nuovo Launchpad SFX"
+              >
+                <IconSidebarLaunchpadSfx />
               </button>
             </div>
             <SavedPlaylistsPanel listOnly />

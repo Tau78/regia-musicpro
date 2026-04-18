@@ -6,7 +6,6 @@ import {
   type CSSProperties,
 } from 'react'
 import PreviewSeekBar from './PreviewSeekBar.tsx'
-import TransportBar from './TransportBar.tsx'
 import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
 import {
   readPreviewAspectMode,
@@ -34,13 +33,7 @@ export default function PreviewBlock({ className, frameClassName }: Props) {
   const {
     previewSrc,
     previewSyncKey,
-    playing,
     videoPlaying,
-    togglePlay,
-    goNext,
-    goPrev,
-    paths,
-    currentIndex,
     outputTrackLoopMode,
     reportPreviewMediaTimes,
     stillImageDurationSec,
@@ -56,13 +49,6 @@ export default function PreviewBlock({ className, frameClassName }: Props) {
   const [videoStalled, setVideoStalled] = useState(false)
 
   const stillPreview = previewSrc ? isStillImagePath(previewSrc) : false
-
-  const canTransportPrev =
-    paths.length > 0 &&
-    (currentIndex > 0 || outputTrackLoopMode === 'all')
-  const canTransportNext =
-    paths.length > 0 &&
-    (currentIndex < paths.length - 1 || outputTrackLoopMode === 'all')
 
   const handlePreviewSeekCommitted = useCallback((seconds: number) => {
     void window.electronAPI.sendPlayback({ type: 'seek', seconds })
@@ -298,15 +284,6 @@ export default function PreviewBlock({ className, frameClassName }: Props) {
           onSeekCommitted={handlePreviewSeekCommitted}
         />
       ) : null}
-      <TransportBar
-        playing={playing}
-        isStillImage={stillPreview}
-        onTogglePlay={() => void togglePlay()}
-        onPrev={() => void goPrev()}
-        onNext={() => void goNext()}
-        canPrev={canTransportPrev}
-        canNext={canTransportNext}
-      />
     </div>
   )
 }

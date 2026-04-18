@@ -6,6 +6,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   launchpadBaseKitPaths: (): Promise<string[]> =>
     ipcRenderer.invoke('launchpad-base:kitPaths'),
 
+  /** Kit «reazioni / SFX» in public/launchpad-sfx (vuoto se cartella assente). */
+  launchpadSfxKitPaths: (): Promise<string[]> =>
+    ipcRenderer.invoke('launchpad-sfx:kitPaths'),
+
   toFileUrl: (absPath: string): Promise<string> =>
     ipcRenderer.invoke('util:toFileUrl', absPath),
 
@@ -123,4 +127,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('regia:output-audio-level', fn)
     return () => ipcRenderer.removeListener('regia:output-audio-level', fn)
   },
+
+  /** Finestra regia sopra le altre app; si spegne quando nessun pannello ha il pin attivo. */
+  setRegiaWindowAlwaysOnTop: (on: boolean): Promise<void> =>
+    ipcRenderer.invoke('regia:setWindowAlwaysOnTop', on),
 })

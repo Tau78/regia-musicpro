@@ -7,6 +7,7 @@ declare global {
   interface Window {
     electronAPI: {
       launchpadBaseKitPaths: () => Promise<string[]>
+      launchpadSfxKitPaths: () => Promise<string[]>
       toFileUrl: (absPath: string) => Promise<string>
       selectFolder: () => Promise<string[] | null>
       /** Dialog multi-file (stesse estensioni della cartella). */
@@ -69,6 +70,8 @@ declare global {
 
       reportOutputAudioLevel?: (level: number) => void
       onOutputAudioLevel?: (handler: (level: number) => void) => () => void
+
+      setRegiaWindowAlwaysOnTop: (on: boolean) => Promise<void>
     }
   }
 }

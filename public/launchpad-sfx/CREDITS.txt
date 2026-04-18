@@ -1,0 +1,26 @@
+Launchpad SFX — fonti audio (CC0 / dominio pubblico equivalente)
+================================================================================
+
+Tutti i file in questa cartella provengono da BigSoundBank (Joseph Sardin e altri autori indicati sul sito), scaricati automaticamente tramite `npm run gen:launchpad-sfx`.
+
+Licenza sul sito: CC0 — nessun obbligo di attribuzione; ridistribuzione e uso commerciale consentiti. Si consiglia comunque di citare BigSoundBank nei crediti di progetto se lo desideri.
+
+Dettaglio per slot (nome file → brano sul sito):
+  01 applauso      → Applause #1 (1765)
+  02 risate        → Laughter (490)
+  03 delusione     → Battery joke #4 — fill comico / “fail” (2411)
+  04 buuu          → Hisses, loud long — fischi umani (1170)
+  05 tada          → Shouts and Applauses of Teens #2 (237)
+  06 campanella    → Small Bell #1 (292)
+  07 sospeso       → Timer #2 — tic timer cucina / tensione (82)
+  08 whoosh        → Whoosh #4 (1796)
+  09 errore        → Censorship #2 — beep (1311)
+  10 conferma      → Microwave Bell — ding breve (1631)
+  11 rullo          → Drum roll 1 S (2400)
+  12 fischio        → Plastic Whistle #1 (1017)
+  13 grilli         → Nocturnal insect #2 — grillo (425)
+  14 scratch         → Vinyl Scratch 11 (2868)
+  15 battito        → Heart Beat — 10 battiti (218)
+  16 sbatacchio     → Door Slamming #2 (223)
+
+https://bigsoundbank.com/licenses.html

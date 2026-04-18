@@ -200,6 +200,26 @@ function IconPanelExpand() {
   )
 }
 
+function IconWindowPin() {
+  return (
+    <svg
+      className="floating-playlist-header-icon"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="9.75" cy="8" r="3.35" />
+      <line x1="11.35" y1="10.35" x2="18.25" y2="19.25" />
+    </svg>
+  )
+}
+
 function IconClosePanel() {
   return (
     <svg
@@ -785,6 +805,7 @@ export default function FloatingPlaylist({
       ? Math.min(1, Math.max(0, session.playlistOutputVolume))
       : 1
   const collapsed = session?.collapsed ?? false
+  const windowAlwaysOnTopPinned = session?.windowAlwaysOnTopPinned === true
   const launchPadBankIndex = session?.launchPadBankIndex ?? 0
   const pos = session?.pos ?? { x: 24, y: 96 }
   const panelSize =
@@ -1123,9 +1144,10 @@ export default function FloatingPlaylist({
         MIN_PANEL_H,
       )
       const sn = snapFloatingPanelResize(edge, raw.pos, raw.size, {
-        plancia: queryPlanciaContentRect(),
-        peerWidths: widths,
-        peerHeights: heights,
+        plancia:
+          windowAlwaysOnTopPinned ? null : queryPlanciaContentRect(),
+        peerWidths: windowAlwaysOnTopPinned ? [] : widths,
+        peerHeights: windowAlwaysOnTopPinned ? [] : heights,
         minW: MIN_PANEL_W,
         minH: MIN_PANEL_H,
       })
@@ -1137,7 +1159,13 @@ export default function FloatingPlaylist({
         PANEL_CLAMP_OPTS,
       )
     },
-    [floatingPlaylistSessions, previewDetached, sessionId, snapEnabled],
+    [
+      floatingPlaylistSessions,
+      previewDetached,
+      sessionId,
+      snapEnabled,
+      windowAlwaysOnTopPinned,
+    ],
   )
 
   const onPanelChromePointerDownCapture = useCallback(
@@ -1226,14 +1254,18 @@ export default function FloatingPlaylist({
       if (!el) return
       const nx = d.dx + (e.clientX - d.startX)
       const ny = d.dy + (e.clientY - d.startY)
-      const plancia = snapEnabled ? queryPlanciaContentRect() : null
+      const plancia =
+        snapEnabled && !windowAlwaysOnTopPinned
+          ? queryPlanciaContentRect()
+          : null
+      const peersForSnap = windowAlwaysOnTopPinned ? [] : dragSnapPeerRects
       let c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
       if (snapEnabled && plancia) {
         const sn = snapFloatingPanelDragPosWithGuides(
           c,
           { width: el.offsetWidth, height: el.offsetHeight },
           plancia,
-          dragSnapPeerRects,
+          peersForSnap,
         )
         c = clampPosToViewport(
           sn.pos.x,
@@ -1253,6 +1285,7 @@ export default function FloatingPlaylist({
       sessionId,
       snapEnabled,
       updateFloatingPlaylistChrome,
+      windowAlwaysOnTopPinned,
     ],
   )
 
@@ -1290,7 +1323,11 @@ export default function FloatingPlaylist({
       const el = panelRef.current
       const nx = d.dx + (e.clientX - d.startX)
       const ny = d.dy + (e.clientY - d.startY)
-      const plancia = snapEnabled ? queryPlanciaContentRect() : null
+      const plancia =
+        snapEnabled && !windowAlwaysOnTopPinned
+          ? queryPlanciaContentRect()
+          : null
+      const peersForSnap = windowAlwaysOnTopPinned ? [] : dragSnapPeerRects
       let next = el
         ? clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
         : { x: nx, y: ny }
@@ -1299,7 +1336,7 @@ export default function FloatingPlaylist({
           next,
           { width: el.offsetWidth, height: el.offsetHeight },
           plancia,
-          dragSnapPeerRects,
+          peersForSnap,
         )
         next = clampPosToViewport(
           sn.pos.x,
@@ -1329,6 +1366,7 @@ export default function FloatingPlaylist({
       sessionId,
       snapEnabled,
       updateFloatingPlaylistChrome,
+      windowAlwaysOnTopPinned,
     ],
   )
 
@@ -2144,7 +2182,7 @@ export default function FloatingPlaylist({
           <div
             className="floating-playlist-title-strip-chrome"
             role="group"
-            aria-label="Riduci o chiudi pannello"
+            aria-label="Aiuto, fissa in primo piano, riduci o chiudi"
           >
             <div className="floating-playlist-help-popover-wrap">
               <button
@@ -2212,7 +2250,11 @@ export default function FloatingPlaylist({
                       Toggle play/stop
                       {launchPadCueEnabled
                         ? ' · tenere premuto il tasto = CUE (senza modificatori)'
-                        : ''}
+                        : ''}{' '}
+                      · puntina tra «?» e Riduci: finestra Regia sempre sopra le altre
+                      app e, mentre è attiva, puoi trascinare questo pannello fuori
+                      dall’area plancia senza aggancio magnetico ai bordi (non evita
+                      il Dock se riduci tutta l’app).
                     </>
                   ) : (
                     <div className="floating-playlist-panel-help-popover-stack">
@@ -2225,6 +2267,15 @@ export default function FloatingPlaylist({
                         <strong>Riduci / Chiudi</strong> — Riduci mostra solo la barra
                         compatta con i comandi principali. Chiudi rimuove questo
                         pannello dalla plancia.
+                      </p>
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Puntina (sempre davanti)</strong> — Con la puntina
+                        attiva la <strong>finestra intera Regia</strong> resta sopra le
+                        altre applicazioni e puoi <strong>trascinare questo pannello</strong>{' '}
+                        anche sopra la barra laterale o l’intestazione, senza che lo
+                        snap lo riporti ai bordi dell’area plancia. Se mandi tutta l’app
+                        nel Dock / barra delle applicazioni, il sistema nasconde comunque
+                        la finestra.
                       </p>
                       <p className="floating-playlist-panel-help-popover-p">
                         <strong>Cartella e Aggiungi</strong> — Cartella apre una
@@ -2279,6 +2330,30 @@ export default function FloatingPlaylist({
                 </div>
               ) : null}
             </div>
+            <button
+              type="button"
+              className={`floating-playlist-icon-btn floating-playlist-window-pin ${windowAlwaysOnTopPinned ? 'is-active' : ''}`}
+              aria-pressed={windowAlwaysOnTopPinned}
+              onClick={() => {
+                const next = !windowAlwaysOnTopPinned
+                updateFloatingPlaylistChrome(sessionId, {
+                  windowAlwaysOnTopPinned: next,
+                })
+                if (next) bringFloatingPanelToFront(sessionId)
+              }}
+              title={
+                windowAlwaysOnTopPinned
+                  ? 'Puntina attiva: finestra Regia sopra le altre app; trascinamento senza aggancio alla plancia. Clic per disattivare (torna lo snap ai bordi plancia).'
+                  : 'Puntina: finestra Regia sopra le altre app e trascinamento del pannello anche fuori dall’area plancia (disattiva lo snap magnetico ai suoi bordi). Clic per attivare.'
+              }
+              aria-label={
+                windowAlwaysOnTopPinned
+                  ? 'Disattiva puntina: sempre davanti e trascinamento fuori plancia'
+                  : 'Attiva puntina: sempre davanti e trascinamento fuori plancia'
+              }
+            >
+              <IconWindowPin />
+            </button>
             <button
               type="button"
               className="floating-playlist-icon-btn"
@@ -2397,6 +2472,14 @@ export default function FloatingPlaylist({
         ) : null}
       </div>
       {!collapsed && (
+        <div
+          className={
+            isLaunchpad
+              ? 'floating-playlist-launchpad-stack'
+              : 'floating-playlist-panel-body-slot'
+          }
+        >
+        {/* Menu tasto destro Launchpad: stesso wrapper della griglia, non dentro crossfade (pannello overflow:hidden). */}
         <div className="floating-playlist-crossfade">
           <div className="floating-playlist-crossfade-row">
             <div className="floating-playlist-actions floating-playlist-chrome-actions">
@@ -2593,193 +2676,8 @@ export default function FloatingPlaylist({
               </div>
             </div>
           ) : null}
-          {launchPadCtx && isLaunchpad && launchPadCells ? (
-            <div
-              className="launchpad-ctx-menu-plancia-layer"
-              role="presentation"
-              onMouseDown={(ev) => {
-                if (ev.button !== 0) return
-                const t = ev.target
-                if (
-                  t instanceof Node &&
-                  launchPadMenuRef.current?.contains(t)
-                )
-                  return
-                setLaunchPadCtx(null)
-              }}
-            >
-              <div
-                ref={launchPadMenuRef}
-                className="launchpad-ctx-menu"
-                role="menu"
-                aria-label={`Opzioni slot ${launchPadCtx.slot + 1}`}
-                onMouseDown={(ev) => ev.stopPropagation()}
-              >
-                <div className="launchpad-ctx-menu-title">
-                  Slot {launchPadCtx.slot + 1}
-                  {launchPadCells[launchPadCtx.slot]?.samplePath
-                    ? ''
-                    : ' (vuoto)'}
-                </div>
-                <label
-                  className="launchpad-ctx-menu-label"
-                  htmlFor={`lp-gain-${sessionId}-${launchPadCtx.slot}`}
-                >
-                  Gain uscita
-                </label>
-                <div className="launchpad-ctx-menu-gain-row">
-                  <input
-                    id={`lp-gain-${sessionId}-${launchPadCtx.slot}`}
-                    type="range"
-                    className="regia-volume-slider launchpad-ctx-menu-slider"
-                    min={0}
-                    max={100}
-                    value={Math.round(ctxMenuGain * 100)}
-                    onPointerDown={() => recordUndoPoint()}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                      const v =
-                        Number.parseInt(e.target.value, 10) / 100
-                      const c = Math.min(1, Math.max(0, v))
-                      void updateLaunchPadCell(
-                        sessionId,
-                        launchPadCtx.slot,
-                        { padGain: c },
-                        { skipUndo: true },
-                      )
-                    }}
-                    aria-valuetext={`${Math.round(ctxMenuGain * 100)}%`}
-                  />
-                  <span className="launchpad-ctx-menu-gain-pct" aria-hidden>
-                    {Math.round(ctxMenuGain * 100)}%
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="launchpad-ctx-menu-learn"
-                  onClick={() => {
-                    const slot = launchPadCtx.slot
-                    setLaunchPadCtx(null)
-                    setPadKeyLearnSlot(slot)
-                  }}
-                >
-                  Learn…
-                </button>
-                {ctxSlotCell?.padKeyCode ? (
-                  <div
-                    className="launchpad-ctx-menu-keymode"
-                    role="group"
-                    aria-label="Comportamento tasto assegnato"
-                  >
-                    <span className="launchpad-ctx-menu-label">Tasto</span>
-                    <div className="launchpad-ctx-menu-keymode-btns">
-                      <button
-                        type="button"
-                        className={`launchpad-ctx-menu-seg ${ctxSlotCell.padKeyMode !== 'toggle' ? 'is-active' : ''}`}
-                        onClick={() =>
-                          void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
-                            padKeyMode: 'play',
-                          })
-                        }
-                      >
-                        Play
-                      </button>
-                      <button
-                        type="button"
-                        className={`launchpad-ctx-menu-seg ${ctxSlotCell.padKeyMode === 'toggle' ? 'is-active' : ''}`}
-                        onClick={() =>
-                          void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
-                            padKeyMode: 'toggle',
-                          })
-                        }
-                      >
-                        Toggle
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  className="launchpad-ctx-menu-learn"
-                  disabled={!ctxSlotCell?.padKeyCode}
-                  onClick={() => {
-                    void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
-                      padKeyCode: null,
-                    })
-                    setLaunchPadCtx(null)
-                  }}
-                >
-                  Rimuovi tasto
-                </button>
-                <div className="launchpad-ctx-menu-label">Appunti</div>
-                <div className="launchpad-ctx-menu-row-btns">
-                  <button
-                    type="button"
-                    className="launchpad-ctx-menu-mini"
-                    disabled={!ctxSlotCell}
-                    onClick={() => {
-                      if (ctxSlotCell) setLaunchPadClipboard({ ...ctxSlotCell })
-                      setLaunchPadCtx(null)
-                    }}
-                  >
-                    Copia slot
-                  </button>
-                  <button
-                    type="button"
-                    className="launchpad-ctx-menu-mini"
-                    disabled={!launchPadClipboard}
-                    onClick={() => {
-                      const clip = launchPadClipboard
-                      if (!clip) return
-                      void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
-                        samplePath: clip.samplePath,
-                        padColor: clip.padColor,
-                        padGain: clip.padGain,
-                        padKeyCode: null,
-                        padKeyMode: clip.padKeyMode,
-                      })
-                      setLaunchPadCtx(null)
-                    }}
-                  >
-                    Incolla
-                  </button>
-                </div>
-                <div className="launchpad-ctx-menu-label">Categoria (colore)</div>
-                <div className="launchpad-ctx-menu-cat-swatches">
-                  {LAUNCHPAD_CATEGORY_SWATCHES.map((hex) => (
-                    <button
-                      key={hex}
-                      type="button"
-                      className="launchpad-ctx-cat-swatch"
-                      style={{ ['--sw' as string]: hex }}
-                      title={`Imposta colore ${hex}`}
-                      aria-label={`Categoria colore ${hex}`}
-                      onClick={() => {
-                        void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
-                          padColor: hex,
-                        })
-                      }}
-                    />
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  className="launchpad-ctx-menu-clear"
-                  disabled={!ctxSlotCell?.samplePath}
-                  onClick={() => {
-                    void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
-                      samplePath: null,
-                    })
-                    setLaunchPadCtx(null)
-                  }}
-                >
-                  Svuota pad
-                </button>
-              </div>
-            </div>
-          ) : null}
         </div>
-      )}
-      {!collapsed && isLaunchpad && launchPadCells ? (
+        {isLaunchpad && launchPadCells ? (
         <div
           className={`floating-playlist-launchpad ${launchpadDropHover ? 'is-file-drop-hover' : ''}`}
           role="group"
@@ -2911,6 +2809,192 @@ export default function FloatingPlaylist({
           </div>
         </div>
       ) : null}
+        {launchPadCtx && isLaunchpad && launchPadCells ? (
+          <div
+            className="launchpad-ctx-menu-plancia-layer"
+            role="presentation"
+            onMouseDown={(ev) => {
+              if (ev.button !== 0) return
+              const t = ev.target
+              if (
+                t instanceof Node &&
+                launchPadMenuRef.current?.contains(t)
+              )
+                return
+              setLaunchPadCtx(null)
+            }}
+          >
+            <div
+              ref={launchPadMenuRef}
+              className="launchpad-ctx-menu"
+              role="menu"
+              aria-label={`Opzioni slot ${launchPadCtx.slot + 1}`}
+              onMouseDown={(ev) => ev.stopPropagation()}
+            >
+              <div className="launchpad-ctx-menu-title">
+                Slot {launchPadCtx.slot + 1}
+                {launchPadCells[launchPadCtx.slot]?.samplePath
+                  ? ''
+                  : ' (vuoto)'}
+              </div>
+              <label
+                className="launchpad-ctx-menu-label"
+                htmlFor={`lp-gain-${sessionId}-${launchPadCtx.slot}`}
+              >
+                Gain uscita
+              </label>
+              <div className="launchpad-ctx-menu-gain-row">
+                <input
+                  id={`lp-gain-${sessionId}-${launchPadCtx.slot}`}
+                  type="range"
+                  className="regia-volume-slider launchpad-ctx-menu-slider"
+                  min={0}
+                  max={100}
+                  value={Math.round(ctxMenuGain * 100)}
+                  onPointerDown={() => recordUndoPoint()}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                    const v =
+                      Number.parseInt(e.target.value, 10) / 100
+                    const c = Math.min(1, Math.max(0, v))
+                    void updateLaunchPadCell(
+                      sessionId,
+                      launchPadCtx.slot,
+                      { padGain: c },
+                      { skipUndo: true },
+                    )
+                  }}
+                  aria-valuetext={`${Math.round(ctxMenuGain * 100)}%`}
+                />
+                <span className="launchpad-ctx-menu-gain-pct" aria-hidden>
+                  {Math.round(ctxMenuGain * 100)}%
+                </span>
+              </div>
+              <button
+                type="button"
+                className="launchpad-ctx-menu-learn"
+                onClick={() => {
+                  const slot = launchPadCtx.slot
+                  setLaunchPadCtx(null)
+                  setPadKeyLearnSlot(slot)
+                }}
+              >
+                Learn…
+              </button>
+              {ctxSlotCell?.padKeyCode ? (
+                <div
+                  className="launchpad-ctx-menu-keymode"
+                  role="group"
+                  aria-label="Comportamento tasto assegnato"
+                >
+                  <span className="launchpad-ctx-menu-label">Tasto</span>
+                  <div className="launchpad-ctx-menu-keymode-btns">
+                    <button
+                      type="button"
+                      className={`launchpad-ctx-menu-seg ${ctxSlotCell.padKeyMode !== 'toggle' ? 'is-active' : ''}`}
+                      onClick={() =>
+                        void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                          padKeyMode: 'play',
+                        })
+                      }
+                    >
+                      Play
+                    </button>
+                    <button
+                      type="button"
+                      className={`launchpad-ctx-menu-seg ${ctxSlotCell.padKeyMode === 'toggle' ? 'is-active' : ''}`}
+                      onClick={() =>
+                        void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                          padKeyMode: 'toggle',
+                        })
+                      }
+                    >
+                      Toggle
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="launchpad-ctx-menu-learn"
+                disabled={!ctxSlotCell?.padKeyCode}
+                onClick={() => {
+                  void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                    padKeyCode: null,
+                  })
+                  setLaunchPadCtx(null)
+                }}
+              >
+                Rimuovi tasto
+              </button>
+              <div className="launchpad-ctx-menu-label">Appunti</div>
+              <div className="launchpad-ctx-menu-row-btns">
+                <button
+                  type="button"
+                  className="launchpad-ctx-menu-mini"
+                  disabled={!ctxSlotCell}
+                  onClick={() => {
+                    if (ctxSlotCell) setLaunchPadClipboard({ ...ctxSlotCell })
+                    setLaunchPadCtx(null)
+                  }}
+                >
+                  Copia slot
+                </button>
+                <button
+                  type="button"
+                  className="launchpad-ctx-menu-mini"
+                  disabled={!launchPadClipboard}
+                  onClick={() => {
+                    const clip = launchPadClipboard
+                    if (!clip) return
+                    void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                      samplePath: clip.samplePath,
+                      padColor: clip.padColor,
+                      padGain: clip.padGain,
+                      padKeyCode: null,
+                      padKeyMode: clip.padKeyMode,
+                    })
+                    setLaunchPadCtx(null)
+                  }}
+                >
+                  Incolla
+                </button>
+              </div>
+              <div className="launchpad-ctx-menu-label">Categoria (colore)</div>
+              <div className="launchpad-ctx-menu-cat-swatches">
+                {LAUNCHPAD_CATEGORY_SWATCHES.map((hex) => (
+                  <button
+                    key={hex}
+                    type="button"
+                    className="launchpad-ctx-cat-swatch"
+                    style={{ ['--sw' as string]: hex }}
+                    title={`Imposta colore ${hex}`}
+                    aria-label={`Categoria colore ${hex}`}
+                    onClick={() => {
+                      void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                        padColor: hex,
+                      })
+                    }}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                className="launchpad-ctx-menu-clear"
+                disabled={!ctxSlotCell?.samplePath}
+                onClick={() => {
+                  void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                    samplePath: null,
+                  })
+                  setLaunchPadCtx(null)
+                }}
+              >
+                Svuota pad
+              </button>
+            </div>
+          </div>
+        ) : null}
+        </div>
+      )}
       {!collapsed && !isLaunchpad && (
         <div className="floating-playlist-list-scroll">
           <ul

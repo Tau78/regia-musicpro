@@ -191,6 +191,35 @@ function IconLaunchPadGrid() {
   )
 }
 
+/** Megafono / onda per kit reazioni SFX. */
+function IconLaunchPadSfx() {
+  return (
+    <svg
+      className="saved-playlists-icon-svg"
+      viewBox="0 0 24 24"
+      width={18}
+      height={18}
+      aria-hidden="true"
+    >
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M4 10v4M4 12h3l5 3V7L7 12H4z"
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        d="M16 9c1.5 1 1.5 5 0 6M18 7c2.5 2 2.5 8 0 10"
+      />
+    </svg>
+  )
+}
+
 type SavedPlaylistsPanelProps = {
   /** Solo elenco playlist su disco (pulsanti nuovo pannello gestiti fuori). */
   listOnly?: boolean
@@ -353,14 +382,28 @@ export default function SavedPlaylistsPanel({
             className="btn-icon saved-playlists-icon-btn saved-playlists-new-launchpad"
             onClick={() => {
               void (async () => {
-                await addFloatingLaunchPad()
+                await addFloatingLaunchPad('base')
                 openFloatingPlaylist()
               })()
             }}
-            title="Nuovo Launchpad 4×4 (sample kit base se presenti in app)"
-            aria-label="Nuovo pannello Launchpad"
+            title="Nuovo Launchpad 4×4 — kit toni base (se generato in app)"
+            aria-label="Nuovo pannello Launchpad toni base"
           >
             <IconLaunchPadGrid />
+          </button>
+          <button
+            type="button"
+            className="btn-icon saved-playlists-icon-btn saved-playlists-new-launchpad-sfx"
+            onClick={() => {
+              void (async () => {
+                await addFloatingLaunchPad('sfx')
+                openFloatingPlaylist()
+              })()
+            }}
+            title="Nuovo Launchpad 4×4 — kit reazioni / SFX (applauso, risate, … se generato)"
+            aria-label="Nuovo pannello Launchpad SFX"
+          >
+            <IconLaunchPadSfx />
           </button>
         </div>
       ) : null}

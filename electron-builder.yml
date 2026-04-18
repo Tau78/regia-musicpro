@@ -15,9 +15,13 @@ files:
 
 asar: true
 
-# Su tag, electron-builder altrimenti tenta la "publish" su GitHub e fallisce senza GH_TOKEN.
-# La CI carica l'.exe come artifact; niente upload automatico alle Releases.
-publish: null
+# Auto-updater (electron-updater): in fase di build viene generato `app-update.yml` nel pacchetto.
+# Per pubblicare una release: `npm run dist:win:publish` con variabile `GH_TOKEN` (vedi README o istruzioni sotto).
+# Se sposti il repo su GitHub, aggiorna `owner` / `repo`.
+publish:
+  provider: github
+  owner: Tau78
+  repo: regia-musicpro
 
 win:
   target:
