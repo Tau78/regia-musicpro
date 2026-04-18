@@ -81,6 +81,14 @@ button {
   font-size: 1.15rem;
   font-weight: 600;
   letter-spacing: 0.02em;
+  min-width: 0;
+}
+
+.regia-brand-meta {
+  font-weight: 500;
+  font-size: 0.88em;
+  color: var(--muted);
+  letter-spacing: 0.01em;
 }
 
 .regia-dot {
@@ -2407,6 +2415,33 @@ button {
 .launchpad-ctx-menu-label {
   font-size: 0.68rem;
   color: var(--muted);
+}
+
+.launchpad-ctx-menu-name-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.12rem;
+  padding: 0.32rem 0.45rem;
+  font-size: 0.74rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+}
+
+.launchpad-ctx-menu-name-input::placeholder {
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.launchpad-ctx-menu-name-hint {
+  display: block;
+  margin-top: 0.15rem;
+  margin-bottom: 0.15rem;
+  font-size: 0.62rem;
+  line-height: 1.25;
+  color: var(--muted);
+  opacity: 0.92;
 }
 
 .launchpad-ctx-menu-gain-row {

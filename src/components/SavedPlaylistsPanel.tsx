@@ -386,8 +386,8 @@ export default function SavedPlaylistsPanel({
                 openFloatingPlaylist()
               })()
             }}
-            title="Nuovo Launchpad 4×4 — kit toni base (se generato in app)"
-            aria-label="Nuovo pannello Launchpad toni base"
+            title="Nuovo Launchpad 4×4 — kit predefinito reazioni/SFX (se generato in app)"
+            aria-label="Nuovo pannello Launchpad kit predefinito"
           >
             <IconLaunchPadGrid />
           </button>

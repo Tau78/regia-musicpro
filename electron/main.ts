@@ -28,6 +28,8 @@ type LaunchPadCellStored = {
   samplePath: string | null
   padColor: string
   padGain: number
+  /** Etichetta sul pad (opzionale). */
+  padDisplayName?: string | null
   /** `KeyboardEvent.code` (opzionale). */
   padKeyCode?: string | null
   padKeyMode?: 'play' | 'toggle'
@@ -81,6 +83,11 @@ function normalizeLaunchPadCellsStored(
       typeof c.padGain === 'number' && Number.isFinite(c.padGain)
         ? Math.min(1, Math.max(0, c.padGain))
         : 1
+    let padDisplayName: string | null = null
+    if (typeof c.padDisplayName === 'string') {
+      const t = c.padDisplayName.trim().replace(/\s+/g, ' ').slice(0, 120)
+      if (t) padDisplayName = t
+    }
     let padKeyCode: string | null = null
     if (typeof c.padKeyCode === 'string') {
       const t = c.padKeyCode.trim()
@@ -92,7 +99,14 @@ function normalizeLaunchPadCellsStored(
         : c.padKeyMode === 'play'
           ? 'play'
           : 'toggle'
-    out.push({ samplePath, padColor, padGain, padKeyCode, padKeyMode })
+    out.push({
+      samplePath,
+      padColor,
+      padGain,
+      padDisplayName,
+      padKeyCode,
+      padKeyMode,
+    })
   }
   return out
 }
@@ -511,13 +525,55 @@ function getSecondaryDisplay() {
   return other ?? primary
 }
 
+let pkgMetaForTitleCache: {
+  version: string
+  regiaProgramCreatedOn?: string
+} | null = null
+
+function getPkgMetaForWindowTitle(): {
+  version: string
+  regiaProgramCreatedOn?: string
+} {
+  if (pkgMetaForTitleCache) return pkgMetaForTitleCache
+  try {
+    const p = path.join(app.getAppPath(), 'package.json')
+    const j = JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, unknown>
+    pkgMetaForTitleCache = {
+      version: typeof j.version === 'string' ? j.version : '0.0.0',
+      regiaProgramCreatedOn:
+        typeof j.regiaProgramCreatedOn === 'string'
+          ? j.regiaProgramCreatedOn
+          : undefined,
+    }
+  } catch {
+    pkgMetaForTitleCache = { version: '0.0.0' }
+  }
+  return pkgMetaForTitleCache
+}
+
+function formatRegiaProgramCreatedIt(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim())
+  if (!m) return iso.trim()
+  return `${m[3]}/${m[2]}/${m[1]}`
+}
+
+function regiaMainWindowTitle(): string {
+  const { version, regiaProgramCreatedOn } = getPkgMetaForWindowTitle()
+  const date =
+    regiaProgramCreatedOn &&
+    formatRegiaProgramCreatedIt(regiaProgramCreatedOn)
+  const parts = ['REGIA MUSICPRO', `v${version}`]
+  if (date) parts.push(date)
+  return parts.join(' ')
+}
+
 function createRegiaWindow(): BrowserWindow {
   const w = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 960,
     minHeight: 640,
-    title: 'Regia',
+    title: regiaMainWindowTitle(),
     backgroundColor: '#0c0d10',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -811,16 +867,6 @@ function setupIpc() {
     },
   )
 
-  ipcMain.handle('regia:setWindowAlwaysOnTop', (_e, on: unknown) => {
-    if (!regiaWindow || regiaWindow.isDestroyed()) return
-    const flag = Boolean(on)
-    if (process.platform === 'darwin') {
-      regiaWindow.setAlwaysOnTop(flag, 'floating')
-    } else {
-      regiaWindow.setAlwaysOnTop(flag)
-    }
-  })
-
   ipcMain.handle('regia:getContentBounds', () => {
     if (!regiaWindow || regiaWindow.isDestroyed()) return null
     return regiaWindow.getContentBounds()
@@ -873,11 +919,6 @@ function setupIpc() {
         },
       })
       w.setMenuBarVisibility(false)
-      if (process.platform === 'darwin') {
-        w.setAlwaysOnTop(true, 'floating')
-      } else {
-        w.setAlwaysOnTop(true)
-      }
       if (isDev) {
         void w.loadURL(
           `${getDevServerUrl()}/?playlistOsFloater=1&session=${encodeURIComponent(sessionId)}`,
@@ -930,6 +971,57 @@ function setupIpc() {
       if (w && !w.isDestroyed()) {
         w.webContents.send('playlist-floater-state', payload)
       }
+      return { ok: true as const }
+    },
+  )
+
+  ipcMain.handle(
+    'playlistFloater:setBounds',
+    (
+      event,
+      partial: { x?: number; y?: number; width?: number; height?: number },
+    ) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win || win.isDestroyed()) return { ok: false as const }
+      let sid: string | null = null
+      for (const [k, v] of playlistFloaterWindows) {
+        if (v === win) {
+          sid = k
+          break
+        }
+      }
+      if (!sid) return { ok: false as const }
+      const b = win.getBounds()
+      const nb = {
+        x: Math.round(
+          typeof partial?.x === 'number' && Number.isFinite(partial.x)
+            ? partial.x
+            : b.x,
+        ),
+        y: Math.round(
+          typeof partial?.y === 'number' && Number.isFinite(partial.y)
+            ? partial.y
+            : b.y,
+        ),
+        width: Math.max(
+          220,
+          Math.round(
+            typeof partial?.width === 'number' && Number.isFinite(partial.width)
+              ? partial.width
+              : b.width,
+          ),
+        ),
+        height: Math.max(
+          180,
+          Math.round(
+            typeof partial?.height === 'number' &&
+              Number.isFinite(partial.height)
+              ? partial.height
+              : b.height,
+          ),
+        ),
+      }
+      win.setBounds(nb)
       return { ok: true as const }
     },
   )

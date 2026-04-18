@@ -25,15 +25,18 @@ jobs:
       - name: Install, build installer, publish to GitHub Release
         shell: bash
         env:
+          # Token sempre disponibile in Actions per questo repo (non serve un PAT nei secrets).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           npm install --no-audit --no-fund
           npm run dist:win:publish
 
-      - name: Upload installer
+      - name: Upload installer and update manifest
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/latest.yml
           if-no-files-found: error

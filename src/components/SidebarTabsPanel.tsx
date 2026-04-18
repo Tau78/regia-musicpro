@@ -250,8 +250,8 @@ export default function SidebarTabsPanel() {
                 type="button"
                 className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad"
                 onClick={onNewLaunchPad}
-                title="Nuovo Launchpad — kit toni base (cartella launchpad-base)"
-                aria-label="Nuovo Launchpad toni base"
+                title="Nuovo Launchpad — kit predefinito (reazioni / SFX, cartella launchpad-base)"
+                aria-label="Nuovo Launchpad kit predefinito"
               >
                 <IconSidebarLaunchpadColors />
               </button>

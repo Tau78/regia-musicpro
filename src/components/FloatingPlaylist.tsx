@@ -71,6 +71,7 @@ import {
   LAUNCHPAD_CELL_COUNT,
   LAUNCHPAD_CUE_HOLD_MS,
   defaultLaunchPadCells,
+  launchPadCellShownLabel,
   type LaunchPadCell,
   type FloatingPlaylistPanelSize,
 } from '../state/floatingPlaylistSession.ts'
@@ -987,6 +988,15 @@ export default function FloatingPlaylist({
     dy: number
     startX: number
     startY: number
+    /** Trascinamento nella finestra OS separata: muove la BrowserWindow. */
+    floater?: {
+      startPtrScreenX: number
+      startPtrScreenY: number
+      winStartX: number
+      winStartY: number
+      winW: number
+      winH: number
+    }
   } | null>(null)
   const resizeStateRef = useRef<{
     edge: ResizeEdge
@@ -1063,6 +1073,7 @@ export default function FloatingPlaylist({
   ])
 
   const reclampIntoView = useCallback(() => {
+    if (isPlaylistOsFloaterWindow) return
     const el = panelRef.current
     const vw = window.innerWidth
     const vh = window.innerHeight
@@ -1097,11 +1108,25 @@ export default function FloatingPlaylist({
       ns.height !== panelSize.height
     )
       updateFloatingPlaylistChrome(sessionId, { pos: np, panelSize: ns })
-  }, [collapsed, panelSize, pos, sessionId, updateFloatingPlaylistChrome])
+  }, [
+    collapsed,
+    isPlaylistOsFloaterWindow,
+    panelSize,
+    pos,
+    sessionId,
+    updateFloatingPlaylistChrome,
+  ])
 
   useLayoutEffect(() => {
     reclampIntoView()
-  }, [collapsed, isLaunchpad, paths.length, panelSize, reclampIntoView])
+  }, [
+    collapsed,
+    isLaunchpad,
+    isPlaylistOsFloaterWindow,
+    paths.length,
+    panelSize,
+    reclampIntoView,
+  ])
 
   useEffect(() => {
     const onResize = () => reclampIntoView()
@@ -1210,17 +1235,31 @@ export default function FloatingPlaylist({
       } catch {
         /* ignore */
       }
-      drag.current = {
-        active: true,
+      const dragBase = {
+        active: true as const,
         dx: pos.x,
         dy: pos.y,
         startX: e.clientX,
         startY: e.clientY,
       }
+      drag.current = isPlaylistOsFloaterWindow
+        ? {
+            ...dragBase,
+            floater: {
+              startPtrScreenX: e.screenX,
+              startPtrScreenY: e.screenY,
+              winStartX: window.screenX,
+              winStartY: window.screenY,
+              winW: window.outerWidth,
+              winH: window.outerHeight,
+            },
+          }
+        : dragBase
     },
     [
       bringFloatingPanelToFront,
       collapsed,
+      isPlaylistOsFloaterWindow,
       panelSize.height,
       panelSize.width,
       pos.x,
@@ -1244,10 +1283,34 @@ export default function FloatingPlaylist({
           dy,
         )
         updateFloatingPlaylistChrome(sessionId, { pos: np, panelSize: ns })
+        if (isPlaylistOsFloaterWindow) {
+          void window.electronAPI?.playlistFloaterSetBounds?.({
+            x: Math.round(window.screenX + np.x),
+            y: Math.round(window.screenY + np.y),
+            width: Math.round(ns.width),
+            height: Math.round(ns.height),
+          })
+        }
         return
       }
       const d = drag.current
       if (!d?.active) return
+      if (d.floater) {
+        const f = d.floater
+        const nx = Math.round(
+          f.winStartX + (e.screenX - f.startPtrScreenX),
+        )
+        const ny = Math.round(
+          f.winStartY + (e.screenY - f.startPtrScreenY),
+        )
+        void window.electronAPI?.playlistFloaterSetBounds?.({
+          x: nx,
+          y: ny,
+          width: f.winW,
+          height: f.winH,
+        })
+        return
+      }
       const el = panelRef.current
       if (!el) return
       const nx = d.dx + (e.clientX - d.startX)
@@ -1272,6 +1335,7 @@ export default function FloatingPlaylist({
     },
     [
       dragSnapPeerRects,
+      isPlaylistOsFloaterWindow,
       resizePlaylistWithSnap,
       sessionId,
       snapEnabled,
@@ -1293,6 +1357,14 @@ export default function FloatingPlaylist({
           dy,
         )
         updateFloatingPlaylistChrome(sessionId, { pos: np, panelSize: ns })
+        if (isPlaylistOsFloaterWindow) {
+          void window.electronAPI?.playlistFloaterSetBounds?.({
+            x: Math.round(window.screenX + np.x),
+            y: Math.round(window.screenY + np.y),
+            width: Math.round(ns.width),
+            height: Math.round(ns.height),
+          })
+        }
         persistLayoutToLs(sessionId, np, ns, {
           muted: playlistOutputMuted,
           volume: playlistOutputVolume,
@@ -1309,6 +1381,33 @@ export default function FloatingPlaylist({
       const d = drag.current
       if (!d?.active) return
       d.active = false
+      if (d.floater) {
+        const f = d.floater
+        const nx = Math.round(
+          f.winStartX + (e.screenX - f.startPtrScreenX),
+        )
+        const ny = Math.round(
+          f.winStartY + (e.screenY - f.startPtrScreenY),
+        )
+        void window.electronAPI?.playlistFloaterSetBounds?.({
+          x: nx,
+          y: ny,
+          width: f.winW,
+          height: f.winH,
+        })
+        const zero = { x: 0, y: 0 }
+        updateFloatingPlaylistChrome(sessionId, { pos: zero })
+        persistLayoutToLs(sessionId, zero, panelSize, {
+          muted: playlistOutputMuted,
+          volume: playlistOutputVolume,
+        })
+        try {
+          panelRef.current?.releasePointerCapture(e.pointerId)
+        } catch {
+          /* ignore */
+        }
+        return
+      }
       const el = panelRef.current
       const nx = d.dx + (e.clientX - d.startX)
       const ny = d.dy + (e.clientY - d.startY)
@@ -1343,6 +1442,7 @@ export default function FloatingPlaylist({
     },
     [
       dragSnapPeerRects,
+      isPlaylistOsFloaterWindow,
       panelSize,
       playlistOutputMuted,
       playlistOutputVolume,
@@ -1457,8 +1557,7 @@ export default function FloatingPlaylist({
       const raw = stringifyRegiaFloatingDnDPayload(payload)
       e.dataTransfer.setData(REGIA_FLOATING_DND_MIME, raw)
       e.dataTransfer.setData('text/plain', raw)
-      const label =
-        cell.samplePath.split(/[/\\]/).pop() ?? cell.samplePath ?? 'Sample'
+      const label = launchPadCellShownLabel(cell)
       setRegiaDnDDragImage(e, label, { maxWidthPx: 240 })
     },
     [isLaunchpad, launchPadBankIndex, launchPadCells, session, sessionId],
@@ -2281,10 +2380,9 @@ export default function FloatingPlaylist({
                         ? ' · tenere premuto il tasto = CUE (senza modificatori)'
                         : ''}{' '}
                       · puntina tra «?» e Riduci: apre questo pannello in una{' '}
-                      <strong>finestra separata</strong> (puoi spostarla anche fuori
-                      dalla finestra Regia), con la Regia sempre sopra le altre app.
-                      Chiudendo quella finestra il pannello torna nella Regia (non
-                      evita il Dock se riduci tutta l’app).
+                      <strong>finestra separata</strong> sul desktop (anche fuori
+                      dalla finestra Regia). Chiudendo quella finestra il pannello
+                      torna nella Regia (non evita il Dock se riduci tutta l’app).
                     </>
                   ) : (
                     <div className="floating-playlist-panel-help-popover-stack">
@@ -2301,11 +2399,11 @@ export default function FloatingPlaylist({
                       <p className="floating-playlist-panel-help-popover-p">
                         <strong>Puntina (finestra separata)</strong> — Con la puntina
                         attiva questo pannello passa in una <strong>finestra propria</strong>{' '}
-                        che puoi spostare anche <strong>fuori dalla finestra Regia</strong>
-                        ; la Regia resta inoltre sopra le altre applicazioni. Chiudi la
-                        finestra del pannello per riportarlo dentro la Regia. Se mandi
-                        tutta l’app nel Dock / barra delle applicazioni, il sistema
-                        nasconde comunque le finestre.
+                        sul desktop, che puoi spostare anche{' '}
+                        <strong>fuori dalla finestra Regia</strong>. Chiudi la finestra
+                        del pannello per riportarlo dentro la Regia. Se mandi tutta
+                        l’app nel Dock / barra delle applicazioni, il sistema nasconde
+                        comunque le finestre.
                       </p>
                       <p className="floating-playlist-panel-help-popover-p">
                         <strong>Cartella e Aggiungi</strong> — Cartella apre una
@@ -2373,13 +2471,13 @@ export default function FloatingPlaylist({
               }}
               title={
                 windowAlwaysOnTopPinned
-                  ? 'Puntina attiva: pannello in finestra separata (anche fuori dalla Regia); Regia sopra le altre app. Clic per riportare il pannello nella Regia.'
-                  : 'Puntina: apre questo pannello in una finestra separata (spostabile fuori dalla Regia) e tiene la Regia sopra le altre app. Clic per attivare.'
+                  ? 'Puntina attiva: pannello in finestra separata sul desktop (trascina l’intestazione per spostarla). Clic per riportarlo nella Regia.'
+                  : 'Puntina: apre questo pannello in una finestra separata sul desktop, spostabile anche fuori dalla Regia. Clic per attivare.'
               }
               aria-label={
                 windowAlwaysOnTopPinned
                   ? 'Disattiva puntina e chiudi finestra pannello separata'
-                  : 'Attiva puntina: finestra pannello separata e Regia sempre davanti'
+                  : 'Attiva puntina: finestra pannello separata sul desktop'
               }
             >
               <IconWindowPin />
@@ -2746,7 +2844,8 @@ export default function FloatingPlaylist({
           >
             {launchPadCells.slice(0, LAUNCHPAD_CELL_COUNT).map((cell, i) => {
               void padProgressTick
-              const name = cell.samplePath
+              const shown = launchPadCellShownLabel(cell)
+              const fileBasename = cell.samplePath
                 ? cell.samplePath.split(/[/\\]/).pop() ?? cell.samplePath
                 : ''
               const isLoaded =
@@ -2797,7 +2896,11 @@ export default function FloatingPlaylist({
                     onContextMenu={(ev) => onLaunchPadCellContextMenu(i, ev)}
                     title={
                       cell.samplePath
-                        ? `Slot ${i + 1}: ${name} — ${
+                        ? `Slot ${i + 1}: ${fileBasename}${
+                            shown !== fileBasename
+                              ? ` (etichetta: ${shown})`
+                              : ''
+                          } — ${
                             launchPadCueEnabled
                               ? 'tap breve play intero · tenere premuto CUE (stop al rilascio)'
                               : 'clic = play intero'
@@ -2826,9 +2929,7 @@ export default function FloatingPlaylist({
                       </span>
                     ) : null}
                     <span className="launchpad-cell-index">{i + 1}</span>
-                    <span className="launchpad-cell-label">
-                      {cell.samplePath ? name : '—'}
-                    </span>
+                    <span className="launchpad-cell-label">{shown}</span>
                   </button>
                   {cell.samplePath ? (
                     <div className="launchpad-cell-trailing">
@@ -2916,39 +3017,73 @@ export default function FloatingPlaylist({
               >
                 Learn…
               </button>
-              {ctxSlotCell?.padKeyCode ? (
-                <div
-                  className="launchpad-ctx-menu-keymode"
-                  role="group"
-                  aria-label="Comportamento tasto assegnato"
-                >
-                  <span className="launchpad-ctx-menu-label">Tasto</span>
-                  <div className="launchpad-ctx-menu-keymode-btns">
-                    <button
-                      type="button"
-                      className={`launchpad-ctx-menu-seg ${ctxSlotCell.padKeyMode !== 'toggle' ? 'is-active' : ''}`}
-                      onClick={() =>
-                        void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
-                          padKeyMode: 'play',
-                        })
-                      }
-                    >
-                      Play
-                    </button>
-                    <button
-                      type="button"
-                      className={`launchpad-ctx-menu-seg ${ctxSlotCell.padKeyMode === 'toggle' ? 'is-active' : ''}`}
-                      onClick={() =>
-                        void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
-                          padKeyMode: 'toggle',
-                        })
-                      }
-                    >
-                      Toggle
-                    </button>
-                  </div>
+              {/*
+                REGRESSION: mostrare sempre Play/Toggle; non nascondere la sezione
+                dietro `padKeyCode` (altrimenti sparisce dal menu tasto destro).
+              */}
+              <div
+                className="launchpad-ctx-menu-keymode"
+                role="group"
+                aria-label="Comportamento tasto assegnato"
+              >
+                <span className="launchpad-ctx-menu-label">Tasto</span>
+                <div className="launchpad-ctx-menu-keymode-btns">
+                  <button
+                    type="button"
+                    className={`launchpad-ctx-menu-seg ${ctxSlotCell && ctxSlotCell.padKeyMode !== 'toggle' ? 'is-active' : ''}`}
+                    onClick={() =>
+                      void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                        padKeyMode: 'play',
+                      })
+                    }
+                  >
+                    Play
+                  </button>
+                  <button
+                    type="button"
+                    className={`launchpad-ctx-menu-seg ${ctxSlotCell?.padKeyMode === 'toggle' ? 'is-active' : ''}`}
+                    onClick={() =>
+                      void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                        padKeyMode: 'toggle',
+                      })
+                    }
+                  >
+                    Toggle
+                  </button>
                 </div>
-              ) : null}
+              </div>
+              <label
+                className="launchpad-ctx-menu-label"
+                htmlFor={`lp-name-${sessionId}-${launchPadCtx.slot}`}
+              >
+                Nome sul pad
+              </label>
+              <input
+                id={`lp-name-${sessionId}-${launchPadCtx.slot}`}
+                key={`lp-name-${sessionId}-${launchPadCtx.slot}`}
+                type="text"
+                className="launchpad-ctx-menu-name-input"
+                maxLength={120}
+                defaultValue={ctxSlotCell?.padDisplayName ?? ''}
+                placeholder="Vuoto = nome file"
+                aria-describedby={`lp-name-hint-${sessionId}-${launchPadCtx.slot}`}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                }}
+                onBlur={(e) => {
+                  const raw = e.target.value
+                  const v = raw.trim() === '' ? null : raw
+                  void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                    padDisplayName: v,
+                  })
+                }}
+              />
+              <span
+                id={`lp-name-hint-${sessionId}-${launchPadCtx.slot}`}
+                className="launchpad-ctx-menu-name-hint"
+              >
+                Sovrascrive l’etichetta sul pad (il file resta lo stesso).
+              </span>
               <button
                 type="button"
                 className="launchpad-ctx-menu-learn"
@@ -2986,6 +3121,7 @@ export default function FloatingPlaylist({
                       samplePath: clip.samplePath,
                       padColor: clip.padColor,
                       padGain: clip.padGain,
+                      padDisplayName: clip.padDisplayName,
                       padKeyCode: null,
                       padKeyMode: clip.padKeyMode,
                     })
@@ -3020,6 +3156,7 @@ export default function FloatingPlaylist({
                 onClick={() => {
                   void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
                     samplePath: null,
+                    padDisplayName: null,
                   })
                   setLaunchPadCtx(null)
                 }}

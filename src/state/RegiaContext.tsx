@@ -65,6 +65,7 @@ import {
   defaultLaunchPadCells,
   launchPadCellsEqual,
   migrateLaunchPadBanksFromCells,
+  normalizeLaunchPadDisplayName,
   normalizeLaunchPadKeyMode,
   type LaunchPadCell,
   type FloatingPlaylistPanelSize,
@@ -95,12 +96,17 @@ function mergeLaunchPadCellsWithDrop(
   next[startSlot] = {
     ...next[startSlot]!,
     samplePath: paths[p]!,
+    padDisplayName: null,
   }
   p = 1
   for (let off = 1; off < LAUNCHPAD_CELL_COUNT && p < paths.length; off++) {
     const si = (startSlot + off) % LAUNCHPAD_CELL_COUNT
     if (!next[si].samplePath) {
-      next[si] = { ...next[si], samplePath: paths[p]! }
+      next[si] = {
+        ...next[si],
+        samplePath: paths[p]!,
+        padDisplayName: null,
+      }
       p++
     }
   }
@@ -144,8 +150,7 @@ function clearedLaunchPadSlotCell(
     padColor: keepPadColor,
     samplePath: null,
     padGain: 1,
-    padKeyCode: null,
-    padKeyMode: readLaunchPadDefaultKeyMode(),
+    padDisplayName: null,
   }
 }
 
@@ -215,7 +220,12 @@ export type RegiaContextValue = {
     patch: Partial<
       Pick<
         LaunchPadCell,
-        'samplePath' | 'padColor' | 'padGain' | 'padKeyCode' | 'padKeyMode'
+        | 'samplePath'
+        | 'padColor'
+        | 'padGain'
+        | 'padDisplayName'
+        | 'padKeyCode'
+        | 'padKeyMode'
       >
     >,
     options?: { skipUndo?: boolean },
@@ -287,8 +297,8 @@ export type RegiaContextValue = {
   bringFloatingPanelToFront: (key: string) => void
   addFloatingPlaylist: () => void
   /**
-   * Apre un Launchpad 4×4; con `base` usa `public/launchpad-base`, con `sfx`
-   * `public/launchpad-sfx` (se le cartelle ci sono dopo build / gen script).
+   * Apre un Launchpad 4×4; `base` e `sfx` usano cartelle distinte (stesso tipo di
+   * campioni se rigenerati con gli script npm; vedi `public/launchpad-*`).
    */
   addFloatingLaunchPad: (kit?: 'base' | 'sfx') => Promise<void>
   removeFloatingPlaylist: (id: string) => Promise<void>
@@ -502,7 +512,15 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
             : 1
         const padKeyCode = normalizePersistedPadKeyCode(c.padKeyCode)
         const padKeyMode = normalizeLaunchPadKeyMode(c.padKeyMode)
-        return { samplePath, padColor, padGain, padKeyCode, padKeyMode }
+        const padDisplayName = normalizeLaunchPadDisplayName(c.padDisplayName)
+        return {
+          samplePath,
+          padColor,
+          padGain,
+          padDisplayName,
+          padKeyCode,
+          padKeyMode,
+        }
       })
     } else {
       launchPadCells = defaults
@@ -584,7 +602,15 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
               : 1
           const padKeyCode = normalizePersistedPadKeyCode(c.padKeyCode)
           const padKeyMode = normalizeLaunchPadKeyMode(c.padKeyMode)
-          return { samplePath, padColor, padGain, padKeyCode, padKeyMode }
+          const padDisplayName = normalizeLaunchPadDisplayName(c.padDisplayName)
+          return {
+            samplePath,
+            padColor,
+            padGain,
+            padDisplayName,
+            padKeyCode,
+            padKeyMode,
+          }
         })
     }
   }
@@ -1793,17 +1819,6 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  useEffect(() => {
-    const anyPinned = floatingSessions.some(
-      (s) => s.windowAlwaysOnTopPinned === true,
-    )
-    void window.electronAPI
-      .setRegiaWindowAlwaysOnTop(anyPinned)
-      .catch(() => {
-        /* ignore */
-      })
-  }, [floatingSessions])
-
   const setActiveFloatingSession = useCallback(
     (id: string) => {
       setActiveFloatingSessionId(id)
@@ -2531,7 +2546,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     bankIndex: number
     slotIndex: number
     keyMode: 'play' | 'toggle'
-    timer: ReturnType<typeof setTimeout> | null
+    /** `window.setTimeout` nel renderer (compatibile con tipi DOM + Node). */
+    timer: number | null
     cueCommitted: boolean
   }
   const padKeyboardGestureRef = useRef<PadKeyboardGesture | null>(null)
@@ -2714,7 +2730,12 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       patch: Partial<
         Pick<
           LaunchPadCell,
-          'samplePath' | 'padColor' | 'padGain' | 'padKeyCode' | 'padKeyMode'
+          | 'samplePath'
+          | 'padColor'
+          | 'padGain'
+          | 'padDisplayName'
+          | 'padKeyCode'
+          | 'padKeyMode'
         >
       >,
       options?: { skipUndo?: boolean },
@@ -2731,6 +2752,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         ('samplePath' in patch && patch.samplePath !== undefined) ||
         ('padColor' in patch && patch.padColor !== undefined) ||
         ('padGain' in patch && patch.padGain !== undefined) ||
+        ('padDisplayName' in patch && patch.padDisplayName !== undefined) ||
         ('padKeyCode' in patch && patch.padKeyCode !== undefined) ||
         ('padKeyMode' in patch && patch.padKeyMode !== undefined)
       if (!hasPatch) return
@@ -2740,12 +2762,15 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const touchesPadKey =
         ('padKeyCode' in patch && patch.padKeyCode !== undefined) ||
         ('padKeyMode' in patch && patch.padKeyMode !== undefined)
+      const touchesDisplayName =
+        'padDisplayName' in patch && patch.padDisplayName !== undefined
       const touchesGainOnly =
         !touchesSampleOrColor &&
         !touchesPadKey &&
+        !touchesDisplayName &&
         'padGain' in patch &&
         patch.padGain !== undefined
-      if (touchesSampleOrColor || touchesPadKey) {
+      if (touchesSampleOrColor || touchesPadKey || touchesDisplayName) {
         recordUndoPoint()
       } else if (touchesGainOnly && !options?.skipUndo) {
         recordUndoPoint()
@@ -2790,14 +2815,19 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             : 1
         let padKeyCode = c.padKeyCode ?? null
         let padKeyMode = normalizeLaunchPadKeyMode(c.padKeyMode)
+        let padDisplayName = normalizeLaunchPadDisplayName(c.padDisplayName)
         if ('samplePath' in patch && patch.samplePath !== undefined) {
           samplePath = patch.samplePath
           if (patch.samplePath === null) {
             padGain = 1
+            padDisplayName = null
           }
         }
         if ('padGain' in patch && patch.padGain !== undefined) {
           padGain = Math.min(1, Math.max(0, patch.padGain))
+        }
+        if ('padDisplayName' in patch && patch.padDisplayName !== undefined) {
+          padDisplayName = normalizeLaunchPadDisplayName(patch.padDisplayName)
         }
         if ('padKeyCode' in patch && patch.padKeyCode !== undefined) {
           padKeyCode =
@@ -2811,7 +2841,14 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         if ('padKeyMode' in patch && patch.padKeyMode !== undefined) {
           padKeyMode = normalizeLaunchPadKeyMode(patch.padKeyMode)
         }
-        return { padColor, samplePath, padGain, padKeyCode, padKeyMode }
+        return {
+          padColor,
+          samplePath,
+          padGain,
+          padDisplayName,
+          padKeyCode,
+          padKeyMode,
+        }
       })
       banks[bi] = cells
       const loaded = playbackLoadedTrackRef.current
@@ -4238,6 +4275,7 @@ function FloaterOsPlaylistBridge({
           width: Math.round(s.panelSize.width),
           height: Math.round(h),
         })
+        regiaRef.current.updateFloatingPlaylistChrome(s.id, { pos: { x: 0, y: 0 } })
         setPlaylistFloaterOsSessionIds((prev) =>
           prev.includes(s.id) ? prev : [...prev, s.id],
         )

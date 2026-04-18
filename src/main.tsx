@@ -1,7 +1,10 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
+import { regiaProgramDocumentTitle } from './lib/regiaAppBranding.ts'
 import App from './App.tsx'
+
+document.title = regiaProgramDocumentTitle()
 import PlaylistFloaterEntry from './floater/PlaylistFloaterEntry.tsx'
 
 const playlistFloaterParams = new URLSearchParams(window.location.search)

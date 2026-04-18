@@ -2,11 +2,11 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { PlaybackCommand } from './types'
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  /** Percorsi assoluti dei sample del kit «Launchpad base» (vuoto se cartella assente). */
+  /** Kit predefinito Launchpad (campioni in public/launchpad-base; vuoto se assente). */
   launchpadBaseKitPaths: (): Promise<string[]> =>
     ipcRenderer.invoke('launchpad-base:kitPaths'),
 
-  /** Kit «reazioni / SFX» in public/launchpad-sfx (vuoto se cartella assente). */
+  /** Stesso tipo di kit in public/launchpad-sfx (duplicato se rigeneri con npm run gen:…). */
   launchpadSfxKitPaths: (): Promise<string[]> =>
     ipcRenderer.invoke('launchpad-sfx:kitPaths'),
 
@@ -65,6 +65,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       samplePath: string | null
       padColor: string
       padGain: number
+      padDisplayName?: string | null
       padKeyCode?: string | null
       padKeyMode?: 'play' | 'toggle'
     }>
@@ -88,6 +89,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       samplePath: string | null
       padColor: string
       padGain: number
+      padDisplayName?: string | null
       padKeyCode?: string | null
       padKeyMode?: 'play' | 'toggle'
     }>
@@ -128,10 +130,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('regia:output-audio-level', fn)
   },
 
-  /** Finestra regia sopra le altre app; si spegne quando nessun pannello ha il pin attivo. */
-  setRegiaWindowAlwaysOnTop: (on: boolean): Promise<void> =>
-    ipcRenderer.invoke('regia:setWindowAlwaysOnTop', on),
-
   getRegiaContentBounds: (): Promise<{
     x: number
     y: number
@@ -161,6 +159,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   playlistFloaterSendAction: (method: string, args: unknown[]): void => {
     ipcRenderer.send('playlistFloater:sendAction', { method, args })
   },
+
+  playlistFloaterSetBounds: (partial: {
+    x?: number
+    y?: number
+    width?: number
+    height?: number
+  }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('playlistFloater:setBounds', partial),
 
   onPlaylistFloaterState: (
     handler: (payload: unknown) => void,

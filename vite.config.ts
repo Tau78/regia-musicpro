@@ -3,6 +3,12 @@ import react from '@vitejs/plugin-react'
 import fs from 'node:fs'
 import path from 'node:path'
 
+const pkgPath = path.resolve(__dirname, 'package.json')
+const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
+  version?: string
+  regiaProgramCreatedOn?: string
+}
+
 /** Scrive l'URL reale del dev server così Electron non dipende da una porta fissa (es. 5173 già in uso). */
 function electronDevServerUrlPlugin(): Plugin {
   const urlFile = path.resolve(__dirname, 'dist-electron/dev-server-url.txt')
@@ -35,6 +41,14 @@ function electronDevServerUrlPlugin(): Plugin {
 
 export default defineConfig({
   plugins: [react(), electronDevServerUrlPlugin()],
+  define: {
+    __REGIA_APP_VERSION__: JSON.stringify(pkg.version ?? '0.0.0'),
+    __REGIA_APP_CREATED__: JSON.stringify(
+      typeof pkg.regiaProgramCreatedOn === 'string'
+        ? pkg.regiaProgramCreatedOn
+        : '',
+    ),
+  },
   base: './',
   build: {
     rollupOptions: {

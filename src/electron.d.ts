@@ -31,6 +31,7 @@ declare global {
           samplePath: string | null
           padColor: string
           padGain: number
+          padDisplayName?: string | null
           padKeyCode?: string | null
           padKeyMode?: 'play' | 'toggle'
         }>
@@ -54,6 +55,7 @@ declare global {
           samplePath: string | null
           padColor: string
           padGain: number
+          padDisplayName?: string | null
           padKeyCode?: string | null
           padKeyMode?: 'play' | 'toggle'
         }>
@@ -70,8 +72,6 @@ declare global {
 
       reportOutputAudioLevel?: (level: number) => void
       onOutputAudioLevel?: (handler: (level: number) => void) => () => void
-
-      setRegiaWindowAlwaysOnTop: (on: boolean) => Promise<void>
 
       getRegiaContentBounds: () => Promise<{
         x: number
@@ -96,6 +96,13 @@ declare global {
       ) => Promise<{ ok: boolean }>
 
       playlistFloaterSendAction: (method: string, args: unknown[]) => void
+
+      playlistFloaterSetBounds: (partial: {
+        x?: number
+        y?: number
+        width?: number
+        height?: number
+      }) => Promise<{ ok: boolean }>
 
       onPlaylistFloaterState: (handler: (payload: unknown) => void) => () => void
 

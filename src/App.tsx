@@ -16,6 +16,7 @@ import DraggableAudioOutputBar from './components/DraggableAudioOutputBar.tsx'
 import SettingsModal, { IconSettingsGear } from './components/SettingsModal.tsx'
 import { clampSidebarWidth } from './lib/sidebarLayout.ts'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
+import { formatRegiaProgramCreatedIt } from './lib/regiaAppBranding.ts'
 import { RegiaProvider, useRegia } from './state/RegiaContext.tsx'
 
 function RegiaShell() {
@@ -131,7 +132,16 @@ function RegiaShell() {
       <header className="regia-header">
         <div className="regia-brand">
           <span className="regia-dot" aria-hidden />
-          <h1>REGIA MUSICPRO</h1>
+          <h1>
+            <span className="regia-brand-name">REGIA MUSICPRO</span>
+            <span className="regia-brand-meta" aria-label="Versione e data">
+              {' '}
+              v{__REGIA_APP_VERSION__}
+              {__REGIA_APP_CREATED__
+                ? ` · ${formatRegiaProgramCreatedIt(__REGIA_APP_CREATED__)}`
+                : null}
+            </span>
+          </h1>
         </div>
         <div className="regia-header-right">
           <div className="regia-header-controls">

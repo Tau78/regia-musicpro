@@ -36,6 +36,11 @@ export type LaunchPadCell = {
   /** Guadagno per questo pad (0–1), moltiplicato a volume globale e volume pannello. */
   padGain: number
   /**
+   * Etichetta mostrata sul pad al posto del nome file (opzionale).
+   * `null` o vuoto = usa il basename del file.
+   */
+  padDisplayName: string | null
+  /**
    * Scorciatoia tastiera (`KeyboardEvent.code`), es. `KeyQ`, `Digit1`.
    * `null` = non assegnato. MIDI sarà un campo separato in seguito.
    */
@@ -45,6 +50,34 @@ export type LaunchPadCell = {
    * `toggle` = play se fermo, stop se già in play su questo slot.
    */
   padKeyMode: LaunchPadKeyMode
+}
+
+/** `KeyboardEvent.code` predefinito: tasti 1…9 sul pad 1…9, 0 sul pad 10. */
+export function defaultLaunchPadKeyCodeForSlot(
+  slotIndex: number,
+): string | null {
+  if (slotIndex < 0 || slotIndex >= LAUNCHPAD_CELL_COUNT) return null
+  if (slotIndex < 9) return `Digit${slotIndex + 1}`
+  if (slotIndex === 9) return 'Digit0'
+  return null
+}
+
+export function normalizeLaunchPadDisplayName(v: unknown): string | null {
+  if (v == null) return null
+  if (typeof v !== 'string') return null
+  const t = v.trim().replace(/\s+/g, ' ').slice(0, 120)
+  return t === '' ? null : t
+}
+
+/** Testo mostrato sul pad: nome personalizzato o basename del sample. */
+export function launchPadCellShownLabel(cell: LaunchPadCell): string {
+  const custom = normalizeLaunchPadDisplayName(cell.padDisplayName)
+  if (custom) return custom
+  if (cell.samplePath) {
+    const base = cell.samplePath.split(/[/\\]/).pop() ?? cell.samplePath
+    return base || '—'
+  }
+  return '—'
 }
 
 const DEFAULT_LAUNCHPAD_PAD_COLORS: readonly string[] = [
@@ -72,7 +105,8 @@ export function defaultLaunchPadCells(): LaunchPadCell[] {
     samplePath: null,
     padColor: DEFAULT_LAUNCHPAD_PAD_COLORS[i] ?? '#444cf7',
     padGain: 1,
-    padKeyCode: null,
+    padDisplayName: null,
+    padKeyCode: defaultLaunchPadKeyCodeForSlot(i),
     padKeyMode: defaultMode,
   }))
 }
@@ -257,6 +291,9 @@ export function cloneLaunchPadBanksDeep(
             : null,
         padColor: typeof c.padColor === 'string' ? c.padColor : d.padColor,
         padGain,
+        padDisplayName: normalizeLaunchPadDisplayName(
+          (c as LaunchPadCell).padDisplayName,
+        ),
         padKeyCode: c.padKeyCode ?? null,
         padKeyMode: normalizeLaunchPadKeyMode(c.padKeyMode),
       }
@@ -291,6 +328,9 @@ export function cloneLaunchPadCellsSnapshot(
           : null,
       padColor: typeof c.padColor === 'string' ? c.padColor : d.padColor,
       padGain,
+      padDisplayName: normalizeLaunchPadDisplayName(
+        (c as LaunchPadCell).padDisplayName,
+      ),
       padKeyCode: c.padKeyCode ?? null,
       padKeyMode,
     }
@@ -316,6 +356,9 @@ export function launchPadCellsEqual(
     const mx = x.padKeyMode === 'toggle' ? 'toggle' : 'play'
     const my = y.padKeyMode === 'toggle' ? 'toggle' : 'play'
     if (mx !== my) return false
+    const dx = normalizeLaunchPadDisplayName(x.padDisplayName)
+    const dy = normalizeLaunchPadDisplayName(y.padDisplayName)
+    if (dx !== dy) return false
   }
   return true
 }
