@@ -18,9 +18,8 @@ import {
 } from '../lib/floatingPanelGeometry.ts'
 import {
   buildPeerDimensionTargets,
-  dispatchRegiaSnapGuides,
   queryPlanciaContentRect,
-  snapFloatingPanelDragPosWithGuides,
+  snapFloatingPanelDragPos,
   snapFloatingPanelResize,
   type PeerSnapRect,
 } from '../lib/planciaSnap.ts'
@@ -324,21 +323,18 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
       const plancia = snapEnabled ? queryPlanciaContentRect() : null
       let c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
       if (snapEnabled && plancia) {
-        const sn = snapFloatingPanelDragPosWithGuides(
+        const snapped = snapFloatingPanelDragPos(
           c,
           { width: el.offsetWidth, height: el.offsetHeight },
           plancia,
           dragSnapPeerRects,
         )
         c = clampPosToViewport(
-          sn.pos.x,
-          sn.pos.y,
+          snapped.x,
+          snapped.y,
           el.offsetWidth,
           el.offsetHeight,
         )
-        dispatchRegiaSnapGuides(sn.guides)
-      } else {
-        dispatchRegiaSnapGuides([])
       }
       setPos(c)
     },
@@ -358,20 +354,19 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
         ? clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
         : { x: nx, y: ny }
       if (el && snapEnabled && plancia) {
-        const sn = snapFloatingPanelDragPosWithGuides(
+        const snapped = snapFloatingPanelDragPos(
           next,
           { width: el.offsetWidth, height: el.offsetHeight },
           plancia,
           dragSnapPeerRects,
         )
         next = clampPosToViewport(
-          sn.pos.x,
-          sn.pos.y,
+          snapped.x,
+          snapped.y,
           el.offsetWidth,
           el.offsetHeight,
         )
       }
-      dispatchRegiaSnapGuides([])
       setPos(next)
       persistLayoutToLs(next, panelSize)
     },

@@ -11,21 +11,6 @@ import { isStillImagePath } from './mediaPaths.ts'
 const CROSSFADE_MS = 480
 const DEFAULT_STILL_IMAGE_DURATION_MS = 8000
 
-/** Chromium: dopo `createMediaElementSource` l’audio esce solo dal grafo Web Audio (`destination`), non dal sink del `<video>`. */
-type AudioContextWithSink = AudioContext & {
-  setSinkId?: (sinkId: string) => Promise<void>
-}
-
-function applySinkToAudioContext(
-  ctx: AudioContext | null,
-  sinkId: string,
-): void {
-  if (!ctx) return
-  const set = (ctx as AudioContextWithSink).setSinkId
-  if (typeof set !== 'function') return
-  void set.call(ctx, sinkId).catch(() => {})
-}
-
 type Slot = 0 | 1
 
 function preloadImage(src: string): Promise<void> {
@@ -46,8 +31,6 @@ type MediaSnap = {
 export default function OutputApp() {
   const vRef0 = useRef<HTMLVideoElement>(null)
   const vRef1 = useRef<HTMLVideoElement>(null)
-  /** Contesto usato per meter + `destination`; deve usare lo stesso sink dei video altrimenti l’HDMI/dispositivo scelto resta muto. */
-  const meterAudioContextRef = useRef<AudioContext | null>(null)
 
   const [videoSrc, setVideoSrc] = useState<[string | null, string | null]>([
     null,
@@ -60,6 +43,10 @@ export default function OutputApp() {
   const [front, setFront] = useState<Slot>(0)
   const [opacity, setOpacity] = useState<[number, number]>([1, 0])
   const [opacityTransition, setOpacityTransition] = useState(false)
+  const opacityTransitionRef = useRef(false)
+  useLayoutEffect(() => {
+    opacityTransitionRef.current = opacityTransition
+  }, [opacityTransition])
 
   const mediaSnapRef = useRef<MediaSnap>({
     front: 0,
@@ -89,6 +76,10 @@ export default function OutputApp() {
     null,
   )
   const [transportPlaying, setTransportPlaying] = useState(false)
+  const transportPlayingRef = useRef(false)
+  useLayoutEffect(() => {
+    transportPlayingRef.current = transportPlaying
+  }, [transportPlaying])
   const [outputLoopOne, setOutputLoopOne] = useState(false)
   const stillImageDurationMsRef = useRef(DEFAULT_STILL_IMAGE_DURATION_MS)
   const [stillDurationEpoch, setStillDurationEpoch] = useState(0)
@@ -214,7 +205,7 @@ export default function OutputApp() {
   )
 
   const runLoadTask = useCallback(
-    async (src: string) => {
+    async (src: string, crossfadeForThisLoad: boolean) => {
       clearStillAdvanceTimer()
       loadGenRef.current += 1
       const myGen = loadGenRef.current
@@ -231,8 +222,9 @@ export default function OutputApp() {
       const curStill = Boolean(curI)
       const nextStill = isStillImagePath(src)
 
+      /** Valore catturato sul comando `load`: evita che `setCrossfade` IPC arrivi prima dell’esecuzione e azzeri il ref. */
       const useFade =
-        crossfadeRef.current && had && curStill === nextStill
+        crossfadeForThisLoad && had && curStill === nextStill
 
       if (!useFade) {
         applyInstantLoad(src)
@@ -274,10 +266,17 @@ export default function OutputApp() {
           n[incoming] = null
           return n
         })
-        await new Promise<void>((r) => requestAnimationFrame(() => r()))
-        await new Promise<void>((r) => requestAnimationFrame(() => r()))
+        const deadline = performance.now() + 1200
+        let elIn: HTMLVideoElement | null = null
+        while (performance.now() < deadline) {
+          if (myGen !== loadGenRef.current) return
+          elIn = incoming === 0 ? vRef0.current : vRef1.current
+          if (elIn) break
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve())
+          })
+        }
         if (myGen !== loadGenRef.current) return
-        const elIn = incoming === 0 ? vRef0.current : vRef1.current
         if (!elIn) {
           applyInstantLoad(src)
           return
@@ -366,10 +365,12 @@ export default function OutputApp() {
   )
 
   const handleLoad = useCallback(
-    (src: string) => {
+    (src: string, crossfadeFromCmd?: boolean) => {
+      const crossfadeForQueued =
+        crossfadeFromCmd !== undefined ? crossfadeFromCmd : crossfadeRef.current
       loadQueueRef.current = loadQueueRef.current
         .catch(() => {})
-        .then(() => runLoadTask(src))
+        .then(() => runLoadTask(src, crossfadeForQueued))
       void loadQueueRef.current
     },
     [runLoadTask],
@@ -410,7 +411,7 @@ export default function OutputApp() {
           if (cmd.crossfade !== undefined) {
             crossfadeRef.current = cmd.crossfade
           }
-          void handleLoad(cmd.src)
+          void handleLoad(cmd.src, cmd.crossfade)
           break
         case 'setCrossfade':
           crossfadeRef.current = cmd.enabled
@@ -467,7 +468,6 @@ export default function OutputApp() {
           sinkIdRef.current = cmd.sinkId
           if (vRef0.current) applySinkToVideo(vRef0.current)
           if (vRef1.current) applySinkToVideo(vRef1.current)
-          applySinkToAudioContext(meterAudioContextRef.current, cmd.sinkId)
           break
         case 'setLoopOne':
           loopRef.current = cmd.loop
@@ -498,80 +498,22 @@ export default function OutputApp() {
     return unsub
   }, [apply])
 
+  /** Dopo hide/show della finestra Electron il decoder può restare fermo: riprendi play se il trasporto è in «play». */
   useEffect(() => {
-    const report = window.electronAPI?.reportOutputAudioLevel
-    if (typeof report !== 'function') return
-    let ctx: AudioContext | null = null
-    let merger: GainNode | null = null
-    let analyser: AnalyserNode | null = null
-    let src0: MediaElementAudioSourceNode | null = null
-    let src1: MediaElementAudioSourceNode | null = null
-    let raf = 0
-    let tick = 0
-
-    const connectIfPossible = () => {
-      const a0 = vRef0.current
-      const a1 = vRef1.current
-      if (!a0 || !a1 || ctx) return
-      try {
-        const c = new AudioContext()
-        ctx = c
-        meterAudioContextRef.current = c
-        applySinkToAudioContext(c, sinkIdRef.current)
-        merger = c.createGain()
-        merger.gain.value = 1
-        analyser = c.createAnalyser()
-        analyser.fftSize = 512
-        merger.connect(analyser)
-        analyser.connect(c.destination)
-        src0 = c.createMediaElementSource(a0)
-        src1 = c.createMediaElementSource(a1)
-        src0.connect(merger)
-        src1.connect(merger)
-      } catch {
-        ctx = null
-        meterAudioContextRef.current = null
-      }
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return
+      if (!transportPlayingRef.current) return
+      if (opacityTransitionRef.current) return
+      if (crossfadeIncomingRef.current != null) return
+      if (stillCrossfadePreparingRef.current) return
+      const snap = mediaSnapRef.current
+      const fel = snap.front === 0 ? vRef0.current : vRef1.current
+      const img = snap.image[snap.front]
+      if (img || !fel) return
+      void fel.play().catch(() => {})
     }
-
-    const loop = () => {
-      raf = requestAnimationFrame(loop)
-      if (!analyser) return
-      tick += 1
-      if (tick % 2 !== 0) return
-      const buf = new Uint8Array(analyser.frequencyBinCount)
-      analyser.getByteTimeDomainData(buf)
-      let sum = 0
-      for (let i = 0; i < buf.length; i++) {
-        const v = (buf[i]! - 128) / 128
-        sum += v * v
-      }
-      const rms = Math.sqrt(sum / buf.length)
-      report(Math.min(1, rms * 4.2))
-    }
-
-    const onAnyPlay = () => {
-      void ctx?.resume().catch(() => {})
-      connectIfPossible()
-      if (ctx && !raf) raf = requestAnimationFrame(loop)
-    }
-
-    const v0 = vRef0.current
-    const v1 = vRef1.current
-    v0?.addEventListener('playing', onAnyPlay)
-    v1?.addEventListener('playing', onAnyPlay)
-    connectIfPossible()
-    if (ctx) raf = requestAnimationFrame(loop)
-
-    return () => {
-      v0?.removeEventListener('playing', onAnyPlay)
-      v1?.removeEventListener('playing', onAnyPlay)
-      cancelAnimationFrame(raf)
-      raf = 0
-      meterAudioContextRef.current = null
-      void ctx?.close()
-      ctx = null
-    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
   }, [])
 
   const onVideoEnded = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {

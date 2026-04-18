@@ -10,39 +10,32 @@ import {
 import FloatingPlaylist from './components/FloatingPlaylist.tsx'
 import FloatingPreview from './components/FloatingPreview.tsx'
 import PreviewBlock from './components/PreviewBlock.tsx'
-import PlanciaSnapGuidesOverlay from './components/PlanciaSnapGuidesOverlay.tsx'
 import PlanciaWorkspaceBanner from './components/PlanciaWorkspaceBanner.tsx'
 import SidebarTabsPanel from './components/SidebarTabsPanel.tsx'
 import DraggableAudioOutputBar from './components/DraggableAudioOutputBar.tsx'
-import HeaderTransportBar from './components/HeaderTransportBar.tsx'
 import SettingsModal, { IconSettingsGear } from './components/SettingsModal.tsx'
 import { clampSidebarWidth } from './lib/sidebarLayout.ts'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
-import { RegiaProvider, useRegia, type LoopMode } from './state/RegiaContext.tsx'
+import { RegiaProvider, useRegia } from './state/RegiaContext.tsx'
 
 function RegiaShell() {
   const {
     togglePlay,
     goNext,
     goPrev,
-    loopMode,
-    setLoopMode,
-    secondScreenOn,
-    toggleSecondScreen,
     floatingPlaylistOpen,
     floatingPlaylistSessions,
+    playlistFloaterOsSessionIds,
     canUndo,
     canRedo,
     undo,
     redo,
     previewDetached,
     setPreviewDocked,
-    setPreviewFloating,
     sidebarOpen,
     toggleSidebarOpen,
     sidebarWidthPx,
     setSidebarWidthPx,
-    repositionAllFloatingPanels,
   } = useRegia()
 
   const [sidebarResizeActive, setSidebarResizeActive] = useState(false)
@@ -135,7 +128,6 @@ function RegiaShell() {
 
   return (
     <div className="regia-app">
-      <PlanciaSnapGuidesOverlay />
       <header className="regia-header">
         <div className="regia-brand">
           <span className="regia-dot" aria-hidden />
@@ -143,53 +135,7 @@ function RegiaShell() {
         </div>
         <div className="regia-header-right">
           <div className="regia-header-controls">
-            <HeaderTransportBar />
             <DraggableAudioOutputBar />
-            <button
-              type="button"
-              className={`btn-toggle ${!secondScreenOn ? 'is-screen-off' : ''}`}
-              onClick={toggleSecondScreen}
-              aria-pressed={secondScreenOn}
-              title={
-                secondScreenOn
-                  ? 'Uscita attiva sul secondo schermo: clic per nascondere la finestra (monitor libero)'
-                  : 'Uscita nascosta sul secondo schermo: l’audio resta sul dispositivo scelto in barra; clic per mostrare la finestra (risoluzione in Impostazioni)'
-              }
-            >
-              Schermo 2: {secondScreenOn ? 'On' : 'Off'}
-            </button>
-            <LoopToggles mode={loopMode} onChange={setLoopMode} />
-            <div className="regia-undo-redo" role="group" aria-label="Annulla e ripristina">
-              {floatingPlaylistOpen && floatingPlaylistSessions.length > 0 ? (
-                <button
-                  type="button"
-                  className="btn-icon regia-reposition-panels-btn"
-                  onClick={() => repositionAllFloatingPanels()}
-                  title="Riposiziona tutti i pannelli flottanti a cascata nell’area principale (evita fuori schermo)"
-                  aria-label="Riposiziona pannelli flottanti"
-                >
-                  Griglia
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="btn-icon regia-undo-btn"
-                disabled={!canUndo}
-                onClick={() => undo()}
-                title="Annulla (⌘Z / Ctrl+Z)"
-              >
-                Annulla
-              </button>
-              <button
-                type="button"
-                className="btn-icon regia-redo-btn"
-                disabled={!canRedo}
-                onClick={() => redo()}
-                title="Ripristina (⌘⇧Z / Ctrl+⇧Z)"
-              >
-                Ripristina
-              </button>
-            </div>
           </div>
           <button
             type="button"
@@ -250,17 +196,6 @@ function RegiaShell() {
         <div className="regia-main-content">
           {!previewDetached ? (
             <section className="preview-panel" aria-label="Anteprima">
-              <div className="preview-panel-toolbar">
-                <span className="preview-panel-toolbar-label">Anteprima</span>
-                <button
-                  type="button"
-                  className="preview-panel-detach-btn"
-                  onClick={setPreviewFloating}
-                  title="Anteprima in finestra flottante: trascina dall’intestazione per spostarla"
-                >
-                  Stacca
-                </button>
-              </div>
               <PreviewBlock />
             </section>
           ) : (
@@ -288,44 +223,10 @@ function RegiaShell() {
       <PlanciaWorkspaceBanner />
 
       {floatingPlaylistOpen
-        ? floatingPlaylistSessions.map((s) => (
-            <FloatingPlaylist key={s.id} sessionId={s.id} />
-          ))
+        ? floatingPlaylistSessions
+            .filter((s) => !playlistFloaterOsSessionIds.includes(s.id))
+            .map((s) => <FloatingPlaylist key={s.id} sessionId={s.id} />)
         : null}
-    </div>
-  )
-}
-
-function LoopToggles({
-  mode,
-  onChange,
-}: {
-  mode: LoopMode
-  onChange: (m: LoopMode) => void
-}) {
-  return (
-    <div className="loop-toggles" role="group" aria-label="Modalità loop">
-      <button
-        type="button"
-        className={mode === 'off' ? 'is-active' : ''}
-        onClick={() => onChange('off')}
-      >
-        Loop off
-      </button>
-      <button
-        type="button"
-        className={mode === 'one' ? 'is-active' : ''}
-        onClick={() => onChange('one')}
-      >
-        Loop file
-      </button>
-      <button
-        type="button"
-        className={mode === 'all' ? 'is-active' : ''}
-        onClick={() => onChange('all')}
-      >
-        Loop playlist
-      </button>
     </div>
   )
 }

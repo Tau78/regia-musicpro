@@ -7,6 +7,9 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import AudioOutputBar from './AudioOutputBar.tsx'
+import LogicPreviewScreenStrip from './LogicPreviewScreenStrip.tsx'
+import LogicSecondaryStrip from './LogicSecondaryStrip.tsx'
+import LogicTransportStrip from './LogicTransportStrip.tsx'
 import {
   persistAudioBarLayout,
   readAudioBarLayout,
@@ -19,6 +22,34 @@ function clampWindowPos(x: number, y: number, w: number, h: number) {
     x: Math.min(maxX, Math.max(8, x)),
     y: Math.min(maxY, Math.max(8, y)),
   }
+}
+
+/** True se il target è (dentro) un controllo che non deve avviare il drag. */
+function isInteractiveDragBlocker(target: EventTarget | null): boolean {
+  if (!target || !(target instanceof Element)) return false
+  return Boolean(
+    target.closest(
+      'button, input, select, textarea, option, label, a, [data-no-drag]',
+    ),
+  )
+}
+
+/** Aggancia nell’header (quando la barra è flottante). */
+function IconPinDock() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden fill="currentColor">
+      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5S10.62 6.5 12 6.5s2.5 1.12 2.5 2.5S13.38 11.5 12 11.5z" />
+    </svg>
+  )
+}
+
+/** Stacca (quando la barra è nell’header). */
+function IconPinFloat() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden fill="currentColor">
+      <path d="M19 19H5V5h7V3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42L17.59 5H14V3z" />
+    </svg>
+  )
 }
 
 export default function DraggableAudioOutputBar() {
@@ -40,7 +71,7 @@ export default function DraggableAudioOutputBar() {
     const el = wrapRef.current
     if (!el) return
     const w = el.offsetWidth || 320
-    const h = el.offsetHeight || 44
+    const h = el.offsetHeight || 52
     setPos((p) => clampWindowPos(p.x, p.y, w, h))
   }, [])
 
@@ -63,9 +94,10 @@ export default function DraggableAudioOutputBar() {
     setDocked(false)
   }, [])
 
-  const onGripPointerDown = useCallback(
-    (e: ReactPointerEvent<HTMLButtonElement>) => {
+  const onRowPointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
       if (docked || e.button !== 0) return
+      if (isInteractiveDragBlocker(e.target)) return
       e.preventDefault()
       dragRef.current = {
         pointerId: e.pointerId,
@@ -81,22 +113,22 @@ export default function DraggableAudioOutputBar() {
     [docked, pos.x, pos.y],
   )
 
-  const onGripPointerMove = useCallback(
-    (e: ReactPointerEvent<HTMLButtonElement>) => {
+  const onRowPointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
       const d = dragRef.current
       if (!d || e.pointerId !== d.pointerId) return
       const nx = e.clientX - d.originX
       const ny = e.clientY - d.originY
       const el = wrapRef.current
       const w = el?.offsetWidth ?? 320
-      const h = el?.offsetHeight ?? 44
+      const h = el?.offsetHeight ?? 52
       setPos(clampWindowPos(nx, ny, w, h))
     },
     [],
   )
 
-  const onGripPointerUp = useCallback(
-    (e: ReactPointerEvent<HTMLButtonElement>) => {
+  const onRowPointerUp = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
       const d = dragRef.current
       if (!d || e.pointerId !== d.pointerId) return
       dragRef.current = null
@@ -125,39 +157,36 @@ export default function DraggableAudioOutputBar() {
       className={`regia-audio-dock-wrap ${!docked ? 'is-floating' : ''}`}
       style={floatingStyle}
     >
-      <div className="regia-audio-dock-inner">
+      <div
+        className={`regia-audio-dock-inner regia-audio-dock-inner--single-row ${!docked ? 'is-drag-surface' : ''}`}
+        onPointerDown={onRowPointerDown}
+        onPointerMove={onRowPointerMove}
+        onPointerUp={onRowPointerUp}
+        onPointerCancel={onRowPointerUp}
+      >
+        <LogicTransportStrip />
+        <span className="logic-bar-divider" aria-hidden />
+        <LogicSecondaryStrip />
+        <span className="logic-bar-divider" aria-hidden />
+        <LogicPreviewScreenStrip />
+        <span className="logic-bar-divider" aria-hidden />
+        <div className="regia-audio-dock-audio">
+          <AudioOutputBar variant="inline" />
+        </div>
         <button
           type="button"
-          className="regia-audio-dock-grip"
-          disabled={docked}
-          onPointerDown={onGripPointerDown}
-          onPointerMove={onGripPointerMove}
-          onPointerUp={onGripPointerUp}
-          onPointerCancel={onGripPointerUp}
-          title={
-            docked
-              ? 'Stacca la barra per poterla trascinare'
-              : 'Trascina per spostare la barra'
-          }
-          aria-label="Trascina barra volume e uscita"
-        >
-          <span aria-hidden>⋮⋮</span>
-        </button>
-        <button
-          type="button"
-          className="regia-audio-dock-pin"
+          className="regia-audio-dock-pin-icon"
           onClick={() => {
             if (docked) undock()
             else setDocked(true)
           }}
-          title={
-            docked ? 'Stacca dalla barra superiore' : 'Aggancia nell’header'
+          title={docked ? 'Stacca barra (trascina da zone vuote)' : 'Aggancia nell’header'}
+          aria-label={
+            docked ? 'Stacca barra dalla barra superiore' : 'Aggancia barra nell’header'
           }
-          aria-label={docked ? 'Stacca barra audio' : 'Aggancia barra audio nell’header'}
         >
-          {docked ? 'Stacca' : 'Header'}
+          {docked ? <IconPinFloat /> : <IconPinDock />}
         </button>
-        <AudioOutputBar variant="toolbar" />
       </div>
     </div>
   )

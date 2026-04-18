@@ -72,6 +72,47 @@ declare global {
       onOutputAudioLevel?: (handler: (level: number) => void) => () => void
 
       setRegiaWindowAlwaysOnTop: (on: boolean) => Promise<void>
+
+      getRegiaContentBounds: () => Promise<{
+        x: number
+        y: number
+        width: number
+        height: number
+      } | null>
+
+      openPlaylistFloaterWindow: (opts: {
+        sessionId: string
+        x: number
+        y: number
+        width: number
+        height: number
+      }) => Promise<{ ok: boolean }>
+
+      closePlaylistFloaterWindow: (sessionId: string) => Promise<{ ok: boolean }>
+
+      playlistFloaterBroadcastState: (
+        sessionId: string,
+        payload: unknown,
+      ) => Promise<{ ok: boolean }>
+
+      playlistFloaterSendAction: (method: string, args: unknown[]) => void
+
+      onPlaylistFloaterState: (handler: (payload: unknown) => void) => () => void
+
+      onPlaylistFloaterActionFromMain: (
+        handler: (msg: {
+          sessionId: string
+          method: string
+          args: unknown[]
+        }) => void,
+      ) => () => void
+
+      onPlaylistFloaterOsClosedFromMain: (
+        handler: (msg: {
+          sessionId: string
+          bounds: { x: number; y: number; width: number; height: number } | null
+        }) => void,
+      ) => () => void
     }
   }
 }

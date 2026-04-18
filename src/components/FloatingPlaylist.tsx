@@ -24,9 +24,8 @@ import {
 } from '../lib/floatingPanelGeometry.ts'
 import {
   buildPeerDimensionTargets,
-  dispatchRegiaSnapGuides,
   queryPlanciaContentRect,
-  snapFloatingPanelDragPosWithGuides,
+  snapFloatingPanelDragPos,
   snapFloatingPanelResize,
   type PeerSnapRect,
   type SessionSnapDims,
@@ -40,6 +39,13 @@ import {
   dataTransferHasFileList,
   mediaPathsFromDataTransfer,
 } from '../lib/isMediaFilePath.ts'
+import {
+  dataTransferHasFloatingInternal,
+  parseRegiaFloatingDnDPayload,
+  REGIA_FLOATING_DND_MIME,
+  stringifyRegiaFloatingDnDPayload,
+} from '../lib/regiaFloatingDnD.ts'
+import { setRegiaDnDDragImage } from '../lib/regiaDnDDragImage.ts'
 import {
   canAssignLaunchPadKeyCode,
   launchPadKeyLabel,
@@ -647,23 +653,32 @@ function isTypingTarget(el: EventTarget | null): boolean {
   return false
 }
 
-const REORDER_LONG_PRESS_MS = 420
-const REORDER_CANCEL_MOVE_PX = 12
-
 /** Stesso riferimento quando `session` è assente, così gli effetti non dipendono da `[]` nuovo ogni render. */
 const EMPTY_PLAYLIST_PATHS: string[] = []
 
-function pickPlaylistDropIndex(
+/** Indice di inserimento 0…`pathCount` (prima del brano `i`, oppure in coda). */
+function pickPlaylistInsertBeforeIndex(
   ul: HTMLUListElement | null,
   clientX: number,
   clientY: number,
   pathCount: number,
 ): number {
-  if (!ul || pathCount <= 0) return 0
+  if (!ul) return 0
+  if (pathCount <= 0) {
+    const r = ul.getBoundingClientRect()
+    if (
+      clientX >= r.left &&
+      clientX <= r.right &&
+      clientY >= r.top &&
+      clientY <= r.bottom
+    )
+      return 0
+    return 0
+  }
   const nodes = ul.querySelectorAll<HTMLElement>(
     'li.floating-playlist-item[data-pl-idx]',
   )
-  if (nodes.length === 0) return 0
+  if (nodes.length === 0) return pathCount
   for (let k = 0; k < nodes.length; k++) {
     const el = nodes[k]!
     const r = el.getBoundingClientRect()
@@ -674,12 +689,13 @@ function pickPlaylistDropIndex(
       clientX <= r.right
     ) {
       const raw = el.dataset.plIdx
-      const n = raw != null ? parseInt(raw, 10) : NaN
-      if (!Number.isNaN(n))
-        return Math.max(0, Math.min(pathCount - 1, n))
+      const idx = raw != null ? parseInt(raw, 10) : 0
+      const mid = (r.top + r.bottom) / 2
+      const insertBefore = clientY < mid ? idx : idx + 1
+      return Math.max(0, Math.min(pathCount, insertBefore))
     }
   }
-  let best = 0
+  let best = pathCount
   let bestDist = Infinity
   for (let k = 0; k < nodes.length; k++) {
     const el = nodes[k]!
@@ -689,29 +705,12 @@ function pickPlaylistDropIndex(
     if (d < bestDist) {
       bestDist = d
       const raw = el.dataset.plIdx
-      best = raw != null ? parseInt(raw, 10) : 0
+      const idx = raw != null ? parseInt(raw, 10) : 0
+      best = clientY < mid ? idx : idx + 1
     }
   }
-  return Math.max(0, Math.min(pathCount - 1, best))
+  return Math.max(0, Math.min(pathCount, best))
 }
-
-type ReorderSession =
-  | {
-      phase: 'pending'
-      index: number
-      startX: number
-      startY: number
-      pointerId: number
-      timer: ReturnType<typeof setTimeout>
-      li: HTMLLIElement
-    }
-  | {
-      phase: 'dragging'
-      index: number
-      pointerId: number
-      li: HTMLLIElement
-      lastOver: number
-    }
 
 export default function FloatingPlaylist({
   sessionId,
@@ -728,7 +727,6 @@ export default function FloatingPlaylist({
     openFolder,
     addMediaToPlaylist,
     removePathAt,
-    reorderPaths,
     removeFloatingPlaylist,
     floatingCloseWouldInterruptPlay,
     setPlaylistTitle,
@@ -741,6 +739,7 @@ export default function FloatingPlaylist({
     saveLoadedPlaylistOverwrite,
     persistSavedPlaylistAfterFloatingTitleBlur,
     addPathsToPlaylistFromPaths,
+    applyFloatingInternalDrop,
     applyLaunchPadDropFromPaths,
     loadLaunchPadSlotAndPlay,
     stopLaunchPadCueRelease,
@@ -759,7 +758,6 @@ export default function FloatingPlaylist({
     previewMediaTimesTick,
   } = useRegia()
 
-  const snapEnabled = usePlanciaSnapEnabled()
   const launchPadCueEnabled = useLaunchPadCueEnabled()
 
   const dragSnapPeerRects = useMemo((): PeerSnapRect[] => {
@@ -806,6 +804,13 @@ export default function FloatingPlaylist({
       : 1
   const collapsed = session?.collapsed ?? false
   const windowAlwaysOnTopPinned = session?.windowAlwaysOnTopPinned === true
+  const isPlaylistOsFloaterWindow =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('playlistOsFloater') === '1'
+  const snapEnabled =
+    usePlanciaSnapEnabled() &&
+    !isPlaylistOsFloaterWindow &&
+    (!windowAlwaysOnTopPinned || isPlaylistOsFloaterWindow)
   const launchPadBankIndex = session?.launchPadBankIndex ?? 0
   const pos = session?.pos ?? { x: 24, y: 96 }
   const panelSize =
@@ -848,11 +853,18 @@ export default function FloatingPlaylist({
   const playlistDndDepth = useRef(0)
   const launchpadDndDepth = useRef(0)
   const listRef = useRef<HTMLUListElement>(null)
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
-  const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
-  const [pendingReorderIndex, setPendingReorderIndex] = useState<number | null>(
-    null,
-  )
+  /** Inserimento DnD interno (0…paths.length) durante passaggio su questa lista. */
+  const [internalDropInsertBefore, setInternalDropInsertBefore] = useState<
+    number | null
+  >(null)
+  /** Riga playlist in corso di trascinamento HTML5 (stile elenco). */
+  const [playlistRowDragSourceIndex, setPlaylistRowDragSourceIndex] = useState<
+    number | null
+  >(null)
+  /** Slot launchpad in corso di trascinamento. */
+  const [launchPadDragSourceSlot, setLaunchPadDragSourceSlot] = useState<
+    number | null
+  >(null)
   const [isResizing, setIsResizing] = useState(false)
   const [closePlayConfirmOpen, setClosePlayConfirmOpen] = useState(false)
   const [panelHelpOpen, setPanelHelpOpen] = useState(false)
@@ -862,11 +874,7 @@ export default function FloatingPlaylist({
   const [panelHelpLayout, setPanelHelpLayout] =
     useState<PanelHelpPopoverLayout | null>(null)
   const closePlayConfirmCancelRef = useRef<HTMLButtonElement>(null)
-  const reorderSessionRef = useRef<ReorderSession | null>(null)
-  const docListenersRef = useRef<{
-    move: (e: globalThis.PointerEvent) => void
-    up: (e: globalThis.PointerEvent) => void
-  } | null>(null)
+  /** Evita un click «play» subito dopo un drag sulla riga. */
   const suppressPlaylistRowClickRef = useRef(false)
   const padProgressRafRef = useRef<number | null>(null)
   const [padProgressTick, setPadProgressTick] = useState(0)
@@ -1049,11 +1057,8 @@ export default function FloatingPlaylist({
   }, [
     collapsed,
     currentPlayIndexInThisPanel,
-    draggingIndex,
-    dragOverIndex,
     isLaunchpad,
     paths,
-    pendingReorderIndex,
     sessionId,
   ])
 
@@ -1144,10 +1149,9 @@ export default function FloatingPlaylist({
         MIN_PANEL_H,
       )
       const sn = snapFloatingPanelResize(edge, raw.pos, raw.size, {
-        plancia:
-          windowAlwaysOnTopPinned ? null : queryPlanciaContentRect(),
-        peerWidths: windowAlwaysOnTopPinned ? [] : widths,
-        peerHeights: windowAlwaysOnTopPinned ? [] : heights,
+        plancia: queryPlanciaContentRect(),
+        peerWidths: widths,
+        peerHeights: heights,
         minW: MIN_PANEL_W,
         minH: MIN_PANEL_H,
       })
@@ -1159,13 +1163,7 @@ export default function FloatingPlaylist({
         PANEL_CLAMP_OPTS,
       )
     },
-    [
-      floatingPlaylistSessions,
-      previewDetached,
-      sessionId,
-      snapEnabled,
-      windowAlwaysOnTopPinned,
-    ],
+    [floatingPlaylistSessions, previewDetached, sessionId, snapEnabled],
   )
 
   const onPanelChromePointerDownCapture = useCallback(
@@ -1254,28 +1252,21 @@ export default function FloatingPlaylist({
       if (!el) return
       const nx = d.dx + (e.clientX - d.startX)
       const ny = d.dy + (e.clientY - d.startY)
-      const plancia =
-        snapEnabled && !windowAlwaysOnTopPinned
-          ? queryPlanciaContentRect()
-          : null
-      const peersForSnap = windowAlwaysOnTopPinned ? [] : dragSnapPeerRects
+      const plancia = snapEnabled ? queryPlanciaContentRect() : null
       let c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
       if (snapEnabled && plancia) {
-        const sn = snapFloatingPanelDragPosWithGuides(
+        const snapped = snapFloatingPanelDragPos(
           c,
           { width: el.offsetWidth, height: el.offsetHeight },
           plancia,
-          peersForSnap,
+          dragSnapPeerRects,
         )
         c = clampPosToViewport(
-          sn.pos.x,
-          sn.pos.y,
+          snapped.x,
+          snapped.y,
           el.offsetWidth,
           el.offsetHeight,
         )
-        dispatchRegiaSnapGuides(sn.guides)
-      } else {
-        dispatchRegiaSnapGuides([])
       }
       updateFloatingPlaylistChrome(sessionId, { pos: c })
     },
@@ -1285,7 +1276,6 @@ export default function FloatingPlaylist({
       sessionId,
       snapEnabled,
       updateFloatingPlaylistChrome,
-      windowAlwaysOnTopPinned,
     ],
   )
 
@@ -1307,7 +1297,6 @@ export default function FloatingPlaylist({
           muted: playlistOutputMuted,
           volume: playlistOutputVolume,
         })
-        dispatchRegiaSnapGuides([])
         resizeStateRef.current = null
         setIsResizing(false)
         try {
@@ -1323,29 +1312,24 @@ export default function FloatingPlaylist({
       const el = panelRef.current
       const nx = d.dx + (e.clientX - d.startX)
       const ny = d.dy + (e.clientY - d.startY)
-      const plancia =
-        snapEnabled && !windowAlwaysOnTopPinned
-          ? queryPlanciaContentRect()
-          : null
-      const peersForSnap = windowAlwaysOnTopPinned ? [] : dragSnapPeerRects
+      const plancia = snapEnabled ? queryPlanciaContentRect() : null
       let next = el
         ? clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
         : { x: nx, y: ny }
       if (el && snapEnabled && plancia) {
-        const sn = snapFloatingPanelDragPosWithGuides(
+        const snapped = snapFloatingPanelDragPos(
           next,
           { width: el.offsetWidth, height: el.offsetHeight },
           plancia,
-          peersForSnap,
+          dragSnapPeerRects,
         )
         next = clampPosToViewport(
-          sn.pos.x,
-          sn.pos.y,
+          snapped.x,
+          snapped.y,
           el.offsetWidth,
           el.offsetHeight,
         )
       }
-      dispatchRegiaSnapGuides([])
       updateFloatingPlaylistChrome(sessionId, { pos: next })
       persistLayoutToLs(sessionId, next, panelSize, {
         muted: playlistOutputMuted,
@@ -1366,7 +1350,6 @@ export default function FloatingPlaylist({
       sessionId,
       snapEnabled,
       updateFloatingPlaylistChrome,
-      windowAlwaysOnTopPinned,
     ],
   )
 
@@ -1409,157 +1392,76 @@ export default function FloatingPlaylist({
     setPlaylistOutputMuted,
   ])
 
-  const removeReorderDocListeners = useCallback(() => {
-    const l = docListenersRef.current
-    if (!l) return
-    document.removeEventListener('pointermove', l.move, true)
-    document.removeEventListener('pointerup', l.up, true)
-    document.removeEventListener('pointercancel', l.up, true)
-    docListenersRef.current = null
+  useEffect(() => {
+    const onDocDragEnd = () => {
+      setInternalDropInsertBefore(null)
+      setPlaylistRowDragSourceIndex(null)
+      setLaunchPadDragSourceSlot(null)
+    }
+    document.addEventListener('dragend', onDocDragEnd)
+    return () => document.removeEventListener('dragend', onDocDragEnd)
   }, [])
 
-  const clearDragUi = useCallback(() => {
-    const s = reorderSessionRef.current
-    if (s?.phase === 'pending') clearTimeout(s.timer)
-    reorderSessionRef.current = null
-    removeReorderDocListeners()
-    setPendingReorderIndex(null)
-    setDragOverIndex(null)
-    setDraggingIndex(null)
-  }, [removeReorderDocListeners])
-
-  const clearDragUiRef = useRef(clearDragUi)
-  clearDragUiRef.current = clearDragUi
-  useEffect(
-    () => () => {
-      clearDragUiRef.current()
+  const onPlaylistRowDragStart = useCallback(
+    (index: number, e: DragEvent<HTMLLIElement>) => {
+      if (!session || isLaunchpad) return
+      const t = e.target as HTMLElement
+      if (t.closest('.playlist-remove-btn')) {
+        e.preventDefault()
+        return
+      }
+      e.dataTransfer.effectAllowed = 'move'
+      setPlaylistRowDragSourceIndex(index)
+      const p = paths[index]
+      const label = p ? (p.split(/[/\\]/).pop() ?? p) : `Brano ${index + 1}`
+      setRegiaDnDDragImage(e, label)
+      const payload = {
+        v: 1 as const,
+        kind: 'playlist-track' as const,
+        sessionId,
+        index,
+      }
+      const raw = stringifyRegiaFloatingDnDPayload(payload)
+      e.dataTransfer.setData(REGIA_FLOATING_DND_MIME, raw)
+      e.dataTransfer.setData('text/plain', raw)
     },
-    [],
+    [isLaunchpad, paths, session, sessionId],
   )
 
-  const onRowPointerDownCapture = useCallback(
-    (index: number, e: PointerEvent<HTMLLIElement>) => {
-      if (e.button !== 0) return
-      const li = e.currentTarget
-      if ((e.target as HTMLElement).closest('.playlist-remove-btn')) return
-      if (reorderSessionRef.current) return
+  const onPlaylistRowDragEnd = useCallback(() => {
+    setPlaylistRowDragSourceIndex(null)
+    suppressPlaylistRowClickRef.current = true
+    window.setTimeout(() => {
+      suppressPlaylistRowClickRef.current = false
+    }, 80)
+  }, [])
 
-      const len = paths.length
-      if (len === 0) return
-
-      setActiveFloatingSession(sessionId)
-
-      const startX = e.clientX
-      const startY = e.clientY
-      const pointerId = e.pointerId
-
-      const onMove = (ev: globalThis.PointerEvent) => {
-        if (ev.pointerId !== pointerId) return
-        const s = reorderSessionRef.current
-        if (!s) return
-        if (s.phase === 'pending') {
-          const dx = ev.clientX - s.startX
-          const dy = ev.clientY - s.startY
-          if (
-            dx * dx + dy * dy >
-            REORDER_CANCEL_MOVE_PX * REORDER_CANCEL_MOVE_PX
-          ) {
-            clearTimeout(s.timer)
-            reorderSessionRef.current = null
-            setPendingReorderIndex(null)
-            removeReorderDocListeners()
-          }
-        } else if (s.phase === 'dragging') {
-          const to = pickPlaylistDropIndex(
-            listRef.current,
-            ev.clientX,
-            ev.clientY,
-            len,
-          )
-          reorderSessionRef.current = { ...s, lastOver: to }
-          setDragOverIndex(to)
-        }
+  const onLaunchPadCellDragStart = useCallback(
+    (slotIndex: number, e: DragEvent<HTMLButtonElement>) => {
+      if (!session || !isLaunchpad) return
+      const cell = launchPadCells?.[slotIndex]
+      if (!cell?.samplePath) return
+      e.dataTransfer.effectAllowed = 'move'
+      setLaunchPadDragSourceSlot(slotIndex)
+      const bi = Math.max(
+        0,
+        Math.min(LAUNCHPAD_BANK_COUNT - 1, launchPadBankIndex),
+      )
+      const payload = {
+        v: 1 as const,
+        kind: 'launchpad-slot' as const,
+        sessionId,
+        bankIndex: bi,
+        slotIndex,
       }
-
-      const onUp = (ev: globalThis.PointerEvent) => {
-        if (ev.pointerId !== pointerId) return
-        const s = reorderSessionRef.current
-        if (!s) return
-        if (s.phase === 'pending') {
-          clearTimeout(s.timer)
-          reorderSessionRef.current = null
-          setPendingReorderIndex(null)
-          removeReorderDocListeners()
-          return
-        }
-        try {
-          s.li.releasePointerCapture(pointerId)
-        } catch {
-          /* ignore */
-        }
-        const from = s.index
-        const to = s.lastOver
-        suppressPlaylistRowClickRef.current = true
-        window.setTimeout(() => {
-          suppressPlaylistRowClickRef.current = false
-        }, 80)
-        reorderSessionRef.current = null
-        removeReorderDocListeners()
-        setDragOverIndex(null)
-        setDraggingIndex(null)
-        reorderPaths(from, to, sessionId)
-      }
-
-      const timer = window.setTimeout(() => {
-        const sess = reorderSessionRef.current
-        if (!sess || sess.phase !== 'pending' || sess.pointerId !== pointerId)
-          return
-        try {
-          sess.li.setPointerCapture(pointerId)
-        } catch {
-          /* ignore */
-        }
-        const initialTo = pickPlaylistDropIndex(
-          listRef.current,
-          startX,
-          startY,
-          len,
-        )
-        reorderSessionRef.current = {
-          phase: 'dragging',
-          index,
-          pointerId,
-          li: sess.li,
-          lastOver: initialTo,
-        }
-        setPendingReorderIndex(null)
-        setDraggingIndex(index)
-        setDragOverIndex(initialTo)
-      }, REORDER_LONG_PRESS_MS)
-
-      reorderSessionRef.current = {
-        phase: 'pending',
-        index,
-        startX,
-        startY,
-        pointerId,
-        timer,
-        li,
-      }
-      setPendingReorderIndex(index)
-
-      docListenersRef.current = { move: onMove, up: onUp }
-      document.addEventListener('pointermove', onMove, true)
-      document.addEventListener('pointerup', onUp, true)
-      document.addEventListener('pointercancel', onUp, true)
+      const raw = stringifyRegiaFloatingDnDPayload(payload)
+      e.dataTransfer.setData(REGIA_FLOATING_DND_MIME, raw)
+      e.dataTransfer.setData('text/plain', raw)
+      const label =
+        cell.samplePath.split(/[/\\]/).pop() ?? cell.samplePath ?? 'Sample'
+      setRegiaDnDDragImage(e, label, { maxWidthPx: 240 })
     },
-    [
-      paths.length,
-      removeReorderDocListeners,
-      reorderPaths,
-      sessionId,
-      setActiveFloatingSession,
-    ],
+    [isLaunchpad, launchPadBankIndex, launchPadCells, session, sessionId],
   )
 
   const commitFloatingPlaylistTitle = useCallback(
@@ -1891,107 +1793,234 @@ export default function FloatingPlaylist({
     ],
   )
 
-  const onPlaylistDragEnter = useCallback((e: DragEvent<HTMLUListElement>) => {
-    if (!dataTransferHasFileList(e.dataTransfer)) return
-    e.preventDefault()
-    playlistDndDepth.current += 1
-    setPlaylistDropHover(true)
+  const playlistListDragAllowed = useCallback((dt: DataTransfer | null) => {
+    return dataTransferHasFileList(dt) || dataTransferHasFloatingInternal(dt)
   }, [])
 
-  const onPlaylistDragLeave = useCallback((e: DragEvent<HTMLUListElement>) => {
-    if (!dataTransferHasFileList(e.dataTransfer)) return
-    e.preventDefault()
-    playlistDndDepth.current = Math.max(0, playlistDndDepth.current - 1)
-    if (playlistDndDepth.current === 0) setPlaylistDropHover(false)
-  }, [])
+  const onPlaylistDragEnter = useCallback(
+    (e: DragEvent<HTMLUListElement>) => {
+      if (!playlistListDragAllowed(e.dataTransfer)) return
+      e.preventDefault()
+      playlistDndDepth.current += 1
+      setPlaylistDropHover(true)
+      if (dataTransferHasFloatingInternal(e.dataTransfer)) {
+        setInternalDropInsertBefore(
+          pickPlaylistInsertBeforeIndex(
+            listRef.current,
+            e.clientX,
+            e.clientY,
+            paths.length,
+          ),
+        )
+      } else if (dataTransferHasFileList(e.dataTransfer)) {
+        setInternalDropInsertBefore(
+          pickPlaylistInsertBeforeIndex(
+            listRef.current,
+            e.clientX,
+            e.clientY,
+            paths.length,
+          ),
+        )
+      } else {
+        setInternalDropInsertBefore(null)
+      }
+    },
+    [paths.length, playlistListDragAllowed],
+  )
 
-  const onPlaylistDragOver = useCallback((e: DragEvent<HTMLUListElement>) => {
-    if (!dataTransferHasFileList(e.dataTransfer)) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
-  }, [])
+  const onPlaylistDragLeave = useCallback(
+    (e: DragEvent<HTMLUListElement>) => {
+      if (!playlistListDragAllowed(e.dataTransfer)) return
+      e.preventDefault()
+      playlistDndDepth.current = Math.max(0, playlistDndDepth.current - 1)
+      if (playlistDndDepth.current === 0) {
+        setPlaylistDropHover(false)
+        setInternalDropInsertBefore(null)
+      }
+    },
+    [playlistListDragAllowed],
+  )
+
+  const onPlaylistDragOver = useCallback(
+    (e: DragEvent<HTMLUListElement>) => {
+      if (!playlistListDragAllowed(e.dataTransfer)) return
+      e.preventDefault()
+      const dt = e.dataTransfer
+      if (dataTransferHasFloatingInternal(dt)) {
+        dt.dropEffect = 'move'
+        setInternalDropInsertBefore(
+          pickPlaylistInsertBeforeIndex(
+            listRef.current,
+            e.clientX,
+            e.clientY,
+            paths.length,
+          ),
+        )
+      } else if (dataTransferHasFileList(dt)) {
+        dt.dropEffect = 'copy'
+        setInternalDropInsertBefore(
+          pickPlaylistInsertBeforeIndex(
+            listRef.current,
+            e.clientX,
+            e.clientY,
+            paths.length,
+          ),
+        )
+      } else {
+        dt.dropEffect = 'none'
+        setInternalDropInsertBefore(null)
+      }
+    },
+    [paths.length, playlistListDragAllowed],
+  )
 
   const onPlaylistDrop = useCallback(
-    (e: DragEvent<HTMLUListElement>) => {
-      if (!dataTransferHasFileList(e.dataTransfer)) return
+    async (e: DragEvent<HTMLUListElement>) => {
+      if (!playlistListDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       playlistDndDepth.current = 0
       setPlaylistDropHover(false)
-      const paths = mediaPathsFromDataTransfer(e.dataTransfer)
-      if (!paths.length) return
+      setInternalDropInsertBefore(null)
+      const dt = e.dataTransfer
+      const internal = parseRegiaFloatingDnDPayload(dt)
+      if (internal) {
+        const insertBefore = pickPlaylistInsertBeforeIndex(
+          listRef.current,
+          e.clientX,
+          e.clientY,
+          paths.length,
+        )
+        setActiveFloatingSession(sessionId)
+        await applyFloatingInternalDrop({
+          target: {
+            kind: 'playlist',
+            sessionId,
+            insertBeforeIndex: insertBefore,
+          },
+          payload: internal,
+        })
+        return
+      }
+      const pathsDropped = mediaPathsFromDataTransfer(dt)
+      if (!pathsDropped.length) return
       setActiveFloatingSession(sessionId)
-      addPathsToPlaylistFromPaths(sessionId, paths)
+      const insertBefore = pickPlaylistInsertBeforeIndex(
+        listRef.current,
+        e.clientX,
+        e.clientY,
+        paths.length,
+      )
+      addPathsToPlaylistFromPaths(sessionId, pathsDropped, insertBefore)
     },
-    [addPathsToPlaylistFromPaths, sessionId, setActiveFloatingSession],
+    [
+      addPathsToPlaylistFromPaths,
+      applyFloatingInternalDrop,
+      paths.length,
+      playlistListDragAllowed,
+      sessionId,
+      setActiveFloatingSession,
+    ],
   )
+
+  const launchpadDragAllowed = useCallback((dt: DataTransfer | null) => {
+    return dataTransferHasFileList(dt) || dataTransferHasFloatingInternal(dt)
+  }, [])
 
   const onLaunchpadDragEnter = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
-      if (!dataTransferHasFileList(e.dataTransfer)) return
+      if (!launchpadDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       launchpadDndDepth.current += 1
       setLaunchpadDropHover(true)
     },
-    [],
+    [launchpadDragAllowed],
   )
 
   const onLaunchpadDragLeave = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
-      if (!dataTransferHasFileList(e.dataTransfer)) return
+      if (!launchpadDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       launchpadDndDepth.current = Math.max(0, launchpadDndDepth.current - 1)
       if (launchpadDndDepth.current === 0) setLaunchpadDropHover(false)
     },
-    [],
+    [launchpadDragAllowed],
   )
 
   const onLaunchpadDragOver = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
-      if (!dataTransferHasFileList(e.dataTransfer)) return
+      if (!launchpadDragAllowed(e.dataTransfer)) return
       e.preventDefault()
-      e.dataTransfer.dropEffect = 'copy'
+      e.dataTransfer.dropEffect = dataTransferHasFloatingInternal(
+        e.dataTransfer,
+      )
+        ? 'move'
+        : 'copy'
     },
-    [],
+    [launchpadDragAllowed],
   )
 
   const onLaunchPadCellDrop = useCallback(
-    (slotIndex: number, e: DragEvent<HTMLDivElement>) => {
-      if (!dataTransferHasFileList(e.dataTransfer)) return
+    async (slotIndex: number, e: DragEvent<HTMLDivElement>) => {
+      if (!launchpadDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       e.stopPropagation()
       launchpadDndDepth.current = 0
       setLaunchpadDropHover(false)
-      const paths = mediaPathsFromDataTransfer(e.dataTransfer)
-      if (!paths.length) return
+      const dt = e.dataTransfer
+      const internal = parseRegiaFloatingDnDPayload(dt)
+      if (internal) {
+        setActiveFloatingSession(sessionId)
+        await applyFloatingInternalDrop({
+          target: { kind: 'launchpad', sessionId, slotIndex },
+          payload: internal,
+        })
+        return
+      }
+      const pathsDropped = mediaPathsFromDataTransfer(dt)
+      if (!pathsDropped.length) return
       setActiveFloatingSession(sessionId)
-      applyLaunchPadDropFromPaths(sessionId, slotIndex, paths)
+      applyLaunchPadDropFromPaths(sessionId, slotIndex, pathsDropped)
     },
     [
+      applyFloatingInternalDrop,
       applyLaunchPadDropFromPaths,
+      launchpadDragAllowed,
       sessionId,
       setActiveFloatingSession,
     ],
   )
 
   const onLaunchPadGridBackgroundDrop = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
+    async (e: DragEvent<HTMLDivElement>) => {
       if (e.target !== e.currentTarget) return
-      if (!dataTransferHasFileList(e.dataTransfer)) return
+      if (!launchpadDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       launchpadDndDepth.current = 0
       setLaunchpadDropHover(false)
-      const paths = mediaPathsFromDataTransfer(e.dataTransfer)
-      if (!paths.length) return
-      setActiveFloatingSession(sessionId)
+      const dt = e.dataTransfer
+      const internal = parseRegiaFloatingDnDPayload(dt)
       const cells = launchPadCells
       if (!cells) return
       const firstEmpty = cells.findIndex((c) => !c.samplePath)
       const start = firstEmpty >= 0 ? firstEmpty : 0
-      applyLaunchPadDropFromPaths(sessionId, start, paths)
+      if (internal) {
+        setActiveFloatingSession(sessionId)
+        await applyFloatingInternalDrop({
+          target: { kind: 'launchpad', sessionId, slotIndex: start },
+          payload: internal,
+        })
+        return
+      }
+      const pathsDropped = mediaPathsFromDataTransfer(dt)
+      if (!pathsDropped.length) return
+      setActiveFloatingSession(sessionId)
+      applyLaunchPadDropFromPaths(sessionId, start, pathsDropped)
     },
     [
+      applyFloatingInternalDrop,
       applyLaunchPadDropFromPaths,
       launchPadCells,
+      launchpadDragAllowed,
       sessionId,
       setActiveFloatingSession,
     ],
@@ -2251,10 +2280,11 @@ export default function FloatingPlaylist({
                       {launchPadCueEnabled
                         ? ' · tenere premuto il tasto = CUE (senza modificatori)'
                         : ''}{' '}
-                      · puntina tra «?» e Riduci: finestra Regia sempre sopra le altre
-                      app e, mentre è attiva, puoi trascinare questo pannello fuori
-                      dall’area plancia senza aggancio magnetico ai bordi (non evita
-                      il Dock se riduci tutta l’app).
+                      · puntina tra «?» e Riduci: apre questo pannello in una{' '}
+                      <strong>finestra separata</strong> (puoi spostarla anche fuori
+                      dalla finestra Regia), con la Regia sempre sopra le altre app.
+                      Chiudendo quella finestra il pannello torna nella Regia (non
+                      evita il Dock se riduci tutta l’app).
                     </>
                   ) : (
                     <div className="floating-playlist-panel-help-popover-stack">
@@ -2269,13 +2299,13 @@ export default function FloatingPlaylist({
                         pannello dalla plancia.
                       </p>
                       <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Puntina (sempre davanti)</strong> — Con la puntina
-                        attiva la <strong>finestra intera Regia</strong> resta sopra le
-                        altre applicazioni e puoi <strong>trascinare questo pannello</strong>{' '}
-                        anche sopra la barra laterale o l’intestazione, senza che lo
-                        snap lo riporti ai bordi dell’area plancia. Se mandi tutta l’app
-                        nel Dock / barra delle applicazioni, il sistema nasconde comunque
-                        la finestra.
+                        <strong>Puntina (finestra separata)</strong> — Con la puntina
+                        attiva questo pannello passa in una <strong>finestra propria</strong>{' '}
+                        che puoi spostare anche <strong>fuori dalla finestra Regia</strong>
+                        ; la Regia resta inoltre sopra le altre applicazioni. Chiudi la
+                        finestra del pannello per riportarlo dentro la Regia. Se mandi
+                        tutta l’app nel Dock / barra delle applicazioni, il sistema
+                        nasconde comunque le finestre.
                       </p>
                       <p className="floating-playlist-panel-help-popover-p">
                         <strong>Cartella e Aggiungi</strong> — Cartella apre una
@@ -2343,13 +2373,13 @@ export default function FloatingPlaylist({
               }}
               title={
                 windowAlwaysOnTopPinned
-                  ? 'Puntina attiva: finestra Regia sopra le altre app; trascinamento senza aggancio alla plancia. Clic per disattivare (torna lo snap ai bordi plancia).'
-                  : 'Puntina: finestra Regia sopra le altre app e trascinamento del pannello anche fuori dall’area plancia (disattiva lo snap magnetico ai suoi bordi). Clic per attivare.'
+                  ? 'Puntina attiva: pannello in finestra separata (anche fuori dalla Regia); Regia sopra le altre app. Clic per riportare il pannello nella Regia.'
+                  : 'Puntina: apre questo pannello in una finestra separata (spostabile fuori dalla Regia) e tiene la Regia sopra le altre app. Clic per attivare.'
               }
               aria-label={
                 windowAlwaysOnTopPinned
-                  ? 'Disattiva puntina: sempre davanti e trascinamento fuori plancia'
-                  : 'Attiva puntina: sempre davanti e trascinamento fuori plancia'
+                  ? 'Disattiva puntina e chiudi finestra pannello separata'
+                  : 'Attiva puntina: finestra pannello separata e Regia sempre davanti'
               }
             >
               <IconWindowPin />
@@ -2712,7 +2742,7 @@ export default function FloatingPlaylist({
           <div
             className="floating-playlist-launchpad-grid"
             onDragOver={onLaunchpadDragOver}
-            onDrop={onLaunchPadGridBackgroundDrop}
+            onDrop={(e) => void onLaunchPadGridBackgroundDrop(e)}
           >
             {launchPadCells.slice(0, LAUNCHPAD_CELL_COUNT).map((cell, i) => {
               void padProgressTick
@@ -2741,15 +2771,21 @@ export default function FloatingPlaylist({
                   className="launchpad-cell-wrap"
                   data-launchpad-slot={i}
                   onDragOver={(ev) => {
-                    if (!dataTransferHasFileList(ev.dataTransfer)) return
+                    if (!launchpadDragAllowed(ev.dataTransfer)) return
                     ev.preventDefault()
-                    ev.dataTransfer.dropEffect = 'copy'
+                    ev.dataTransfer.dropEffect =
+                      dataTransferHasFloatingInternal(ev.dataTransfer)
+                        ? 'move'
+                        : 'copy'
                   }}
-                  onDrop={(ev) => onLaunchPadCellDrop(i, ev)}
+                  onDrop={(ev) => void onLaunchPadCellDrop(i, ev)}
                 >
                   <button
                     type="button"
-                    className={`launchpad-cell ${padFlashSlot === i ? 'is-lit' : ''} ${isLoaded && launchpadAudioPlaying ? 'is-pad-playing' : ''} ${isLoaded ? 'is-loaded' : ''} ${cell.samplePath ? 'has-sample' : 'is-empty'}`}
+                    draggable={Boolean(cell.samplePath)}
+                    onDragStart={(ev) => onLaunchPadCellDragStart(i, ev)}
+                    onDragEnd={() => setLaunchPadDragSourceSlot(null)}
+                    className={`launchpad-cell ${padFlashSlot === i ? 'is-lit' : ''} ${isLoaded && launchpadAudioPlaying ? 'is-pad-playing' : ''} ${isLoaded ? 'is-loaded' : ''} ${cell.samplePath ? 'has-sample' : 'is-empty'} ${launchPadDragSourceSlot === i ? 'is-dragging-source' : ''}`}
                     style={
                       {
                         ['--launchpad-pad' as string]: cell.padColor,
@@ -2765,7 +2801,7 @@ export default function FloatingPlaylist({
                             launchPadCueEnabled
                               ? 'tap breve play intero · tenere premuto CUE (stop al rilascio)'
                               : 'clic = play intero'
-                          } · tasto destro: gain / tasto / svuota${
+                          } · trascina il pad per spostarlo · tasto destro: gain / tasto / svuota${
                             cell.padKeyCode
                               ? ` · tasto: ${cell.padKeyCode} (${cell.padKeyMode === 'toggle' ? 'Toggle' : 'Play'})`
                               : ''
@@ -2999,33 +3035,18 @@ export default function FloatingPlaylist({
         <div className="floating-playlist-list-scroll">
           <ul
             ref={listRef}
-            className={`floating-playlist-list ${draggingIndex != null ? 'is-reordering' : ''} ${playlistDropHover ? 'is-file-drop-hover' : ''}`}
+            className={`floating-playlist-list ${playlistRowDragSourceIndex != null ? 'is-reordering' : ''} ${playlistDropHover ? 'is-file-drop-hover' : ''} ${internalDropInsertBefore != null ? 'has-internal-drop-cue' : ''}`}
             tabIndex={0}
             aria-label="Elenco brani"
             onDragEnter={onPlaylistDragEnter}
             onDragLeave={onPlaylistDragLeave}
             onDragOver={onPlaylistDragOver}
-            onDrop={onPlaylistDrop}
+            onDrop={(e) => void onPlaylistDrop(e)}
           >
-          {draggingIndex != null ? (
-            <li className="playlist-drag-status" aria-live="polite">
-              {dragOverIndex != null && dragOverIndex !== draggingIndex ? (
-                <>
-                  Inserisci <strong>prima della posizione {dragOverIndex + 1}</strong>{' '}
-                  (rilascia)
-                </>
-              ) : dragOverIndex != null && dragOverIndex === draggingIndex ? (
-                <>Rilasciando qui non cambia l&apos;ordine.</>
-              ) : (
-                <>
-                  Tieni premuto su una riga, poi trascina per inserire il brano nella
-                  posizione evidenziata.
-                </>
-              )}
-            </li>
-          ) : null}
           {paths.length === 0 && (
-            <li className="floating-playlist-empty">
+            <li
+              className={`floating-playlist-empty ${internalDropInsertBefore === 0 ? 'is-internal-drop-before' : ''}`}
+            >
               Nessun file. Apri una cartella, usa Aggiungi o trascina file qui.
             </li>
           )}
@@ -3049,8 +3070,10 @@ export default function FloatingPlaylist({
               <li
                 key={`${sessionId}-${i}-${p}`}
                 data-pl-idx={i}
-                className={`floating-playlist-item ${dragOverIndex === i ? 'is-drag-over' : ''} ${draggingIndex === i ? 'is-dragging-source' : ''} ${pendingReorderIndex === i && draggingIndex == null ? 'is-reorder-pending' : ''}`}
-                onPointerDownCapture={(e) => onRowPointerDownCapture(i, e)}
+                draggable
+                onDragStart={(ev) => onPlaylistRowDragStart(i, ev)}
+                onDragEnd={onPlaylistRowDragEnd}
+                className={`floating-playlist-item ${playlistRowDragSourceIndex === i ? 'is-dragging-source' : ''} ${internalDropInsertBefore === i ? 'is-internal-drop-before' : ''} ${internalDropInsertBefore === paths.length && i === paths.length - 1 ? 'is-internal-drop-after' : ''}`}
               >
                 <button
                   type="button"
@@ -3068,7 +3091,7 @@ export default function FloatingPlaylist({
                     }
                     void loadIndexAndPlay(i, sessionId)
                   }}
-                  title={`${p} — clic per riprodurre; tieni premuto sulla riga per riordinare; frecce sulla lista`}
+                  title={`${p} — clic per riprodurre · trascina la riga per spostarla (anche in altro pannello) · frecce sulla lista`}
                 >
                   <span className="playlist-index">{i + 1}</span>
                   <span className="playlist-name">{name}</span>
@@ -3092,6 +3115,7 @@ export default function FloatingPlaylist({
                 </span>
                 <button
                   type="button"
+                  draggable={false}
                   className="playlist-remove-btn"
                   title="Rimuovi dalla playlist"
                   aria-label={`Rimuovi ${name} dalla playlist`}

@@ -8,10 +8,13 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type MutableRefObject,
   type ReactNode,
+  type SetStateAction,
 } from 'react'
 import { isMediaFilePath } from '../lib/isMediaFilePath.ts'
+import type { RegiaFloatingDnDPayload } from '../lib/regiaFloatingDnD.ts'
 import { isStillImagePath } from '../mediaPaths.ts'
 import { normalizePersistedPadKeyCode } from '../lib/launchPadKeyboard.ts'
 import {
@@ -35,6 +38,7 @@ import { clampPanelInViewport } from '../lib/floatingPanelGeometry.ts'
 import { queryPlanciaContentRect } from '../lib/planciaSnap.ts'
 import { persistPreviewDetached } from '../lib/previewDetachedStorage.ts'
 import { readPreviewLayoutFromLs, writePreviewLayoutToLs } from '../lib/previewLayoutStorage.ts'
+import { buildPlaylistFloaterSyncPayload } from '../floater/playlistFloaterSync.ts'
 import {
   clampSidebarWidth,
   persistSidebarOpen,
@@ -103,6 +107,48 @@ function mergeLaunchPadCellsWithDrop(
   return next
 }
 
+function insertBeforeIndexToReorderToIndex(
+  fromIndex: number,
+  insertBefore: number,
+  pathCount: number,
+): number {
+  const ib = Math.max(0, Math.min(pathCount, Math.floor(insertBefore)))
+  if (fromIndex < ib) return ib - 1
+  return ib
+}
+
+function dedupeLaunchPadKeysInBank(cells: LaunchPadCell[]): LaunchPadCell[] {
+  const seen = new Set<string>()
+  return cells.map((c) => {
+    const k = c.padKeyCode
+    if (typeof k !== 'string' || !k.length) return { ...c }
+    if (seen.has(k)) {
+      return {
+        ...c,
+        padKeyCode: null,
+        padKeyMode: readLaunchPadDefaultKeyMode(),
+      }
+    }
+    seen.add(k)
+    return { ...c }
+  })
+}
+
+function clearedLaunchPadSlotCell(
+  slotIndex: number,
+  keepPadColor: string,
+): LaunchPadCell {
+  const d = defaultLaunchPadCells()[slotIndex]!
+  return {
+    ...d,
+    padColor: keepPadColor,
+    samplePath: null,
+    padGain: 1,
+    padKeyCode: null,
+    padKeyMode: readLaunchPadDefaultKeyMode(),
+  }
+}
+
 export type LoopMode = 'off' | 'one' | 'all'
 
 /** Chiave in `floatingZOrder` per la finestra anteprima staccata. */
@@ -134,7 +180,12 @@ export type RegiaContextValue = {
   /** Aggiunge file alla playlist del pannello indicato. */
   addMediaToPlaylist: (sessionId: string) => Promise<void>
   /** Aggiunge percorsi assoluti (es. da drag-and-drop) alla playlist a elenco. */
-  addPathsToPlaylistFromPaths: (sessionId: string, paths: string[]) => void
+  addPathsToPlaylistFromPaths: (
+    sessionId: string,
+    paths: string[],
+    /** Indice 0…length: inserisci prima di quella riga; omesso = in coda. */
+    insertBeforeIndex?: number | null,
+  ) => void
   /** Assegna file al launchpad a partire dallo slot (primo su slot, altri su slot vuoti in avanti). */
   applyLaunchPadDropFromPaths: (
     sessionId: string,
@@ -184,7 +235,15 @@ export type RegiaContextValue = {
     fromIndex: number,
     toIndex: number,
     sessionId: string,
+    options?: { skipUndo?: boolean },
   ) => void
+  /** Sposta brano o slot launchpad tra pannelli floating (DnD interno). */
+  applyFloatingInternalDrop: (args: {
+    target:
+      | { kind: 'playlist'; sessionId: string; insertBeforeIndex: number }
+      | { kind: 'launchpad'; sessionId: string; slotIndex: number }
+    payload: RegiaFloatingDnDPayload
+  }) => Promise<void>
   /** Titolo mostrato nella playlist mobile (sessione corrente). */
   playlistTitle: string
   setPlaylistTitle: (title: string, sessionId: string) => void
@@ -294,6 +353,11 @@ export type RegiaContextValue = {
   previewDetached: boolean
   setPreviewDocked: () => void
   setPreviewFloating: () => void
+  /**
+   * Sessioni la cui playlist è mostrata in una finestra OS separata (puntina),
+   * non nel DOM della finestra Regia.
+   */
+  playlistFloaterOsSessionIds: string[]
   /** Pannello sinistro playlist / workspace. */
   sidebarOpen: boolean
   setSidebarOpen: (open: boolean) => void
@@ -785,6 +849,10 @@ function deepCloneFloatingSessions(
 
 const RegiaContext = createContext<RegiaContextValue | null>(null)
 
+/** Contesto alternativo per `FloatingPlaylist` nella finestra OS separata. */
+export const PlaylistFloaterMirrorContext =
+  createContext<RegiaContextValue | null>(null)
+
 export function RegiaProvider({ children }: { children: ReactNode }) {
   const [bootstrap] = useState(() => readWorkspaceBootstrap())
 
@@ -800,6 +868,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       ids.push(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
     return ids
   })
+  const [playlistFloaterOsSessionIds, setPlaylistFloaterOsSessionIds] = useState<
+    string[]
+  >([])
   /** Sessione la cui playlist comanda trasporto / uscita dopo un load. */
   const [playbackSessionId, setPlaybackSessionId] = useState<string | null>(
     () => bootstrap.floating.playbackSessionId,
@@ -1122,7 +1193,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const loadedIndexRef = useRef<number | null>(null)
   const secondScreenOnRef = useRef(secondScreenOn)
   const secondScreenToggleSyncSkipFirstRef = useRef(false)
-  const secondScreenToggleGenRef = useRef(0)
+  const prevSecondScreenOnForSyncRef = useRef(secondScreenOn)
   const outputVolumeRef = useRef(outputVolume)
   const outputSinkIdRef = useRef(outputSinkId)
   useLayoutEffect(() => {
@@ -2982,13 +3053,19 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     void window.electronAPI.setOutputPresentationVisible(secondScreenOn)
   }, [secondScreenOn])
 
-  /** Ogni accensione/spegnimento Schermo 2: riallinea uscita a tempo e play/pause dell’anteprima. */
+  /**
+   * Solo passaggio Schermo 2 off → on: seek + play come l’anteprima.
+   * Alla chiusura non inviamo IPC (l’uscita resta in play per l’audio in regia).
+   */
   useEffect(() => {
     if (!secondScreenToggleSyncSkipFirstRef.current) {
       secondScreenToggleSyncSkipFirstRef.current = true
+      prevSecondScreenOnForSyncRef.current = secondScreenOn
       return
     }
-    const gen = ++secondScreenToggleGenRef.current
+    const wasOn = prevSecondScreenOnForSyncRef.current
+    prevSecondScreenOnForSyncRef.current = secondScreenOn
+    if (wasOn || !secondScreenOn) return
     const src = previewSrcRef.current
     if (!src) return
     if (isStillImagePath(src)) {
@@ -2999,14 +3076,12 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       await new Promise<void>((r) => {
         requestAnimationFrame(() => requestAnimationFrame(() => r()))
       })
-      if (gen !== secondScreenToggleGenRef.current) return
       if (!videoPlayingRef.current) {
         await send({ type: 'pause' })
         return
       }
       const t = previewMediaTimesRef.current.currentTime
       await send({ type: 'seek', seconds: t })
-      if (gen !== secondScreenToggleGenRef.current) return
       await send({ type: 'play' })
     })()
   }, [secondScreenOn, send])
@@ -3102,33 +3177,66 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   )
 
   const addPathsToPlaylistFromPaths = useCallback(
-    (sessionId: string, rawPaths: string[]) => {
+    (
+      sessionId: string,
+      rawPaths: string[],
+      insertBeforeIndex?: number | null,
+    ) => {
       const picked = rawPaths.filter(isMediaFilePath)
       if (!picked.length) return
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
       if (!s0 || s0.playlistMode === 'launchpad') return
       recordUndoPoint()
+      const prev = s0.paths
+      const insertAt =
+        insertBeforeIndex != null && Number.isFinite(insertBeforeIndex)
+          ? Math.max(0, Math.min(prev.length, Math.floor(insertBeforeIndex)))
+          : prev.length
+
+      const playbackSid = videoOutputSessionIdRef.current
+      const li = loadedIndexRef.current
+      const loadedPath =
+        playbackSid === sessionId &&
+        li != null &&
+        li >= 0 &&
+        li < prev.length
+          ? prev[li]!
+          : null
+
+      const seen = new Set(prev)
+      const next = [...prev]
+      let idx = insertAt
+      for (const f of picked) {
+        if (seen.has(f)) continue
+        seen.add(f)
+        next.splice(idx, 0, f)
+        idx++
+      }
+
+      const selectedPath = prev[s0.currentIndex]
+      const ni = next.findIndex((p) => p === selectedPath)
+      const nextCi =
+        ni >= 0 ? ni : Math.min(s0.currentIndex, Math.max(0, next.length - 1))
+
+      if (playbackSid === sessionId && loadedPath != null) {
+        const newLi = next.findIndex((p) => p === loadedPath)
+        if (newLi >= 0) {
+          loadedIndexRef.current = newLi
+          setPlaybackLoadedTrack({ sessionId: playbackSid, index: newLi })
+        }
+      }
+
       let titleFromFirstFolder: string | null = null
-      setFloatingSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== sessionId) return s
-          const seen = new Set(s.paths)
-          const merged = [...s.paths]
-          for (const f of picked) {
-            if (!seen.has(f)) {
-              seen.add(f)
-              merged.push(f)
-            }
-          }
-          if (s.paths.length === 0 && merged.length > 0)
-            titleFromFirstFolder = folderBasenameFromPaths(merged)
-          return { ...s, paths: merged }
-        }),
-      )
-      if (titleFromFirstFolder)
-        patchFloatingSession(sessionId, {
-          playlistTitle: titleFromFirstFolder,
-        })
+      if (prev.length === 0 && next.length > 0)
+        titleFromFirstFolder = folderBasenameFromPaths(next)
+
+      patchFloatingSession(sessionId, {
+        paths: next,
+        currentIndex: nextCi,
+        ...(titleFromFirstFolder
+          ? { playlistTitle: titleFromFirstFolder }
+          : {}),
+      })
     },
     [patchFloatingSession, recordUndoPoint],
   )
@@ -3243,7 +3351,12 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   )
 
   const reorderPaths = useCallback(
-    (fromIndex: number, toIndex: number, sessionId: string) => {
+    (
+      fromIndex: number,
+      toIndex: number,
+      sessionId: string,
+      options?: { skipUndo?: boolean },
+    ) => {
       if (fromIndex === toIndex) return
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
       if (s0?.playlistMode === 'launchpad') return
@@ -3255,7 +3368,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         toIndex >= prev0.length
       )
         return
-      recordUndoPoint()
+      if (!options?.skipUndo) recordUndoPoint()
       const playbackSid = videoOutputSessionIdRef.current
       patchFloatingSession(sessionId, (s) => {
         const prev = s.paths
@@ -3291,6 +3404,421 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       })
     },
     [patchFloatingSession, recordUndoPoint],
+  )
+
+  const applyFloatingInternalDrop = useCallback(
+    async (args: {
+      target:
+        | { kind: 'playlist'; sessionId: string; insertBeforeIndex: number }
+        | { kind: 'launchpad'; sessionId: string; slotIndex: number }
+      payload: RegiaFloatingDnDPayload
+    }) => {
+      const { target, payload } = args
+      if (payload.v !== 1) return
+
+      const clampBank = (b: number) =>
+        Math.max(0, Math.min(LAUNCHPAD_BANK_COUNT - 1, Math.floor(b)))
+      const clampSlot = (x: number) =>
+        Math.max(0, Math.min(LAUNCHPAD_CELL_COUNT - 1, Math.floor(x)))
+
+      const stopPadAt = (sid: string, bi: number, si: number) => {
+        const ld = playbackLoadedTrackRef.current
+        if (
+          ld &&
+          ld.sessionId === sid &&
+          ld.index === si &&
+          (ld.launchPadBankIndex ?? 0) === bi
+        ) {
+          stopLaunchpadSample()
+          setLaunchpadAudioPlaying(false)
+          loadedIndexRef.current = null
+          setPlaybackLoadedTrack(null)
+        }
+      }
+
+      const syncLaunchPadCellsForSession = (
+        s: FloatingPlaylistSession,
+        banks: LaunchPadCell[][],
+      ): Partial<FloatingPlaylistSession> => {
+        const vis = clampBank(s.launchPadBankIndex ?? 0)
+        return {
+          launchPadBanks: banks,
+          launchPadCells: banks[vis]!.map((c) => ({ ...c })),
+        }
+      }
+
+      if (payload.kind === 'playlist-track') {
+        const srcSid = payload.sessionId
+        const srcIx = payload.index
+        const srcS = floatingSessionsRef.current.find((x) => x.id === srcSid)
+        if (!srcS || srcS.playlistMode === 'launchpad') return
+        const len = srcS.paths.length
+        if (srcIx < 0 || srcIx >= len) return
+        const pathToMove = srcS.paths[srcIx]
+        if (!pathToMove || !isMediaFilePath(pathToMove)) return
+
+        if (target.kind === 'playlist') {
+          const tgtSid = target.sessionId
+          const tgtS = floatingSessionsRef.current.find((x) => x.id === tgtSid)
+          if (!tgtS || tgtS.playlistMode === 'launchpad') return
+          const insertBefore = Math.max(
+            0,
+            Math.min(tgtS.paths.length, Math.floor(target.insertBeforeIndex)),
+          )
+
+          if (tgtSid === srcSid) {
+            const toIdx = insertBeforeIndexToReorderToIndex(
+              srcIx,
+              insertBefore,
+              len,
+            )
+            if (toIdx === srcIx) return
+            recordUndoPoint()
+            reorderPaths(srcIx, toIdx, srcSid, { skipUndo: true })
+            return
+          }
+
+          recordUndoPoint()
+
+          const fromPaths = [...srcS.paths]
+          const toPaths = [...tgtS.paths]
+          fromPaths.splice(srcIx, 1)
+          toPaths.splice(insertBefore, 0, pathToMove)
+
+          let fromCi = srcS.currentIndex
+          if (srcIx < fromCi) fromCi--
+          else if (srcIx === fromCi)
+            fromCi = Math.min(fromCi, Math.max(0, fromPaths.length - 1))
+
+          let toCi = tgtS.currentIndex
+          if (insertBefore <= toCi) toCi++
+
+          const playbackSid = videoOutputSessionIdRef.current
+          const li = loadedIndexRef.current
+
+          if (playbackSid === tgtSid && li != null && li >= 0 && srcSid !== tgtSid) {
+            let nli = li
+            if (insertBefore <= li) nli = li + 1
+            loadedIndexRef.current = nli
+            setPlaybackLoadedTrack({ sessionId: tgtSid, index: nli })
+          }
+
+          const loadedPath =
+            playbackSid === srcSid &&
+            li != null &&
+            li >= 0 &&
+            li < srcS.paths.length
+              ? srcS.paths[li]!
+              : null
+
+          if (fromPaths.length === 0 && playbackSid === srcSid) {
+            setPreviewSrc(null)
+            setPreviewSyncKey((k) => k + 1)
+            loadedIndexRef.current = null
+            setPlaybackLoadedTrack(null)
+            setVideoPlaying(false)
+            await send({ type: 'pause' })
+          } else if (playbackSid === srcSid && loadedPath != null) {
+            const newLi = fromPaths.findIndex((p) => p === loadedPath)
+            if (newLi < 0) {
+              loadedIndexRef.current = null
+              setPlaybackLoadedTrack(null)
+              setVideoPlaying(false)
+              setPreviewSrc(null)
+              setPreviewSyncKey((k) => k + 1)
+              await send({ type: 'pause' })
+            } else {
+              loadedIndexRef.current = newLi
+              setPlaybackLoadedTrack({ sessionId: playbackSid, index: newLi })
+            }
+          }
+
+          const extraTo: Partial<FloatingPlaylistSession> = {
+            paths: toPaths,
+            currentIndex: Math.max(0, toCi),
+          }
+          if (tgtS.paths.length === 0 && toPaths.length > 0) {
+            extraTo.playlistTitle = folderBasenameFromPaths(toPaths)
+          }
+
+          setFloatingSessions((prev) => {
+            const next = prev.map((s) => {
+              if (s.id === srcSid) {
+                if (fromPaths.length === 0)
+                  return { ...s, paths: [], currentIndex: 0 }
+                return {
+                  ...s,
+                  paths: fromPaths,
+                  currentIndex: Math.max(0, fromCi),
+                }
+              }
+              if (s.id === tgtSid) return { ...s, ...extraTo }
+              return s
+            })
+            floatingSessionsRef.current = next
+            return next
+          })
+          return
+        }
+
+        const tgtSid = target.sessionId
+        const tgtSlot = clampSlot(target.slotIndex)
+        const tgtS = floatingSessionsRef.current.find((x) => x.id === tgtSid)
+        if (!tgtS || tgtS.playlistMode !== 'launchpad' || !tgtS.launchPadCells)
+          return
+
+        recordUndoPoint()
+
+        const tgtBi = clampBank(tgtS.launchPadBankIndex ?? 0)
+        stopPadAt(tgtSid, tgtBi, tgtSlot)
+
+        const fromPaths = [...srcS.paths]
+        fromPaths.splice(srcIx, 1)
+
+        let fromCi = srcS.currentIndex
+        if (srcIx < fromCi) fromCi--
+        else if (srcIx === fromCi)
+          fromCi = Math.min(fromCi, Math.max(0, fromPaths.length - 1))
+
+        const playbackSid = videoOutputSessionIdRef.current
+        const li = loadedIndexRef.current
+        const loadedPath =
+          playbackSid === srcSid &&
+          li != null &&
+          li >= 0 &&
+          li < srcS.paths.length
+            ? srcS.paths[li]!
+            : null
+
+        if (fromPaths.length === 0 && playbackSid === srcSid) {
+          setPreviewSrc(null)
+          setPreviewSyncKey((k) => k + 1)
+          loadedIndexRef.current = null
+          setPlaybackLoadedTrack(null)
+          setVideoPlaying(false)
+          await send({ type: 'pause' })
+        } else if (playbackSid === srcSid && loadedPath != null) {
+          const newLi = fromPaths.findIndex((p) => p === loadedPath)
+          if (newLi < 0) {
+            loadedIndexRef.current = null
+            setPlaybackLoadedTrack(null)
+            setVideoPlaying(false)
+            setPreviewSrc(null)
+            setPreviewSyncKey((k) => k + 1)
+            await send({ type: 'pause' })
+          } else {
+            loadedIndexRef.current = newLi
+            setPlaybackLoadedTrack({ sessionId: playbackSid, index: newLi })
+          }
+        }
+
+        const banks = cloneLaunchPadBanksDeep(
+          tgtS.launchPadBanks ??
+            migrateLaunchPadBanksFromCells(tgtS.launchPadCells),
+        )
+        const row = banks[tgtBi]!.map((c) => ({ ...c }))
+        const merged = mergeLaunchPadCellsWithDrop(row, tgtSlot, [pathToMove])
+        banks[tgtBi] = dedupeLaunchPadKeysInBank(merged)
+
+        setFloatingSessions((prev) => {
+          const next = prev.map((s) => {
+            if (s.id === srcSid) {
+              if (fromPaths.length === 0)
+                return { ...s, paths: [], currentIndex: 0 }
+              return {
+                ...s,
+                paths: fromPaths,
+                currentIndex: Math.max(0, fromCi),
+              }
+            }
+            if (s.id === tgtSid) {
+              return {
+                ...s,
+                ...syncLaunchPadCellsForSession(s, banks),
+              }
+            }
+            return s
+          })
+          floatingSessionsRef.current = next
+          return next
+        })
+        return
+      }
+
+      if (payload.kind === 'launchpad-slot') {
+        const srcSid = payload.sessionId
+        const srcBi = clampBank(payload.bankIndex)
+        const srcSi = clampSlot(payload.slotIndex)
+        const srcS = floatingSessionsRef.current.find((x) => x.id === srcSid)
+        if (!srcS || srcS.playlistMode !== 'launchpad' || !srcS.launchPadCells)
+          return
+
+        const banksSrc0 = cloneLaunchPadBanksDeep(
+          srcS.launchPadBanks ??
+            migrateLaunchPadBanksFromCells(srcS.launchPadCells),
+        )
+        const srcCell = banksSrc0[srcBi]![srcSi]
+        if (!srcCell?.samplePath || !isMediaFilePath(srcCell.samplePath)) return
+
+        if (target.kind === 'playlist') {
+          const tgtSid = target.sessionId
+          const tgtS = floatingSessionsRef.current.find((x) => x.id === tgtSid)
+          if (!tgtS || tgtS.playlistMode === 'launchpad') return
+          const insertBefore = Math.max(
+            0,
+            Math.min(tgtS.paths.length, Math.floor(target.insertBeforeIndex)),
+          )
+
+          recordUndoPoint()
+          stopPadAt(srcSid, srcBi, srcSi)
+
+          const pathAdd = srcCell.samplePath
+          banksSrc0[srcBi]![srcSi] = clearedLaunchPadSlotCell(
+            srcSi,
+            srcCell.padColor,
+          )
+          banksSrc0[srcBi] = dedupeLaunchPadKeysInBank(banksSrc0[srcBi]!)
+
+          const toPaths = [...tgtS.paths]
+          toPaths.splice(insertBefore, 0, pathAdd)
+          let toCi = tgtS.currentIndex
+          if (insertBefore <= toCi) toCi++
+
+          const playbackSid = videoOutputSessionIdRef.current
+          const li = loadedIndexRef.current
+          if (playbackSid === tgtSid && li != null && li >= 0) {
+            let nli = li
+            if (insertBefore <= li) nli = li + 1
+            loadedIndexRef.current = nli
+            setPlaybackLoadedTrack({ sessionId: tgtSid, index: nli })
+          }
+
+          const extraTo: Partial<FloatingPlaylistSession> = {
+            paths: toPaths,
+            currentIndex: Math.max(0, toCi),
+          }
+          if (tgtS.paths.length === 0 && toPaths.length > 0) {
+            extraTo.playlistTitle = folderBasenameFromPaths(toPaths)
+          }
+
+          setFloatingSessions((prev) => {
+            const next = prev.map((s) => {
+              if (s.id === srcSid) {
+                return {
+                  ...s,
+                  ...syncLaunchPadCellsForSession(s, banksSrc0),
+                }
+              }
+              if (s.id === tgtSid) return { ...s, ...extraTo }
+              return s
+            })
+            floatingSessionsRef.current = next
+            return next
+          })
+          return
+        }
+
+        const tgtSid = target.sessionId
+        const tgtSi = clampSlot(target.slotIndex)
+        const tgtS = floatingSessionsRef.current.find((x) => x.id === tgtSid)
+        if (!tgtS || tgtS.playlistMode !== 'launchpad' || !tgtS.launchPadCells)
+          return
+        const tgtBi = clampBank(tgtS.launchPadBankIndex ?? 0)
+
+        if (srcSid === tgtSid && srcBi === tgtBi && srcSi === tgtSi) return
+
+        recordUndoPoint()
+        stopPadAt(srcSid, srcBi, srcSi)
+        stopPadAt(tgtSid, tgtBi, tgtSi)
+
+        if (srcSid === tgtSid) {
+          const banks = cloneLaunchPadBanksDeep(
+            srcS.launchPadBanks ??
+              migrateLaunchPadBanksFromCells(srcS.launchPadCells),
+          )
+          const a = { ...banks[srcBi]![srcSi]! }
+          const b = { ...banks[tgtBi]![tgtSi]! }
+          const bHad = Boolean(b.samplePath)
+          if (!bHad) {
+            banks[tgtBi]![tgtSi] = {
+              ...a,
+              padKeyMode: normalizeLaunchPadKeyMode(a.padKeyMode),
+            }
+            banks[srcBi]![srcSi] = clearedLaunchPadSlotCell(srcSi, a.padColor)
+          } else {
+            banks[srcBi]![srcSi] = {
+              ...b,
+              padKeyMode: normalizeLaunchPadKeyMode(b.padKeyMode),
+            }
+            banks[tgtBi]![tgtSi] = {
+              ...a,
+              padKeyMode: normalizeLaunchPadKeyMode(a.padKeyMode),
+            }
+          }
+          banks[srcBi] = dedupeLaunchPadKeysInBank(banks[srcBi]!)
+          banks[tgtBi] = dedupeLaunchPadKeysInBank(banks[tgtBi]!)
+
+          setFloatingSessions((prev) => {
+            const next = prev.map((s) => {
+              if (s.id !== srcSid) return s
+              return { ...s, ...syncLaunchPadCellsForSession(s, banks) }
+            })
+            floatingSessionsRef.current = next
+            return next
+          })
+          return
+        }
+
+        const banksTgt = cloneLaunchPadBanksDeep(
+          tgtS.launchPadBanks ??
+            migrateLaunchPadBanksFromCells(tgtS.launchPadCells),
+        )
+        const a = { ...banksSrc0[srcBi]![srcSi]! }
+        const b = { ...banksTgt[tgtBi]![tgtSi]! }
+        const bHad = Boolean(b.samplePath)
+        if (!bHad) {
+          banksTgt[tgtBi]![tgtSi] = {
+            ...a,
+            padKeyMode: normalizeLaunchPadKeyMode(a.padKeyMode),
+          }
+          banksSrc0[srcBi]![srcSi] = clearedLaunchPadSlotCell(srcSi, a.padColor)
+        } else {
+          banksTgt[tgtBi]![tgtSi] = {
+            ...a,
+            padKeyMode: normalizeLaunchPadKeyMode(a.padKeyMode),
+          }
+          banksSrc0[srcBi]![srcSi] = {
+            ...b,
+            padKeyMode: normalizeLaunchPadKeyMode(b.padKeyMode),
+          }
+        }
+        banksSrc0[srcBi] = dedupeLaunchPadKeysInBank(banksSrc0[srcBi]!)
+        banksTgt[tgtBi] = dedupeLaunchPadKeysInBank(banksTgt[tgtBi]!)
+
+        setFloatingSessions((prev) => {
+          const next = prev.map((s) => {
+            if (s.id === srcSid)
+              return { ...s, ...syncLaunchPadCellsForSession(s, banksSrc0) }
+            if (s.id === tgtSid)
+              return { ...s, ...syncLaunchPadCellsForSession(s, banksTgt) }
+            return s
+          })
+          floatingSessionsRef.current = next
+          return next
+        })
+      }
+    },
+    [
+      recordUndoPoint,
+      reorderPaths,
+      send,
+      setFloatingSessions,
+      setLaunchpadAudioPlaying,
+      setPlaybackLoadedTrack,
+      setPreviewSrc,
+      setPreviewSyncKey,
+      setVideoPlaying,
+    ],
   )
 
   const setStillImageDurationSec = useCallback((sec: number) => {
@@ -3389,6 +3917,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       goPrev,
       selectItem,
       reorderPaths,
+      applyFloatingInternalDrop,
       playlistTitle,
       setPlaylistTitle,
       setPlaylistThemeColor,
@@ -3436,6 +3965,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       toggleSidebarOpen,
       sidebarWidthPx,
       setSidebarWidthPx,
+      playlistFloaterOsSessionIds,
     }),
     [
       paths,
@@ -3483,13 +4013,12 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       stopPlayback,
       setLoopMode,
       setMuted,
-      setOutputVolume,
-      setOutputSinkId,
       toggleSecondScreen,
       goNext,
       goPrev,
       selectItem,
       reorderPaths,
+      applyFloatingInternalDrop,
       playlistTitle,
       setPlaylistTitle,
       setPlaylistThemeColor,
@@ -3537,16 +4066,225 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       toggleSidebarOpen,
       sidebarWidthPx,
       setSidebarWidthPx,
+      playlistFloaterOsSessionIds,
     ],
   )
 
   return (
-    <RegiaContext.Provider value={value}>{children}</RegiaContext.Provider>
+    <RegiaContext.Provider value={value}>
+      {children}
+      <FloaterOsPlaylistBridge
+        setPlaylistFloaterOsSessionIds={setPlaylistFloaterOsSessionIds}
+      />
+    </RegiaContext.Provider>
   )
 }
 
 export function useRegia(): RegiaContextValue {
+  const mirror = useContext(PlaylistFloaterMirrorContext)
+  if (mirror) return mirror
   const v = useContext(RegiaContext)
   if (!v) throw new Error('useRegia must be used within RegiaProvider')
   return v
+}
+
+const FLOATER_ACTION_ALLOWLIST = new Set([
+  'bringFloatingPanelToFront',
+  'setActiveFloatingSession',
+  'loadIndexAndPlay',
+  'openFolder',
+  'addMediaToPlaylist',
+  'removePathAt',
+  'reorderPaths',
+  'applyFloatingInternalDrop',
+  'removeFloatingPlaylist',
+  'setPlaylistTitle',
+  'setPlaylistThemeColor',
+  'setPlaylistCrossfade',
+  'setPlaylistOutputMuted',
+  'setPlaylistOutputVolume',
+  'recordUndoPoint',
+  'saveLoadedPlaylistOverwrite',
+  'persistSavedPlaylistAfterFloatingTitleBlur',
+  'addPathsToPlaylistFromPaths',
+  'applyLaunchPadDropFromPaths',
+  'loadLaunchPadSlotAndPlay',
+  'stopLaunchPadCueRelease',
+  'updateLaunchPadCell',
+  'setLaunchPadBankIndex',
+  'updateFloatingPlaylistChrome',
+  'undo',
+  'redo',
+  'setPlaylistLoopMode',
+  'setOutputVolume',
+  'setOutputSinkId',
+  'togglePlay',
+  'stopPlayback',
+  'setLoopMode',
+  'setMuted',
+  'toggleSecondScreen',
+  'goNext',
+  'goPrev',
+  'selectItem',
+  'refreshSavedPlaylists',
+  'saveCurrentPlaylist',
+  'loadSavedPlaylist',
+  'deleteSavedPlaylist',
+  'reorderSavedPlaylists',
+  'duplicateSavedPlaylist',
+  'closeFloatingPlaylist',
+  'openFloatingPlaylist',
+  'hideFloatingPlaylistPanels',
+  'repositionAllFloatingPanels',
+  'refreshNamedWorkspaces',
+  'createNewNamedWorkspace',
+  'saveNamedWorkspace',
+  'loadNamedWorkspace',
+  'deleteNamedWorkspace',
+  'renameNamedWorkspace',
+  'overwriteNamedWorkspace',
+  'duplicateNamedWorkspace',
+  'setPreviewDocked',
+  'setPreviewFloating',
+  'setSidebarOpen',
+  'toggleSidebarOpen',
+  'setSidebarWidthPx',
+  'setStillImageDurationSec',
+  'addFloatingPlaylist',
+  'addFloatingLaunchPad',
+])
+
+function FloaterOsPlaylistBridge({
+  setPlaylistFloaterOsSessionIds,
+}: {
+  setPlaylistFloaterOsSessionIds: Dispatch<SetStateAction<string[]>>
+}) {
+  const regia = useRegia()
+  const regiaRef = useRef(regia)
+  useLayoutEffect(() => {
+    regiaRef.current = regia
+  }, [regia])
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.onPlaylistFloaterActionFromMain) return
+    const off = api.onPlaylistFloaterActionFromMain(
+      (msg: { sessionId: string; method: string; args: unknown[] }) => {
+        if (!FLOATER_ACTION_ALLOWLIST.has(msg.method)) return
+        const fn = (regiaRef.current as Record<string, unknown>)[msg.method]
+        if (typeof fn !== 'function') return
+        void Promise.resolve(
+          (fn as (...a: unknown[]) => unknown)(...msg.args),
+        )
+      },
+    )
+    return off
+  }, [])
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.onPlaylistFloaterOsClosedFromMain) return
+    return api.onPlaylistFloaterOsClosedFromMain(
+      (msg: {
+        sessionId: string
+        bounds: { x: number; y: number; width: number; height: number } | null
+      }) => {
+        const { sessionId, bounds } = msg
+        setPlaylistFloaterOsSessionIds((p) => p.filter((x) => x !== sessionId))
+        void (async () => {
+          const c = await api.getRegiaContentBounds?.()
+          if (bounds && c) {
+            await Promise.resolve(
+              regiaRef.current.updateFloatingPlaylistChrome(sessionId, {
+                pos: {
+                  x: Math.round(bounds.x - c.x),
+                  y: Math.round(bounds.y - c.y),
+                },
+                panelSize: {
+                  width: Math.round(bounds.width),
+                  height: Math.round(bounds.height),
+                },
+                windowAlwaysOnTopPinned: false,
+              }),
+            )
+          } else {
+            await Promise.resolve(
+              regiaRef.current.updateFloatingPlaylistChrome(sessionId, {
+                windowAlwaysOnTopPinned: false,
+              }),
+            )
+          }
+        })()
+      },
+    )
+  }, [setPlaylistFloaterOsSessionIds])
+
+  const { floatingPlaylistSessions, playlistFloaterOsSessionIds } = regia
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.openPlaylistFloaterWindow || !api.getRegiaContentBounds) return
+    for (const s of floatingPlaylistSessions) {
+      if (!s.windowAlwaysOnTopPinned) continue
+      if (playlistFloaterOsSessionIds.includes(s.id)) continue
+      void (async () => {
+        const bounds = await api.getRegiaContentBounds()
+        if (!bounds) return
+        const h = s.collapsed ? 84 : s.panelSize.height
+        await api.openPlaylistFloaterWindow({
+          sessionId: s.id,
+          x: Math.round(bounds.x + s.pos.x),
+          y: Math.round(bounds.y + s.pos.y),
+          width: Math.round(s.panelSize.width),
+          height: Math.round(h),
+        })
+        setPlaylistFloaterOsSessionIds((prev) =>
+          prev.includes(s.id) ? prev : [...prev, s.id],
+        )
+      })()
+    }
+  }, [
+    floatingPlaylistSessions,
+    playlistFloaterOsSessionIds,
+    setPlaylistFloaterOsSessionIds,
+  ])
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.closePlaylistFloaterWindow) return
+    for (const id of playlistFloaterOsSessionIds) {
+      const s = floatingPlaylistSessions.find((x) => x.id === id)
+      if (!s?.windowAlwaysOnTopPinned) {
+        void api.closePlaylistFloaterWindow(id)
+        setPlaylistFloaterOsSessionIds((prev) => prev.filter((x) => x !== id))
+      }
+    }
+  }, [
+    floatingPlaylistSessions,
+    playlistFloaterOsSessionIds,
+    setPlaylistFloaterOsSessionIds,
+  ])
+
+  const pushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useLayoutEffect(() => {
+    const api = window.electronAPI
+    if (!api?.playlistFloaterBroadcastState) return
+    if (playlistFloaterOsSessionIds.length === 0) return
+    if (pushTimerRef.current != null) clearTimeout(pushTimerRef.current)
+    pushTimerRef.current = setTimeout(() => {
+      pushTimerRef.current = null
+      const r = regiaRef.current
+      for (const id of playlistFloaterOsSessionIds) {
+        void api.playlistFloaterBroadcastState(
+          id,
+          buildPlaylistFloaterSyncPayload(r, id),
+        )
+      }
+    }, 48)
+    return () => {
+      if (pushTimerRef.current != null) clearTimeout(pushTimerRef.current)
+    }
+  }, [regia, playlistFloaterOsSessionIds])
+
+  return null
 }

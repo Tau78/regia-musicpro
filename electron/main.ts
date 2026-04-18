@@ -375,6 +375,8 @@ function duplicateSavedPlaylist(id: string): { id: string } | null {
 
 let regiaWindow: BrowserWindow | null = null
 let outputWindow: BrowserWindow | null = null
+/** Playlist / launchpad in finestra OS separata (puntina). */
+const playlistFloaterWindows = new Map<string, BrowserWindow>()
 
 const DEFAULT_OUTPUT_RESOLUTION = { width: 1280, height: 720 } as const
 /** Allineare con `src/lib/screen2Resolutions.ts` (`SCREEN2_RESOLUTION_OPTIONS`). */
@@ -560,6 +562,8 @@ function createOutputWindow(): BrowserWindow {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: false,
+      /* Video/audio devono proseguire anche con finestra nascosta (Schermo 2 off). */
+      backgroundThrottling: false,
     },
   })
 
@@ -815,6 +819,140 @@ function setupIpc() {
     } else {
       regiaWindow.setAlwaysOnTop(flag)
     }
+  })
+
+  ipcMain.handle('regia:getContentBounds', () => {
+    if (!regiaWindow || regiaWindow.isDestroyed()) return null
+    return regiaWindow.getContentBounds()
+  })
+
+  ipcMain.handle(
+    'playlistFloater:open',
+    (
+      _e,
+      opts: {
+        sessionId?: string
+        x?: number
+        y?: number
+        width?: number
+        height?: number
+      },
+    ) => {
+      const sessionId =
+        typeof opts?.sessionId === 'string' && opts.sessionId.trim()
+          ? opts.sessionId.trim()
+          : ''
+      if (!sessionId) return { ok: false as const }
+      if (playlistFloaterWindows.has(sessionId)) return { ok: true as const }
+      const x = Number(opts?.x)
+      const y = Number(opts?.y)
+      const width = Number(opts?.width)
+      const height = Number(opts?.height)
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(width) ||
+        !Number.isFinite(height)
+      ) {
+        return { ok: false as const }
+      }
+      const w = new BrowserWindow({
+        x: Math.round(x),
+        y: Math.round(y),
+        width: Math.max(220, Math.round(width)),
+        height: Math.max(180, Math.round(height)),
+        frame: false,
+        show: false,
+        backgroundColor: '#13151a',
+        webPreferences: {
+          preload: path.join(__dirname, 'preload.cjs'),
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          webSecurity: false,
+        },
+      })
+      w.setMenuBarVisibility(false)
+      if (process.platform === 'darwin') {
+        w.setAlwaysOnTop(true, 'floating')
+      } else {
+        w.setAlwaysOnTop(true)
+      }
+      if (isDev) {
+        void w.loadURL(
+          `${getDevServerUrl()}/?playlistOsFloater=1&session=${encodeURIComponent(sessionId)}`,
+        )
+      } else {
+        void w.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), {
+          search: `playlistOsFloater=1&session=${encodeURIComponent(sessionId)}`,
+        })
+      }
+      w.once('ready-to-show', () => {
+        if (!w.isDestroyed()) w.show()
+      })
+      w.on('close', () => {
+        let b: { x: number; y: number; width: number; height: number } | null =
+          null
+        try {
+          if (!w.isDestroyed()) b = w.getBounds()
+        } catch {
+          /* ignore */
+        }
+        playlistFloaterWindows.delete(sessionId)
+        if (regiaWindow && !regiaWindow.isDestroyed()) {
+          regiaWindow.webContents.send('playlist-floater-os-closed', {
+            sessionId,
+            bounds: b,
+          })
+        }
+      })
+      playlistFloaterWindows.set(sessionId, w)
+      return { ok: true as const }
+    },
+  )
+
+  ipcMain.handle('playlistFloater:close', (_e, sessionId: unknown) => {
+    const id = typeof sessionId === 'string' ? sessionId : ''
+    const w = id ? playlistFloaterWindows.get(id) : undefined
+    if (w && !w.isDestroyed()) w.close()
+    if (id) playlistFloaterWindows.delete(id)
+    return { ok: true as const }
+  })
+
+  ipcMain.handle(
+    'playlistFloater:broadcastState',
+    (event, sessionId: unknown, payload: unknown) => {
+      if (!regiaWindow || event.sender !== regiaWindow.webContents)
+        return { ok: false as const }
+      const id = typeof sessionId === 'string' ? sessionId : ''
+      if (!id) return { ok: false as const }
+      const w = playlistFloaterWindows.get(id)
+      if (w && !w.isDestroyed()) {
+        w.webContents.send('playlist-floater-state', payload)
+      }
+      return { ok: true as const }
+    },
+  )
+
+  ipcMain.on('playlistFloater:sendAction', (event, msg: unknown) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return
+    let sid: string | null = null
+    for (const [k, v] of playlistFloaterWindows) {
+      if (v === win) {
+        sid = k
+        break
+      }
+    }
+    if (!sid || !regiaWindow || regiaWindow.isDestroyed()) return
+    const m = msg as { method?: string; args?: unknown[] }
+    if (typeof m?.method !== 'string') return
+    const args = Array.isArray(m.args) ? m.args : []
+    regiaWindow.webContents.send('playlist-floater-action', {
+      sessionId: sid,
+      method: m.method,
+      args,
+    })
   })
 }
 
