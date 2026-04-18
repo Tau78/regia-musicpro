@@ -10,6 +10,7 @@ import {
 import FloatingPlaylist from './components/FloatingPlaylist.tsx'
 import FloatingPreview from './components/FloatingPreview.tsx'
 import PreviewBlock from './components/PreviewBlock.tsx'
+import PlanciaSnapGuidesOverlay from './components/PlanciaSnapGuidesOverlay.tsx'
 import PlanciaWorkspaceBanner from './components/PlanciaWorkspaceBanner.tsx'
 import SidebarTabsPanel from './components/SidebarTabsPanel.tsx'
 import AudioOutputBar from './components/AudioOutputBar.tsx'
@@ -40,6 +41,7 @@ function RegiaShell() {
     toggleSidebarOpen,
     sidebarWidthPx,
     setSidebarWidthPx,
+    repositionAllFloatingPanels,
   } = useRegia()
 
   const [sidebarResizeActive, setSidebarResizeActive] = useState(false)
@@ -132,6 +134,7 @@ function RegiaShell() {
 
   return (
     <div className="regia-app">
+      <PlanciaSnapGuidesOverlay />
       <header className="regia-header">
         <div className="regia-brand">
           <span className="regia-dot" aria-hidden />
@@ -155,6 +158,17 @@ function RegiaShell() {
             </button>
             <LoopToggles mode={loopMode} onChange={setLoopMode} />
             <div className="regia-undo-redo" role="group" aria-label="Annulla e ripristina">
+              {floatingPlaylistOpen && floatingPlaylistSessions.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn-icon regia-reposition-panels-btn"
+                  onClick={() => repositionAllFloatingPanels()}
+                  title="Riposiziona tutti i pannelli flottanti a cascata nell’area principale (evita fuori schermo)"
+                  aria-label="Riposiziona pannelli flottanti"
+                >
+                  Griglia
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="btn-icon regia-undo-btn"

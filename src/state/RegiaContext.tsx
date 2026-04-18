@@ -30,6 +30,8 @@ import { planFirstDiskLinkForUnlinkedSession } from '../lib/playlistFirstDiskLin
 import { normalizePlaylistThemeColor } from '../lib/playlistThemeColor.ts'
 import { totalDurationSecForPlaylistSave } from '../lib/sumMediaDurationsSec.ts'
 import type { SavedPlaylistMeta } from '../playlistTypes.ts'
+import { clampPanelInViewport } from '../lib/floatingPanelGeometry.ts'
+import { queryPlanciaContentRect } from '../lib/planciaSnap.ts'
 import { persistPreviewDetached } from '../lib/previewDetachedStorage.ts'
 import { readPreviewLayoutFromLs, writePreviewLayoutToLs } from '../lib/previewLayoutStorage.ts'
 import {
@@ -50,11 +52,14 @@ import {
 } from '../lib/workspaceShell.ts'
 import { isTypingTarget } from '../hooks/useKeyboardShortcuts.ts'
 import {
+  LAUNCHPAD_BANK_COUNT,
   LAUNCHPAD_CELL_COUNT,
   LAUNCHPAD_CUE_HOLD_MS,
+  cloneLaunchPadBanksDeep,
   cloneLaunchPadCellsSnapshot,
   defaultLaunchPadCells,
   launchPadCellsEqual,
+  migrateLaunchPadBanksFromCells,
   normalizeLaunchPadKeyMode,
   type LaunchPadCell,
   type FloatingPlaylistPanelSize,
@@ -163,6 +168,8 @@ export type RegiaContextValue = {
     >,
     options?: { skipUndo?: boolean },
   ) => Promise<void>
+  /** Cambia pagina pad (0…`LAUNCHPAD_BANK_COUNT`-1) per il launchpad indicato. */
+  setLaunchPadBankIndex: (sessionId: string, bankIndex: number) => void
   togglePlay: () => Promise<void>
   setLoopMode: (m: LoopMode) => void
   setMuted: (m: boolean) => void
@@ -236,6 +243,8 @@ export type RegiaContextValue = {
       playlistOutputVolume?: number
     },
   ) => void
+  /** Dispone i pannelli flottanti a cascata dentro l’area plancia (anti fuori schermo). */
+  repositionAllFloatingPanels: () => void
   /** True se la playlist del pannello è una salvata modificata. */
   savedPlaylistDirty: (sessionId: string) => boolean
   /** Salva sovrascrivendo la playlist salvata associata a quel pannello. */
@@ -251,8 +260,15 @@ export type RegiaContextValue = {
   redo: () => void
   /** Cattura uno stato annullabile (es. prima di commit titolo da blur). */
   recordUndoPoint: () => void
-  /** Brano caricato in anteprima/uscita: una sola riga evidenziabile tra più pannelli. */
-  playbackLoadedTrack: { sessionId: string; index: number } | null
+  /**
+   * Brano caricato in anteprima/uscita: una sola riga evidenziabile tra più pannelli.
+   * Launchpad: `launchPadBankIndex` = pagina 0…N-1 del banco slot.
+   */
+  playbackLoadedTrack: {
+    sessionId: string
+    index: number
+    launchPadBankIndex?: number
+  } | null
   /** Workspace nominati (layout plancia + pannelli). */
   namedWorkspaces: NamedWorkspaceMeta[]
   refreshNamedWorkspaces: () => void
@@ -422,6 +438,26 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
     }
   }
 
+  let launchPadBanks: LaunchPadCell[][] | undefined
+  let launchPadBankIndex: number | undefined
+  if (playlistMode === 'launchpad' && launchPadCells) {
+    const rawBanks = (r as Record<string, unknown>).launchPadBanks
+    if (Array.isArray(rawBanks) && rawBanks.length > 0) {
+      launchPadBanks = cloneLaunchPadBanksDeep(rawBanks as LaunchPadCell[][])
+      const rawBi = (r as Record<string, unknown>).launchPadBankIndex
+      const bi =
+        typeof rawBi === 'number' && Number.isFinite(rawBi)
+          ? Math.max(0, Math.min(LAUNCHPAD_BANK_COUNT - 1, Math.floor(rawBi)))
+          : 0
+      launchPadBankIndex = bi
+      launchPadCells = launchPadBanks[bi]!.map((c) => ({ ...c }))
+    } else {
+      launchPadBanks = migrateLaunchPadBanksFromCells(launchPadCells)
+      launchPadBankIndex = 0
+      launchPadCells = launchPadBanks[0]!.map((c) => ({ ...c }))
+    }
+  }
+
   const editingSavedPlaylistId =
     r.editingSavedPlaylistId === null
       ? null
@@ -489,6 +525,7 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
     collapsed,
     playlistMode,
     launchPadCells,
+    ...(launchPadBanks ? { launchPadBanks, launchPadBankIndex } : {}),
     paths,
     currentIndex,
     playlistTitle,
@@ -717,6 +754,10 @@ function deepCloneFloatingSessions(
     ...s,
     paths: [...s.paths],
     launchPadCells: s.launchPadCells?.map((c) => ({ ...c })),
+    launchPadBanks: s.launchPadBanks
+      ? cloneLaunchPadBanksDeep(s.launchPadBanks)
+      : undefined,
+    launchPadBankIndex: s.launchPadBankIndex,
     playlistOutputMuted: s.playlistOutputMuted ?? false,
     playlistOutputVolume:
       typeof s.playlistOutputVolume === 'number' &&
@@ -872,6 +913,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const [playbackLoadedTrack, setPlaybackLoadedTrack] = useState<{
     sessionId: string
     index: number
+    launchPadBankIndex?: number
   } | null>(null)
   const playbackLoadedTrackRef = useRef(playbackLoadedTrack)
   useLayoutEffect(() => {
@@ -1633,6 +1675,32 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     [patchFloatingSession],
   )
 
+  const repositionAllFloatingPanels = useCallback(() => {
+    const pl = queryPlanciaContentRect()
+    if (!pl) return
+    recordUndoPoint()
+    const MIN_W = 220
+    const MIN_H = 180
+    const MAX_W = 960
+    const MAX_H = 780
+    const M = 10
+    const step = 28
+    const snapshot = floatingSessionsRef.current
+    if (snapshot.length === 0) return
+    snapshot.forEach((s, i) => {
+      const nx = pl.left + M + (i % 5) * step
+      const ny = pl.top + M + (i % 5) * step
+      const { pos, size } = clampPanelInViewport(
+        { x: nx, y: ny },
+        { width: s.panelSize.width, height: s.panelSize.height },
+        MIN_W,
+        MIN_H,
+        { maxW: MAX_W, maxH: MAX_H },
+      )
+      patchFloatingSession(s.id, { pos, panelSize: size })
+    })
+  }, [patchFloatingSession, recordUndoPoint])
+
   const bringFloatingPanelToFront = useCallback((key: string) => {
     if (!key) return
     setFloatingZOrder((prev) => {
@@ -2300,7 +2368,14 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         return
       const sess = floatingSessionsRef.current.find((x) => x.id === sessionId)
       if (sess?.playlistMode !== 'launchpad' || !sess.launchPadCells) return
-      const cell0 = sess.launchPadCells[slotIndex]
+      const bi = Math.max(
+        0,
+        Math.min(LAUNCHPAD_BANK_COUNT - 1, sess.launchPadBankIndex ?? 0),
+      )
+      const banks =
+        sess.launchPadBanks ??
+        migrateLaunchPadBanksFromCells(sess.launchPadCells)
+      const cell0 = banks[bi]![slotIndex]
       const p = cell0?.samplePath
       if (!p) return
       const playlistMuted = Boolean(sess.playlistOutputMuted)
@@ -2329,7 +2404,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         },
       })
       loadedIndexRef.current = slotIndex
-      setPlaybackLoadedTrack({ sessionId, index: slotIndex })
+      setPlaybackLoadedTrack({ sessionId, index: slotIndex, launchPadBankIndex: bi })
       setLaunchpadAudioPlaying(true)
     },
     [patchFloatingSession],
@@ -2355,6 +2430,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   type PadKeyboardGesture = {
     code: string
     sessionId: string
+    bankIndex: number
     slotIndex: number
     keyMode: 'play' | 'toggle'
     timer: ReturnType<typeof setTimeout> | null
@@ -2365,6 +2441,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     function findPadKeyBinding(code: string): {
       sessionId: string
+      bankIndex: number
       slotIndex: number
       keyMode: 'play' | 'toggle'
     } | null {
@@ -2374,16 +2451,21 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         const sess = sessions.find((s) => s.id === sid)
         if (sess?.playlistMode !== 'launchpad' || !sess.launchPadCells)
           return null
-        const cells = sess.launchPadCells
-        for (let i = 0; i < cells.length; i++) {
-          const cell = cells[i]
-          const bound = cell.padKeyCode ?? null
-          if (bound === code && cell.samplePath) {
-            const keyMode =
-              cell.padKeyMode === 'toggle'
-                ? ('toggle' as const)
-                : ('play' as const)
-            return { sessionId: sid, slotIndex: i, keyMode }
+        const banks =
+          sess.launchPadBanks ??
+          migrateLaunchPadBanksFromCells(sess.launchPadCells)
+        for (let bi = 0; bi < LAUNCHPAD_BANK_COUNT; bi++) {
+          const cells = banks[bi]!
+          for (let i = 0; i < cells.length; i++) {
+            const cell = cells[i]
+            const bound = cell.padKeyCode ?? null
+            if (bound === code && cell.samplePath) {
+              const keyMode =
+                cell.padKeyMode === 'toggle'
+                  ? ('toggle' as const)
+                  : ('play' as const)
+              return { sessionId: sid, bankIndex: bi, slotIndex: i, keyMode }
+            }
           }
         }
         return null
@@ -2429,6 +2511,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const g: PadKeyboardGesture = {
         code: e.code,
         sessionId: bound.sessionId,
+        bankIndex: bound.bankIndex,
         slotIndex: bound.slotIndex,
         keyMode: bound.keyMode,
         timer: null,
@@ -2442,6 +2525,24 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           if (!cur || cur.code !== g.code || cur.cueCommitted) return
           cur.cueCommitted = true
           cur.timer = null
+          const sAct = floatingSessionsRef.current.find(
+            (x) => x.id === cur.sessionId,
+          )
+          if (sAct?.playlistMode === 'launchpad') {
+            const bnk = cloneLaunchPadBanksDeep(
+              sAct.launchPadBanks ??
+                migrateLaunchPadBanksFromCells(sAct.launchPadCells),
+            )
+            const bix = Math.max(
+              0,
+              Math.min(LAUNCHPAD_BANK_COUNT - 1, cur.bankIndex),
+            )
+            patchFloatingSession(cur.sessionId, {
+              launchPadBankIndex: bix,
+              launchPadBanks: bnk,
+              launchPadCells: bnk[bix]!.map((c) => ({ ...c })),
+            })
+          }
           void loadLaunchPadSlotAndPlayRef.current(
             cur.sessionId,
             cur.slotIndex,
@@ -2467,7 +2568,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
 
       const loadedThisSlot =
         playbackLoadedTrackRef.current?.sessionId === g.sessionId &&
-        playbackLoadedTrackRef.current?.index === g.slotIndex
+        playbackLoadedTrackRef.current?.index === g.slotIndex &&
+        (playbackLoadedTrackRef.current?.launchPadBankIndex ?? 0) ===
+          g.bankIndex
       const stillActiveThisSlot =
         loadedThisSlot &&
         (launchpadAudioPlayingRef.current ||
@@ -2476,6 +2579,22 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (g.keyMode === 'toggle' && stillActiveThisSlot) {
         stopLaunchPadCueReleaseRef.current()
         return
+      }
+      const sUp = floatingSessionsRef.current.find((x) => x.id === g.sessionId)
+      if (sUp?.playlistMode === 'launchpad') {
+        const bnk = cloneLaunchPadBanksDeep(
+          sUp.launchPadBanks ??
+            migrateLaunchPadBanksFromCells(sUp.launchPadCells),
+        )
+        const bix = Math.max(
+          0,
+          Math.min(LAUNCHPAD_BANK_COUNT - 1, g.bankIndex),
+        )
+        patchFloatingSession(g.sessionId, {
+          launchPadBankIndex: bix,
+          launchPadBanks: bnk,
+          launchPadCells: bnk[bix]!.map((c) => ({ ...c })),
+        })
       }
       void loadLaunchPadSlotAndPlayRef.current(g.sessionId, g.slotIndex)
     }
@@ -2488,7 +2607,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('keyup', onKeyUp, true)
     }
-  }, [])
+  }, [patchFloatingSession])
 
   const updateLaunchPadCell = useCallback(
     async (
@@ -2533,7 +2652,14 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       } else if (touchesGainOnly && !options?.skipUndo) {
         recordUndoPoint()
       }
-      const prevCells = s0.launchPadCells.map((c) => ({
+      const bi = Math.max(
+        0,
+        Math.min(LAUNCHPAD_BANK_COUNT - 1, s0.launchPadBankIndex ?? 0),
+      )
+      const banks = cloneLaunchPadBanksDeep(
+        s0.launchPadBanks ?? migrateLaunchPadBanksFromCells(s0.launchPadCells),
+      )
+      const prevCells = banks[bi]!.map((c) => ({
         ...c,
         padKeyCode: c.padKeyCode ?? null,
         padKeyMode: normalizeLaunchPadKeyMode(c.padKeyMode),
@@ -2589,14 +2715,19 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         }
         return { padColor, samplePath, padGain, padKeyCode, padKeyMode }
       })
+      banks[bi] = cells
       const loaded = playbackLoadedTrackRef.current
       const clearingPlayingOrLoadedPad =
         loaded != null &&
         loaded.sessionId === sessionId &&
         loaded.index === slotIndex &&
+        (loaded.launchPadBankIndex ?? 0) === bi &&
         'samplePath' in patch &&
         patch.samplePath === null
-      patchFloatingSession(sessionId, { launchPadCells: cells })
+      patchFloatingSession(sessionId, {
+        launchPadBanks: banks,
+        launchPadCells: cells,
+      })
       if (clearingPlayingOrLoadedPad) {
         stopLaunchpadSample()
         setLaunchpadAudioPlaying(false)
@@ -2605,6 +2736,26 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       }
     },
     [patchFloatingSession, recordUndoPoint],
+  )
+
+  const setLaunchPadBankIndex = useCallback(
+    (sessionId: string, bankIndex: number) => {
+      const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
+      if (!s0 || s0.playlistMode !== 'launchpad' || !s0.launchPadCells) return
+      const bix = Math.max(
+        0,
+        Math.min(LAUNCHPAD_BANK_COUNT - 1, Math.floor(bankIndex)),
+      )
+      const banks = cloneLaunchPadBanksDeep(
+        s0.launchPadBanks ?? migrateLaunchPadBanksFromCells(s0.launchPadCells),
+      )
+      patchFloatingSession(sessionId, {
+        launchPadBankIndex: bix,
+        launchPadBanks: banks,
+        launchPadCells: banks[bix]!.map((c) => ({ ...c })),
+      })
+    },
+    [patchFloatingSession],
   )
 
   const loadIndexAndPlayRef = useRef(loadIndexAndPlay)
@@ -2812,7 +2963,16 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       (x) => x.id === playbackLoadedTrack.sessionId,
     )
     if (!s || s.playlistMode !== 'launchpad' || !s.launchPadCells) return
-    const cell = s.launchPadCells[playbackLoadedTrack.index]
+    const bi = Math.max(
+      0,
+      Math.min(
+        LAUNCHPAD_BANK_COUNT - 1,
+        playbackLoadedTrack.launchPadBankIndex ?? s.launchPadBankIndex ?? 0,
+      ),
+    )
+    const banks =
+      s.launchPadBanks ?? migrateLaunchPadBanksFromCells(s.launchPadCells)
+    const cell = banks[bi]![playbackLoadedTrack.index]
     if (!cell) return
     const panelVol =
       typeof s.playlistOutputVolume === 'number' &&
@@ -2938,12 +3098,17 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       recordUndoPoint()
       patchFloatingSession(sessionId, (s) => {
         if (s.playlistMode !== 'launchpad' || !s.launchPadCells) return s
-        const cells = mergeLaunchPadCellsWithDrop(
-          s.launchPadCells,
-          startSlotIndex,
-          paths,
+        const bi = Math.max(
+          0,
+          Math.min(LAUNCHPAD_BANK_COUNT - 1, s.launchPadBankIndex ?? 0),
         )
-        return { ...s, launchPadCells: cells }
+        const banks = cloneLaunchPadBanksDeep(
+          s.launchPadBanks ?? migrateLaunchPadBanksFromCells(s.launchPadCells),
+        )
+        const row = banks[bi]!.map((c) => ({ ...c }))
+        const cells = mergeLaunchPadCellsWithDrop(row, startSlotIndex, paths)
+        banks[bi] = cells
+        return { ...s, launchPadBanks: banks, launchPadCells: cells }
       })
     },
     [patchFloatingSession, recordUndoPoint],
@@ -3160,6 +3325,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       loadLaunchPadSlotAndPlay,
       stopLaunchPadCueRelease,
       updateLaunchPadCell,
+      setLaunchPadBankIndex,
       togglePlay,
       setLoopMode,
       setMuted,
@@ -3186,6 +3352,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       openFloatingPlaylist,
       hideFloatingPlaylistPanels,
       updateFloatingPlaylistChrome,
+      repositionAllFloatingPanels,
       savedPlaylistDirty,
       saveLoadedPlaylistOverwrite,
       persistSavedPlaylistAfterFloatingTitleBlur,
@@ -3256,6 +3423,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       loadLaunchPadSlotAndPlay,
       stopLaunchPadCueRelease,
       updateLaunchPadCell,
+      setLaunchPadBankIndex,
       togglePlay,
       setLoopMode,
       setMuted,
@@ -3284,6 +3452,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       openFloatingPlaylist,
       hideFloatingPlaylistPanels,
       updateFloatingPlaylistChrome,
+      repositionAllFloatingPanels,
       savedPlaylistDirty,
       saveLoadedPlaylistOverwrite,
       persistSavedPlaylistAfterFloatingTitleBlur,

@@ -112,4 +112,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     height: number
   }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('output:setResolution', opts),
+
+  reportOutputAudioLevel: (level: number): void => {
+    ipcRenderer.send('output:audio-level', level)
+  },
+
+  onOutputAudioLevel: (handler: (level: number) => void): (() => void) => {
+    const fn = (_: Electron.IpcRendererEvent, level: number) =>
+      handler(typeof level === 'number' && Number.isFinite(level) ? level : 0)
+    ipcRenderer.on('regia:output-audio-level', fn)
+    return () => ipcRenderer.removeListener('regia:output-audio-level', fn)
+  },
 })

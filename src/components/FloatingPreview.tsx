@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -17,9 +18,11 @@ import {
 } from '../lib/floatingPanelGeometry.ts'
 import {
   buildPeerDimensionTargets,
+  dispatchRegiaSnapGuides,
   queryPlanciaContentRect,
-  snapFloatingPanelDragPos,
+  snapFloatingPanelDragPosWithGuides,
   snapFloatingPanelResize,
+  type PeerSnapRect,
 } from '../lib/planciaSnap.ts'
 import { usePlanciaSnapEnabled } from '../lib/planciaSnapSettings.ts'
 import {
@@ -35,6 +38,10 @@ import PreviewBlock from './PreviewBlock.tsx'
 
 const MIN_W = 280
 const MIN_H = 240
+const MAX_W = 960
+const MAX_H = 780
+const PREVIEW_CLAMP_OPTS = { maxW: MAX_W, maxH: MAX_H } as const
+const COLLAPSED_FLOAT_PANEL_H_PX = 84
 
 const DEFAULT_LAYOUT: { pos: PanelPos; size: PanelSize } = {
   pos: { x: 72, y: 80 },
@@ -45,7 +52,13 @@ function readLayoutFromLs(): { pos: PanelPos; size: PanelSize } {
   const L = readPreviewLayoutFromLs()
   const pos: PanelPos = { x: L.x, y: L.y }
   const size: PanelSize = { width: L.width, height: L.height }
-  const { pos: np, size: ns } = clampPanelInViewport(pos, size, MIN_W, MIN_H)
+  const { pos: np, size: ns } = clampPanelInViewport(
+    pos,
+    size,
+    MIN_W,
+    MIN_H,
+    PREVIEW_CLAMP_OPTS,
+  )
   return { pos: np, size: ns }
 }
 
@@ -65,6 +78,18 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
     bringFloatingPanelToFront,
   } = useRegia()
   const snapEnabled = usePlanciaSnapEnabled()
+  const dragSnapPeerRects = useMemo((): PeerSnapRect[] => {
+    return floatingPlaylistSessions.map((s) => {
+      const h = s.collapsed ? COLLAPSED_FLOAT_PANEL_H_PX : s.panelSize.height
+      return {
+        left: s.pos.x,
+        top: s.pos.y,
+        right: s.pos.x + s.panelSize.width,
+        bottom: s.pos.y + h,
+      }
+    })
+  }, [floatingPlaylistSessions])
+
   const [pos, setPos] = useState<PanelPos>(() => DEFAULT_LAYOUT.pos)
   const [panelSize, setPanelSize] = useState<PanelSize>(
     () => DEFAULT_LAYOUT.size,
@@ -91,7 +116,13 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
 
   useLayoutEffect(() => {
     const { pos: p, size: s } = readLayoutFromLs()
-    const { pos: np, size: ns } = clampPanelInViewport(p, s, MIN_W, MIN_H)
+    const { pos: np, size: ns } = clampPanelInViewport(
+      p,
+      s,
+      MIN_W,
+      MIN_H,
+      PREVIEW_CLAMP_OPTS,
+    )
     setPos(np)
     setPanelSize(ns)
   }, [])
@@ -99,7 +130,13 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
   useEffect(() => {
     const onApplied = () => {
       const { pos: p, size: s } = readLayoutFromLs()
-      const { pos: np, size: ns } = clampPanelInViewport(p, s, MIN_W, MIN_H)
+      const { pos: np, size: ns } = clampPanelInViewport(
+        p,
+        s,
+        MIN_W,
+        MIN_H,
+        PREVIEW_CLAMP_OPTS,
+      )
       setPos(np)
       setPanelSize(ns)
     }
@@ -110,7 +147,13 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
   useEffect(() => {
     const onResize = () => {
       const { pos: p, size: s } = layoutRef.current
-      const { pos: np, size: ns } = clampPanelInViewport(p, s, MIN_W, MIN_H)
+      const { pos: np, size: ns } = clampPanelInViewport(
+        p,
+        s,
+        MIN_W,
+        MIN_H,
+        PREVIEW_CLAMP_OPTS,
+      )
       if (
         np.x !== p.x ||
         np.y !== p.y ||
@@ -142,6 +185,7 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
         dy,
         MIN_W,
         MIN_H,
+        PREVIEW_CLAMP_OPTS,
       )
       if (!snapEnabled) return raw
       const sessionsMeta = floatingPlaylistSessions.map((s) => ({
@@ -163,7 +207,13 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
         minW: MIN_W,
         minH: MIN_H,
       })
-      return clampPanelInViewport(sn.pos, sn.size, MIN_W, MIN_H)
+      return clampPanelInViewport(
+        sn.pos,
+        sn.size,
+        MIN_W,
+        MIN_H,
+        PREVIEW_CLAMP_OPTS,
+      )
     },
     [floatingPlaylistSessions, snapEnabled],
   )
@@ -273,22 +323,26 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
       const ny = d.dy + (e.clientY - d.startY)
       const plancia = snapEnabled ? queryPlanciaContentRect() : null
       let c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
-      if (plancia) {
-        c = snapFloatingPanelDragPos(
+      if (snapEnabled && plancia) {
+        const sn = snapFloatingPanelDragPosWithGuides(
           c,
           { width: el.offsetWidth, height: el.offsetHeight },
           plancia,
+          dragSnapPeerRects,
         )
         c = clampPosToViewport(
-          c.x,
-          c.y,
+          sn.pos.x,
+          sn.pos.y,
           el.offsetWidth,
           el.offsetHeight,
         )
+        dispatchRegiaSnapGuides(sn.guides)
+      } else {
+        dispatchRegiaSnapGuides([])
       }
       setPos(c)
     },
-    [snapEnabled],
+    [dragSnapPeerRects, snapEnabled],
   )
 
   const onPointerUp = useCallback(
@@ -303,23 +357,25 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
       let next = el
         ? clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
         : { x: nx, y: ny }
-      if (el && plancia) {
-        next = snapFloatingPanelDragPos(
+      if (el && snapEnabled && plancia) {
+        const sn = snapFloatingPanelDragPosWithGuides(
           next,
           { width: el.offsetWidth, height: el.offsetHeight },
           plancia,
+          dragSnapPeerRects,
         )
         next = clampPosToViewport(
-          next.x,
-          next.y,
+          sn.pos.x,
+          sn.pos.y,
           el.offsetWidth,
           el.offsetHeight,
         )
       }
+      dispatchRegiaSnapGuides([])
       setPos(next)
       persistLayoutToLs(next, panelSize)
     },
-    [panelSize, snapEnabled],
+    [dragSnapPeerRects, panelSize, snapEnabled],
   )
 
   const previewZi = floatingZOrder.indexOf(REGIA_FLOATING_PREVIEW_ZORDER_KEY)

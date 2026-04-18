@@ -41,6 +41,17 @@ export default function AudioOutputBar() {
   } = useRegia()
 
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
+  const [outputLevel, setOutputLevel] = useState(0)
+
+  useEffect(() => {
+    const api = window.electronAPI
+    const sub = api?.onOutputAudioLevel
+    if (typeof sub !== 'function') return
+    return sub((lv) => {
+      const x = Math.min(1, Math.max(0, lv))
+      setOutputLevel((prev) => Math.max(prev * 0.86, x))
+    })
+  }, [])
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -65,8 +76,19 @@ export default function AudioOutputBar() {
 
   const pct = Math.round(outputVolume * 100)
 
+  const peakBars = 14
+  const lit = Math.round(outputLevel * peakBars)
+
   return (
     <div className="regia-audio-out" aria-label="Audio in uscita (monitor 2)">
+      <div className="regia-audio-out-meter" aria-hidden title="Livello stimato uscita video (Schermo 2)">
+        {Array.from({ length: peakBars }, (_, i) => (
+          <span
+            key={i}
+            className={`regia-audio-out-meter-seg ${i < lit ? 'is-on' : ''}`}
+          />
+        ))}
+      </div>
       <div className="regia-audio-out-line">
         <label className="regia-audio-out-label" htmlFor="regia-output-volume">
           Volume

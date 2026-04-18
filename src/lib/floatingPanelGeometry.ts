@@ -43,22 +43,40 @@ export function hitTestPanelResizeEdge(
   return null
 }
 
+export type ClampPanelOptions = {
+  /** Larghezza massima del pannello (oltre al limite del viewport). */
+  maxW?: number
+  /** Altezza massima del pannello (oltre al limite del viewport). */
+  maxH?: number
+}
+
 export function clampPanelInViewport(
   pos: PanelPos,
   size: PanelSize,
   minW: number,
   minH: number,
+  opts?: ClampPanelOptions,
 ): { pos: PanelPos; size: PanelSize } {
   const vw = window.innerWidth
   const vh = window.innerHeight
   const margin = 6
+  const capW =
+    typeof opts?.maxW === 'number' && Number.isFinite(opts.maxW) && opts.maxW > minW
+      ? opts.maxW
+      : Number.POSITIVE_INFINITY
+  const capH =
+    typeof opts?.maxH === 'number' && Number.isFinite(opts.maxH) && opts.maxH > minH
+      ? opts.maxH
+      : Number.POSITIVE_INFINITY
   let w = Math.min(
     Math.max(minW, size.width),
     Math.max(minW, vw - margin * 2),
+    capW,
   )
   let h = Math.min(
     Math.max(minH, size.height),
     Math.max(minH, vh - margin * 2),
+    capH,
   )
   let x = pos.x
   let y = pos.y
@@ -77,6 +95,7 @@ export function applyResizeDelta(
   dy: number,
   minW: number,
   minH: number,
+  clampOpts?: ClampPanelOptions,
 ): { pos: PanelPos; size: PanelSize } {
   let x = startPos.x
   let y = startPos.y
@@ -100,7 +119,7 @@ export function applyResizeDelta(
     h = nh
   }
 
-  return clampPanelInViewport({ x, y }, { width: w, height: h }, minW, minH)
+  return clampPanelInViewport({ x, y }, { width: w, height: h }, minW, minH, clampOpts)
 }
 
 export function clampPosToViewport(

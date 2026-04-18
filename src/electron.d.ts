@@ -66,6 +66,9 @@ declare global {
         width: number
         height: number
       }) => Promise<{ ok: boolean }>
+
+      reportOutputAudioLevel?: (level: number) => void
+      onOutputAudioLevel?: (handler: (level: number) => void) => () => void
     }
   }
 }

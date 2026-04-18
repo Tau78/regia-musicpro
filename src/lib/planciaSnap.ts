@@ -6,6 +6,29 @@ export const SNAP_PEER_DIMENSION_PX = 12
 /** Allineamento leggero ai bordi interni dell’area principale (`.regia-main-content`). */
 export const SNAP_PLANCIA_EDGE_PX = 10
 
+/** Spostamento: aggancio ai bordi di altri pannelli flottanti. */
+export const SNAP_PEER_DRAG_PX = 10
+
+export type SnapGuideSegment =
+  | { kind: 'v'; x: number; top: number; bottom: number }
+  | { kind: 'h'; y: number; left: number; right: number }
+
+export const REGIA_SNAP_GUIDES_EVENT = 'regia-snap-guides'
+
+export function dispatchRegiaSnapGuides(guides: SnapGuideSegment[]): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(
+    new CustomEvent(REGIA_SNAP_GUIDES_EVENT, { detail: { guides } }),
+  )
+}
+
+export type PeerSnapRect = {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
 const PLANCIA_SELECTOR = '.regia-main-content'
 
 export type PlanciaRect = { left: number; top: number; right: number; bottom: number }
@@ -183,16 +206,106 @@ export function snapFloatingPanelDragPos(
   plancia: PlanciaRect | null,
   thresholdPx: number = SNAP_PLANCIA_EDGE_PX,
 ): PanelPos {
-  if (!plancia) return pos
+  return snapFloatingPanelDragPosWithGuides(pos, size, plancia, [], thresholdPx)
+    .pos
+}
+
+type AxisSnap = { next: number; guide: number }
+
+function bestSnapLeftEdge(
+  left: number,
+  candidates: readonly AxisSnap[],
+  threshold: number,
+): AxisSnap | null {
+  let best: AxisSnap | null = null
+  let bestD = threshold + 1
+  for (const c of candidates) {
+    const d = Math.abs(left - c.next)
+    if (d <= threshold && d < bestD) {
+      bestD = d
+      best = c
+    }
+  }
+  return best
+}
+
+/**
+ * Snap in trascinamento: bordi area plancia + bordi di altri pannelli; restituisce linee guida per overlay.
+ */
+export function snapFloatingPanelDragPosWithGuides(
+  pos: PanelPos,
+  size: PanelSize,
+  plancia: PlanciaRect | null,
+  peers: readonly PeerSnapRect[],
+  thresholdPx: number = SNAP_PLANCIA_EDGE_PX,
+  peerThresholdPx: number = SNAP_PEER_DRAG_PX,
+): { pos: PanelPos; guides: SnapGuideSegment[] } {
+  const guides: SnapGuideSegment[] = []
   let x = pos.x
   let y = pos.y
   const w = size.width
   const h = size.height
-  if (Math.abs(x - plancia.left) <= thresholdPx) x = plancia.left
-  else if (Math.abs(x + w - plancia.right) <= thresholdPx)
-    x = plancia.right - w
-  if (Math.abs(y - plancia.top) <= thresholdPx) y = plancia.top
-  else if (Math.abs(y + h - plancia.bottom) <= thresholdPx)
-    y = plancia.bottom - h
-  return { x, y }
+
+  const pushV = (gx: number) => {
+    if (!plancia) return
+    guides.push({
+      kind: 'v',
+      x: gx,
+      top: plancia.top,
+      bottom: plancia.bottom,
+    })
+  }
+  const pushH = (gy: number) => {
+    if (!plancia) return
+    guides.push({
+      kind: 'h',
+      y: gy,
+      left: plancia.left,
+      right: plancia.right,
+    })
+  }
+
+  const xCand: AxisSnap[] = []
+  if (plancia) {
+    xCand.push({ next: plancia.left, guide: plancia.left })
+    xCand.push({ next: plancia.right - w, guide: plancia.right })
+  }
+  for (const p of peers) {
+    xCand.push({ next: p.left, guide: p.left })
+    xCand.push({ next: p.right - w, guide: p.right })
+    xCand.push({ next: p.right, guide: p.right })
+    xCand.push({ next: p.left - w, guide: p.left })
+  }
+  const sx = bestSnapLeftEdge(
+    x,
+    xCand,
+    Math.max(thresholdPx, peerThresholdPx),
+  )
+  if (sx) {
+    x = sx.next
+    pushV(sx.guide)
+  }
+
+  const yCand: AxisSnap[] = []
+  if (plancia) {
+    yCand.push({ next: plancia.top, guide: plancia.top })
+    yCand.push({ next: plancia.bottom - h, guide: plancia.bottom })
+  }
+  for (const p of peers) {
+    yCand.push({ next: p.top, guide: p.top })
+    yCand.push({ next: p.bottom - h, guide: p.bottom })
+    yCand.push({ next: p.bottom, guide: p.bottom })
+    yCand.push({ next: p.top - h, guide: p.top })
+  }
+  const sy = bestSnapLeftEdge(
+    y,
+    yCand,
+    Math.max(thresholdPx, peerThresholdPx),
+  )
+  if (sy) {
+    y = sy.next
+    pushH(sy.guide)
+  }
+
+  return { pos: { x, y }, guides }
 }

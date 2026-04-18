@@ -12,6 +12,8 @@ export const DEFAULT_FLOATING_PANEL_SIZE: FloatingPlaylistPanelSize = {
 
 export const LAUNCHPAD_GRID = 4 as const
 export const LAUNCHPAD_CELL_COUNT = LAUNCHPAD_GRID * LAUNCHPAD_GRID
+/** Pagine da 16 pad ciascuna. */
+export const LAUNCHPAD_BANK_COUNT = 4 as const
 
 /** Dopo questa durata su pad o tasto assegnato parte il CUE (solo fino al rilascio). */
 export const LAUNCHPAD_CUE_HOLD_MS = 380
@@ -82,8 +84,12 @@ export type FloatingPlaylistSession = {
   collapsed: boolean
   /** Assente o `tracks` = playlist classica a elenco. */
   playlistMode?: PlaylistMode
-  /** 16 slot se `playlistMode === 'launchpad'`. */
+  /** 16 slot se `playlistMode === 'launchpad'` (banco attivo; sincronizzati con `launchPadBanks`). */
   launchPadCells?: LaunchPadCell[]
+  /** Pagine da 16 pad (opzionale; se assente si deriva da `launchPadCells`). */
+  launchPadBanks?: LaunchPadCell[][]
+  /** Indice banco 0…`LAUNCHPAD_BANK_COUNT`-1. */
+  launchPadBankIndex?: number
   paths: string[]
   currentIndex: number
   playlistTitle: string
@@ -148,6 +154,7 @@ export function createLaunchPadFloatingSession(
   pos?: FloatingPlaylistPos,
 ): FloatingPlaylistSession {
   const base = createEmptyFloatingSession(pos)
+  const banks = freshLaunchPadBanks()
   return {
     ...base,
     playlistMode: 'launchpad',
@@ -155,7 +162,9 @@ export function createLaunchPadFloatingSession(
     currentIndex: 0,
     playlistTitle: 'Launchpad',
     panelSize: { ...LAUNCHPAD_PANEL_SIZE },
-    launchPadCells: defaultLaunchPadCells(),
+    launchPadBanks: banks,
+    launchPadBankIndex: 0,
+    launchPadCells: banks[0]!.map((c) => ({ ...c })),
     editingSavedPlaylistId: null,
     savedEditPathsBaseline: null,
     savedEditTitleBaseline: '',
@@ -179,10 +188,14 @@ export function createLaunchPadFloatingSessionWithKit(
   for (let i = 0; i < lim; i++) {
     cells[i] = { ...cells[i]!, samplePath: absolutePaths[i]! }
   }
+  const banks = freshLaunchPadBanks()
+  banks[0] = cells.map((c) => ({ ...c }))
   return {
     ...s,
     playlistTitle: 'Launchpad base',
-    launchPadCells: cells,
+    launchPadBanks: banks,
+    launchPadBankIndex: 0,
+    launchPadCells: banks[0]!.map((c) => ({ ...c })),
   }
 }
 
@@ -196,6 +209,10 @@ export function cloneFloatingSession(
     pos: pos ?? { x: s.pos.x + 28, y: s.pos.y + 28 },
     paths: [...s.paths],
     launchPadCells: s.launchPadCells?.map((c) => ({ ...c })),
+    launchPadBanks: s.launchPadBanks
+      ? cloneLaunchPadBanksDeep(s.launchPadBanks)
+      : undefined,
+    launchPadBankIndex: s.launchPadBankIndex,
     savedEditLaunchPadBaseline: s.savedEditLaunchPadBaseline
       ? s.savedEditLaunchPadBaseline.map((c) => ({ ...c }))
       : null,
@@ -203,6 +220,49 @@ export function cloneFloatingSession(
 }
 
 /** Copia profonda celle per snapshot / salvataggio. */
+export function freshLaunchPadBanks(): LaunchPadCell[][] {
+  return Array.from({ length: LAUNCHPAD_BANK_COUNT }, () =>
+    defaultLaunchPadCells().map((c) => ({ ...c })),
+  )
+}
+
+export function cloneLaunchPadBanksDeep(
+  banks: LaunchPadCell[][] | undefined,
+): LaunchPadCell[][] {
+  const base = freshLaunchPadBanks()
+  if (!banks || banks.length === 0) return base
+  return base.map((row, bi) => {
+    const src = banks[bi]
+    if (!src || src.length < LAUNCHPAD_CELL_COUNT) return row
+    return src.slice(0, LAUNCHPAD_CELL_COUNT).map((c, i) => {
+      const d = row[i]!
+      const padGain =
+        typeof c.padGain === 'number' && Number.isFinite(c.padGain)
+          ? Math.min(1, Math.max(0, c.padGain))
+          : 1
+      return {
+        samplePath:
+          typeof c.samplePath === 'string' || c.samplePath === null
+            ? c.samplePath
+            : null,
+        padColor: typeof c.padColor === 'string' ? c.padColor : d.padColor,
+        padGain,
+        padKeyCode: c.padKeyCode ?? null,
+        padKeyMode: normalizeLaunchPadKeyMode(c.padKeyMode),
+      }
+    })
+  })
+}
+
+export function migrateLaunchPadBanksFromCells(
+  cells: LaunchPadCell[] | undefined,
+): LaunchPadCell[][] {
+  const banks = freshLaunchPadBanks()
+  const first = cloneLaunchPadCellsSnapshot(cells)
+  banks[0] = first
+  return banks
+}
+
 export function cloneLaunchPadCellsSnapshot(
   cells: LaunchPadCell[] | undefined,
 ): LaunchPadCell[] {

@@ -2,7 +2,9 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -22,9 +24,11 @@ import {
 } from '../lib/floatingPanelGeometry.ts'
 import {
   buildPeerDimensionTargets,
+  dispatchRegiaSnapGuides,
   queryPlanciaContentRect,
-  snapFloatingPanelDragPos,
+  snapFloatingPanelDragPosWithGuides,
   snapFloatingPanelResize,
+  type PeerSnapRect,
   type SessionSnapDims,
 } from '../lib/planciaSnap.ts'
 import { readPreviewLayoutFromLs } from '../lib/previewLayoutStorage.ts'
@@ -57,11 +61,21 @@ import { useRegia, type LoopMode } from '../state/RegiaContext.tsx'
 import MediaDurationRing from './MediaDurationRing.tsx'
 import {
   DEFAULT_FLOATING_PANEL_SIZE,
+  LAUNCHPAD_BANK_COUNT,
   LAUNCHPAD_CELL_COUNT,
   LAUNCHPAD_CUE_HOLD_MS,
   defaultLaunchPadCells,
+  type LaunchPadCell,
   type FloatingPlaylistPanelSize,
 } from '../state/floatingPlaylistSession.ts'
+
+const LAUNCHPAD_CATEGORY_SWATCHES = [
+  '#e63946',
+  '#2a9d8f',
+  '#4361ee',
+  '#f4a261',
+  '#8338ec',
+] as const
 /** Movimento oltre questa distanza annulla tap / CUE in attesa (prima della soglia). */
 const LAUNCHPAD_CANCEL_MOVE_PX = 14
 
@@ -206,25 +220,64 @@ function IconClosePanel() {
   )
 }
 
-function IconPalette() {
+function IconColorWheel() {
+  /** Pinwheel a 6 petali (settori 60°), colori fissi — non usa currentColor così resta leggibile con tema playlist. */
   return (
     <svg
-      className="floating-playlist-header-icon"
+      className="floating-playlist-header-icon floating-playlist-color-wheel-pinwheel"
       viewBox="0 0 24 24"
-      width={16}
-      height={16}
       aria-hidden="true"
     >
       <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
+        d="M12 12 12 4.5 18.495 8.25Z"
+        fill="#ef4444"
+        stroke="rgba(0,0,0,0.22)"
+        strokeWidth={0.5}
         strokeLinejoin="round"
-        d="M12 3C9 7 6 10 6 13a4 4 0 0 0 8 0c0-3-3-6-6-10z"
       />
-      <circle cx="9" cy="11" r="1.25" fill="currentColor" />
-      <circle cx="15" cy="11" r="1.25" fill="currentColor" />
+      <path
+        d="M12 12 18.495 8.25 18.495 15.75Z"
+        fill="#f97316"
+        stroke="rgba(0,0,0,0.22)"
+        strokeWidth={0.5}
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 12 18.495 15.75 12 19.5Z"
+        fill="#eab308"
+        stroke="rgba(0,0,0,0.22)"
+        strokeWidth={0.5}
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 12 12 19.5 5.505 15.75Z"
+        fill="#22c55e"
+        stroke="rgba(0,0,0,0.22)"
+        strokeWidth={0.5}
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 12 5.505 15.75 5.505 8.25Z"
+        fill="#3b82f6"
+        stroke="rgba(0,0,0,0.22)"
+        strokeWidth={0.5}
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 12 5.505 8.25 12 4.5Z"
+        fill="#a855f7"
+        stroke="rgba(0,0,0,0.22)"
+        strokeWidth={0.5}
+        strokeLinejoin="round"
+      />
+      <circle
+        cx="12"
+        cy="12"
+        r="2.35"
+        fill="#f1f5f9"
+        stroke="rgba(0,0,0,0.2)"
+        strokeWidth={0.45}
+      />
     </svg>
   )
 }
@@ -350,6 +403,7 @@ function isFloatingPlaylistPanelDragBlockedTarget(
   root: HTMLElement,
 ): boolean {
   if (!root.contains(t)) return true
+  if (t.closest('.floating-playlist-panel-help-popover')) return true
   if (
     t.closest(
       'button, [role="button"], input, textarea, select, a, [role="slider"]',
@@ -362,6 +416,117 @@ function isFloatingPlaylistPanelDragBlockedTarget(
   )
     return true
   return false
+}
+
+const PANEL_HELP_POPOVER_MAX_W_PX = 352
+
+function getPanelHelpClampBounds(): {
+  left: number
+  top: number
+  right: number
+  bottom: number
+} {
+  const pad = 8
+  const vv = globalThis.visualViewport
+  const vLeft = (vv?.offsetLeft ?? 0) + pad
+  const vTop = (vv?.offsetTop ?? 0) + pad
+  const vRight =
+    (vv?.offsetLeft ?? 0) +
+    (vv?.width && vv.width > 0 ? vv.width : globalThis.innerWidth) -
+    pad
+  const vBottom =
+    (vv?.offsetTop ?? 0) +
+    (vv?.height && vv.height > 0 ? vv.height : globalThis.innerHeight) -
+    pad
+
+  const pl = queryPlanciaContentRect()
+  if (!pl) {
+    return { left: vLeft, top: vTop, right: vRight, bottom: vBottom }
+  }
+  /** Intersezione plancia × viewport: i pannelli flottanti possono stare fuori da `.regia-main-content`. */
+  return {
+    left: Math.max(vLeft, pl.left + pad),
+    top: Math.max(vTop, pl.top + pad),
+    right: Math.min(vRight, pl.right - pad),
+    bottom: Math.min(vBottom, pl.bottom - pad),
+  }
+}
+
+type PanelHelpPopoverLayout = {
+  top: number
+  left: number
+  width: number
+  maxHeight: number
+}
+
+function computePanelHelpPopoverLayout(
+  btnR: DOMRect,
+  contentScrollHeight: number,
+  bounds: { left: number; top: number; right: number; bottom: number },
+): PanelHelpPopoverLayout {
+  const gap = 6
+  const minH = 96
+  const innerW = Math.max(0, bounds.right - bounds.left)
+  if (innerW < 1) {
+    return {
+      top: bounds.top,
+      left: bounds.left,
+      width: Math.min(PANEL_HELP_POPOVER_MAX_W_PX, 280),
+      maxHeight: Math.round(Math.max(72, Math.min(320, contentScrollHeight))),
+    }
+  }
+  const maxW = Math.min(
+    PANEL_HELP_POPOVER_MAX_W_PX,
+    innerW < 100 ? innerW : Math.max(100, innerW),
+  )
+
+  const spaceAbove = btnR.top - bounds.top - gap
+  const spaceBelow = bounds.bottom - btnR.bottom - gap
+
+  let top: number
+  let maxHeight: number
+
+  if (spaceAbove >= minH && spaceAbove >= spaceBelow) {
+    maxHeight = Math.min(contentScrollHeight, spaceAbove)
+    top = btnR.top - gap - maxHeight
+  } else if (spaceBelow >= minH) {
+    top = btnR.bottom + gap
+    maxHeight = Math.min(contentScrollHeight, spaceBelow)
+  } else {
+    top = bounds.top
+    maxHeight = bounds.bottom - bounds.top
+    maxHeight = Math.min(contentScrollHeight, Math.max(minH, maxHeight))
+  }
+
+  if (top < bounds.top) top = bounds.top
+  if (top + maxHeight > bounds.bottom) {
+    maxHeight = Math.max(72, bounds.bottom - top)
+  }
+  maxHeight = Math.min(maxHeight, contentScrollHeight)
+  maxHeight = Math.max(72, maxHeight)
+  if (top + maxHeight > bounds.bottom) {
+    top = Math.max(bounds.top, bounds.bottom - maxHeight)
+  }
+
+  /**
+   * Allinea il bordo destro del popover al pulsante, ma mai oltre il bordo destro
+   * visibile (il `?` può trovarsi a destra del rect `.regia-main-content`).
+   */
+  const anchorRight = Math.min(btnR.right, bounds.right)
+  let left = anchorRight - maxW
+  if (left < bounds.left) {
+    left = bounds.left
+  }
+  if (left + maxW > bounds.right) {
+    left = Math.max(bounds.left, bounds.right - maxW)
+  }
+
+  return {
+    top,
+    left,
+    width: maxW,
+    maxHeight: Math.round(maxHeight),
+  }
 }
 
 function lsLayoutKey(sessionId: string): string {
@@ -379,6 +544,11 @@ type LayoutLs = {
 
 const MIN_PANEL_W = 220
 const MIN_PANEL_H = 180
+const MAX_PANEL_W = 960
+const MAX_PANEL_H = 780
+const PANEL_CLAMP_OPTS = { maxW: MAX_PANEL_W, maxH: MAX_PANEL_H } as const
+/** Altezza approssimativa pannello comprimibile (solo barra) per snap tra peer. */
+const COLLAPSED_FLOAT_PANEL_H_PX = 84
 
 function loadLayoutFromLs(sessionId: string): Partial<{
   pos: PanelPos
@@ -555,6 +725,7 @@ export default function FloatingPlaylist({
     loadLaunchPadSlotAndPlay,
     stopLaunchPadCueRelease,
     updateLaunchPadCell,
+    setLaunchPadBankIndex,
     updateFloatingPlaylistChrome,
     canUndo,
     canRedo,
@@ -570,6 +741,30 @@ export default function FloatingPlaylist({
 
   const snapEnabled = usePlanciaSnapEnabled()
   const launchPadCueEnabled = useLaunchPadCueEnabled()
+
+  const dragSnapPeerRects = useMemo((): PeerSnapRect[] => {
+    const out: PeerSnapRect[] = []
+    for (const s of floatingPlaylistSessions) {
+      if (s.id === sessionId) continue
+      const h = s.collapsed ? COLLAPSED_FLOAT_PANEL_H_PX : s.panelSize.height
+      out.push({
+        left: s.pos.x,
+        top: s.pos.y,
+        right: s.pos.x + s.panelSize.width,
+        bottom: s.pos.y + h,
+      })
+    }
+    if (previewDetached) {
+      const L = readPreviewLayoutFromLs()
+      out.push({
+        left: L.x,
+        top: L.y,
+        right: L.x + L.width,
+        bottom: L.y + L.height,
+      })
+    }
+    return out
+  }, [floatingPlaylistSessions, previewDetached, sessionId])
 
   const session = floatingPlaylistSessions.find((s) => s.id === sessionId)
   const isLaunchpad = session?.playlistMode === 'launchpad'
@@ -590,10 +785,13 @@ export default function FloatingPlaylist({
       ? Math.min(1, Math.max(0, session.playlistOutputVolume))
       : 1
   const collapsed = session?.collapsed ?? false
+  const launchPadBankIndex = session?.launchPadBankIndex ?? 0
   const pos = session?.pos ?? { x: 24, y: 96 }
   const panelSize =
     session?.panelSize ?? DEFAULT_FLOATING_PANEL_SIZE
 
+  const [launchPadClipboard, setLaunchPadClipboard] =
+    useState<LaunchPadCell | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const playlistColorInputRef = useRef<HTMLInputElement>(null)
   const padColorInputRef = useRef<HTMLInputElement>(null)
@@ -636,6 +834,12 @@ export default function FloatingPlaylist({
   )
   const [isResizing, setIsResizing] = useState(false)
   const [closePlayConfirmOpen, setClosePlayConfirmOpen] = useState(false)
+  const [panelHelpOpen, setPanelHelpOpen] = useState(false)
+  const panelHelpButtonRef = useRef<HTMLButtonElement>(null)
+  const panelHelpPopoverRef = useRef<HTMLDivElement>(null)
+  const panelHelpPanelId = useId()
+  const [panelHelpLayout, setPanelHelpLayout] =
+    useState<PanelHelpPopoverLayout | null>(null)
   const closePlayConfirmCancelRef = useRef<HTMLButtonElement>(null)
   const reorderSessionRef = useRef<ReorderSession | null>(null)
   const docListenersRef = useRef<{
@@ -683,6 +887,71 @@ export default function FloatingPlaylist({
     playbackLoadedTrack,
     sessionId,
   ])
+
+  useEffect(() => {
+    setPanelHelpOpen(false)
+  }, [isLaunchpad])
+
+  useEffect(() => {
+    if (collapsed) setPanelHelpOpen(false)
+  }, [collapsed])
+
+  useLayoutEffect(() => {
+    if (!panelHelpOpen) {
+      setPanelHelpLayout(null)
+      return
+    }
+    const run = () => {
+      const btn = panelHelpButtonRef.current
+      const pop = panelHelpPopoverRef.current
+      if (!btn || !pop) return
+      const bounds = getPanelHelpClampBounds()
+      void pop.offsetHeight
+      setPanelHelpLayout(
+        computePanelHelpPopoverLayout(
+          btn.getBoundingClientRect(),
+          pop.scrollHeight,
+          bounds,
+        ),
+      )
+    }
+    run()
+    globalThis.addEventListener('resize', run)
+    globalThis.addEventListener('scroll', run, true)
+    return () => {
+      globalThis.removeEventListener('resize', run)
+      globalThis.removeEventListener('scroll', run, true)
+    }
+  }, [
+    panelHelpOpen,
+    isLaunchpad,
+    launchPadCueEnabled,
+    pos.x,
+    pos.y,
+    panelSize.width,
+    panelSize.height,
+  ])
+
+  useEffect(() => {
+    if (!panelHelpOpen) return
+    const onDocDown = (ev: globalThis.MouseEvent) => {
+      const t = ev.target
+      if (!(t instanceof Node)) return
+      if (panelHelpPopoverRef.current?.contains(t)) return
+      if (panelHelpButtonRef.current?.contains(t)) return
+      setPanelHelpOpen(false)
+    }
+    const onKey = (ev: globalThis.KeyboardEvent) => {
+      if (ev.key === 'Escape') setPanelHelpOpen(false)
+    }
+    document.addEventListener('mousedown', onDocDown, true)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocDown, true)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [panelHelpOpen])
+
   const drag = useRef<{
     active: boolean
     dx: number
@@ -775,6 +1044,7 @@ export default function FloatingPlaylist({
     if (collapsed) {
       const w = Math.min(
         Math.max(MIN_PANEL_W, panelSize.width),
+        MAX_PANEL_W,
         vw - margin * 2,
       )
       const h = el?.offsetHeight ?? 88
@@ -792,6 +1062,7 @@ export default function FloatingPlaylist({
       panelSize,
       MIN_PANEL_W,
       MIN_PANEL_H,
+      PANEL_CLAMP_OPTS,
     )
     if (
       np.x !== pos.x ||
@@ -828,6 +1099,7 @@ export default function FloatingPlaylist({
         dy,
         MIN_PANEL_W,
         MIN_PANEL_H,
+        PANEL_CLAMP_OPTS,
       )
       if (!snapEnabled) return raw
       const previewDims = previewDetached
@@ -857,7 +1129,13 @@ export default function FloatingPlaylist({
         minW: MIN_PANEL_W,
         minH: MIN_PANEL_H,
       })
-      return clampPanelInViewport(sn.pos, sn.size, MIN_PANEL_W, MIN_PANEL_H)
+      return clampPanelInViewport(
+        sn.pos,
+        sn.size,
+        MIN_PANEL_W,
+        MIN_PANEL_H,
+        PANEL_CLAMP_OPTS,
+      )
     },
     [floatingPlaylistSessions, previewDetached, sessionId, snapEnabled],
   )
@@ -950,22 +1228,32 @@ export default function FloatingPlaylist({
       const ny = d.dy + (e.clientY - d.startY)
       const plancia = snapEnabled ? queryPlanciaContentRect() : null
       let c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
-      if (plancia) {
-        c = snapFloatingPanelDragPos(
+      if (snapEnabled && plancia) {
+        const sn = snapFloatingPanelDragPosWithGuides(
           c,
           { width: el.offsetWidth, height: el.offsetHeight },
           plancia,
+          dragSnapPeerRects,
         )
         c = clampPosToViewport(
-          c.x,
-          c.y,
+          sn.pos.x,
+          sn.pos.y,
           el.offsetWidth,
           el.offsetHeight,
         )
+        dispatchRegiaSnapGuides(sn.guides)
+      } else {
+        dispatchRegiaSnapGuides([])
       }
       updateFloatingPlaylistChrome(sessionId, { pos: c })
     },
-    [resizePlaylistWithSnap, sessionId, snapEnabled, updateFloatingPlaylistChrome],
+    [
+      dragSnapPeerRects,
+      resizePlaylistWithSnap,
+      sessionId,
+      snapEnabled,
+      updateFloatingPlaylistChrome,
+    ],
   )
 
   const onPointerUp = useCallback(
@@ -986,6 +1274,7 @@ export default function FloatingPlaylist({
           muted: playlistOutputMuted,
           volume: playlistOutputVolume,
         })
+        dispatchRegiaSnapGuides([])
         resizeStateRef.current = null
         setIsResizing(false)
         try {
@@ -1005,19 +1294,21 @@ export default function FloatingPlaylist({
       let next = el
         ? clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
         : { x: nx, y: ny }
-      if (el && plancia) {
-        next = snapFloatingPanelDragPos(
+      if (el && snapEnabled && plancia) {
+        const sn = snapFloatingPanelDragPosWithGuides(
           next,
           { width: el.offsetWidth, height: el.offsetHeight },
           plancia,
+          dragSnapPeerRects,
         )
         next = clampPosToViewport(
-          next.x,
-          next.y,
+          sn.pos.x,
+          sn.pos.y,
           el.offsetWidth,
           el.offsetHeight,
         )
       }
+      dispatchRegiaSnapGuides([])
       updateFloatingPlaylistChrome(sessionId, { pos: next })
       persistLayoutToLs(sessionId, next, panelSize, {
         muted: playlistOutputMuted,
@@ -1030,6 +1321,7 @@ export default function FloatingPlaylist({
       }
     },
     [
+      dragSnapPeerRects,
       panelSize,
       playlistOutputMuted,
       playlistOutputVolume,
@@ -1761,6 +2053,21 @@ export default function FloatingPlaylist({
       ? Math.min(1, Math.max(0, ctxSlotCell.padGain))
       : 1
 
+  const panelHelpMeasureBounds = panelHelpOpen
+    ? getPanelHelpClampBounds()
+    : null
+  const panelHelpMeasureInnerW = panelHelpMeasureBounds
+    ? Math.max(0, panelHelpMeasureBounds.right - panelHelpMeasureBounds.left)
+    : PANEL_HELP_POPOVER_MAX_W_PX
+  const panelHelpMeasureWidth = panelHelpMeasureBounds
+    ? Math.min(
+        PANEL_HELP_POPOVER_MAX_W_PX,
+        panelHelpMeasureInnerW < 100
+          ? panelHelpMeasureInnerW
+          : Math.max(100, panelHelpMeasureInnerW),
+      )
+    : PANEL_HELP_POPOVER_MAX_W_PX
+
   return (
     <Fragment>
     <div
@@ -1839,9 +2146,142 @@ export default function FloatingPlaylist({
             role="group"
             aria-label="Riduci o chiudi pannello"
           >
+            <div className="floating-playlist-help-popover-wrap">
+              <button
+                ref={panelHelpButtonRef}
+                type="button"
+                className="floating-playlist-icon-btn floating-playlist-panel-help-btn"
+                aria-expanded={panelHelpOpen}
+                aria-controls={panelHelpPanelId}
+                onClick={() => setPanelHelpOpen((o) => !o)}
+                title={
+                  isLaunchpad
+                    ? 'Istruzioni griglia Launchpad'
+                    : 'Istruzioni uso playlist'
+                }
+                aria-label={
+                  isLaunchpad
+                    ? 'Apri istruzioni griglia Launchpad'
+                    : 'Apri istruzioni playlist'
+                }
+              >
+                ?
+              </button>
+              {panelHelpOpen ? (
+                <div
+                  ref={panelHelpPopoverRef}
+                  id={panelHelpPanelId}
+                  className="floating-playlist-panel-help-popover"
+                  role="dialog"
+                  aria-label={
+                    isLaunchpad ? 'Istruzioni Launchpad' : 'Istruzioni playlist'
+                  }
+                  onMouseDown={(ev) => ev.stopPropagation()}
+                  style={
+                    panelHelpLayout
+                      ? ({
+                          position: 'fixed',
+                          top: panelHelpLayout.top,
+                          left: panelHelpLayout.left,
+                          width: panelHelpLayout.width,
+                          maxHeight: panelHelpLayout.maxHeight,
+                          zIndex: zIndex + 30,
+                        } satisfies CSSProperties)
+                      : ({
+                          position: 'fixed',
+                          left: 0,
+                          top: 0,
+                          width: panelHelpMeasureWidth,
+                          maxHeight: 'none',
+                          zIndex: zIndex + 30,
+                          opacity: 0,
+                          pointerEvents: 'none',
+                        } satisfies CSSProperties)
+                  }
+                >
+                  {isLaunchpad ? (
+                    <>
+                      Griglia 4×4 (pagine 1–{LAUNCHPAD_BANK_COUNT}, 16 pad ciascuna):
+                      slot vuoto → dialog file · trascina file su slot o griglia ·
+                      Maiusc+clic file · Alt+clic colore ·{' '}
+                      {launchPadCueEnabled
+                        ? 'tap breve = play intero · tenere premuto = CUE (audio fino al rilascio)'
+                        : 'clic = play intero (CUE disattivato in Impostazioni)'}
+                      {' '}
+                      · tasto destro: gain / tasto / svuota · tasto: Play sempre play,
+                      Toggle play/stop
+                      {launchPadCueEnabled
+                        ? ' · tenere premuto il tasto = CUE (senza modificatori)'
+                        : ''}
+                    </>
+                  ) : (
+                    <div className="floating-playlist-panel-help-popover-stack">
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Titolo</strong> — Modifica il nome nel campo in alto;
+                        uscendo dal campo o premendo Invio il titolo viene aggiornato
+                        nello stato del pannello.
+                      </p>
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Riduci / Chiudi</strong> — Riduci mostra solo la barra
+                        compatta con i comandi principali. Chiudi rimuove questo
+                        pannello dalla plancia.
+                      </p>
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Cartella e Aggiungi</strong> — Cartella apre una
+                        cartella sul disco per caricare i file. Aggiungi apre il
+                        dialog per scegliere singoli media. Puoi anche{' '}
+                        <strong>trascinare file</strong> (audio, video, immagini)
+                        sull&apos;area dell&apos;elenco.
+                      </p>
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Colore tema</strong> — Clic sul pulsante colore per
+                        il selettore. <strong>Alt+clic</strong> ripristina il tema
+                        predefinito del pannello.
+                      </p>
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Salva (disco)</strong> — Sovrascrive la voce in
+                        PLAYLIST che hai aperto con Carica; il pulsante si accende
+                        solo se ci sono modifiche non ancora salvate su quel file.
+                      </p>
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Annulla / Ripristina</strong> — Come in plancia:{' '}
+                        <kbd>⌘Z</kbd> / <kbd>Ctrl+Z</kbd> e{' '}
+                        <kbd>⌘⇧Z</kbd> / <kbd>Ctrl+⇧Z</kbd>.
+                      </p>
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Crossfade</strong> — Dissolvenza incrociata in uscita
+                        tra due brani <em>dello stesso tipo</em> (solo video↔video
+                        o immagine↔immagine). Passando il mouse sul pulsante crossfade
+                        compare il promemoria sui tipi ammessi.
+                      </p>
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Volume e mute pannello</strong> — Il cursore
+                        moltiplica il volume globale in alto. Il mute silenzia solo
+                        l&apos;uscita sul secondo schermo per i brani avviati da{' '}
+                        <em>questa</em> playlist (si somma al mute globale).
+                      </p>
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Loop</strong> — <em>Off</em>: a fine brano segue la
+                        logica di riproduzione corrente. <em>File</em>: ripete il clip
+                        selezionato. <em>Lista</em>: dall&apos;ultimo brano torna al
+                        primo.
+                      </p>
+                      <p className="floating-playlist-panel-help-popover-p">
+                        <strong>Elenco brani</strong> — Clic su una riga per
+                        caricare/riprodurre quel file. <strong>Tieni premuto</strong>{' '}
+                        su una riga e trascina per <strong>riordinare</strong>. Le
+                        icone sulla riga servono a rimuovere il brano dalla playlist.
+                        Con la lista a fuoco puoi usare le <strong>frecce</strong> per
+                        spostarti tra le righe.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
             <button
               type="button"
-              className="btn-icon floating-playlist-icon-btn"
+              className="floating-playlist-icon-btn"
               onClick={() =>
                 updateFloatingPlaylistChrome(sessionId, {
                   collapsed: !collapsed,
@@ -1854,7 +2294,7 @@ export default function FloatingPlaylist({
             </button>
             <button
               type="button"
-              className="btn-icon floating-playlist-icon-btn floating-playlist-close"
+              className="floating-playlist-icon-btn floating-playlist-close"
               onClick={onRequestClosePanel}
               title="Chiudi"
               aria-label="Chiudi pannello playlist mobile"
@@ -1863,105 +2303,195 @@ export default function FloatingPlaylist({
             </button>
           </div>
         </div>
-        <div className="floating-playlist-toolbar">
-          <div className="floating-playlist-actions">
-            <div className="floating-playlist-actions-main">
-              {!isLaunchpad ? (
-              <>
+        {collapsed ? (
+          <div className="floating-playlist-toolbar">
+            <div className="floating-playlist-actions floating-playlist-chrome-actions">
+              <div className="floating-playlist-actions-main">
+                {!isLaunchpad ? (
+                  <>
+                    <button
+                      type="button"
+                      className="floating-playlist-icon-btn"
+                      onClick={() => void openFolder(sessionId)}
+                      title="Apri cartella"
+                      aria-label="Apri cartella"
+                    >
+                      <IconFolder />
+                    </button>
+                    <button
+                      type="button"
+                      className="floating-playlist-icon-btn"
+                      onClick={() => void addMediaToPlaylist(sessionId)}
+                      title="Aggiungi file alla playlist"
+                      aria-label="Aggiungi file alla playlist"
+                    >
+                      <IconAddFiles />
+                    </button>
+                  </>
+                ) : null}
                 <button
                   type="button"
-                  className="btn-icon floating-playlist-icon-btn"
-                  onClick={() => void openFolder(sessionId)}
-                  title="Apri cartella"
-                  aria-label="Apri cartella"
+                  className="floating-playlist-icon-btn floating-playlist-theme-picker-btn"
+                  onClick={(ev) => {
+                    if (ev.altKey) {
+                      ev.preventDefault()
+                      setPlaylistThemeColor(null, sessionId)
+                      return
+                    }
+                    playlistColorInputRef.current?.click()
+                  }}
+                  title="Colore tema playlist (Alt+clic: predefinito)"
+                  aria-label="Scegli colore tema playlist. Alt e clic per tema predefinito."
                 >
-                  <IconFolder />
+                  <IconColorWheel />
                 </button>
                 <button
                   type="button"
-                  className="btn-icon floating-playlist-icon-btn"
-                  onClick={() => void addMediaToPlaylist(sessionId)}
-                  title="Aggiungi file alla playlist"
-                  aria-label="Aggiungi file alla playlist"
+                  className="floating-playlist-icon-btn floating-playlist-save-disk"
+                  disabled={!savedPlaylistDirty(sessionId)}
+                  onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
+                  title={
+                    savedPlaylistDirty(sessionId)
+                      ? 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
+                      : 'Nessuna modifica da salvare sul file collegato'
+                  }
+                  aria-label="Salva sovrascrivendo la voce caricata da PLAYLIST"
                 >
-                  <IconAddFiles />
+                  <IconSaveDisk />
                 </button>
-              </>
-              ) : null}
-            <button
-              type="button"
-              className="btn-icon floating-playlist-icon-btn floating-playlist-theme-picker-btn"
-              onClick={(ev) => {
-                if (ev.altKey) {
-                  ev.preventDefault()
-                  setPlaylistThemeColor(null, sessionId)
-                  return
-                }
-                playlistColorInputRef.current?.click()
-              }}
-              title="Colore tema playlist (Alt+clic: predefinito)"
-              aria-label="Scegli colore tema playlist. Alt e clic per tema predefinito."
-            >
-              <IconPalette />
-            </button>
-            <button
-              type="button"
-              className="btn-icon floating-playlist-icon-btn floating-playlist-save-disk"
-              disabled={!savedPlaylistDirty(sessionId)}
-              onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
-              title={
-                savedPlaylistDirty(sessionId)
-                  ? 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
-                  : 'Nessuna modifica da salvare sul file collegato'
-              }
-              aria-label="Salva sovrascrivendo la voce caricata da PLAYLIST"
-            >
-              <IconSaveDisk />
-            </button>
-            </div>
-            <div
-            className="floating-playlist-actions-undo"
-            role="group"
-            aria-label="Annulla e ripristina"
-          >
-            <button
-              type="button"
-              className="btn-icon floating-playlist-icon-btn"
-              disabled={!canUndo}
-              onClick={() => {
-                setActiveFloatingSession(sessionId)
-                undo()
-              }}
-              title="Annulla (⌘Z / Ctrl+Z)"
-              aria-label="Annulla"
-            >
-              <IconUndo />
-            </button>
-            <button
-              type="button"
-              className="btn-icon floating-playlist-icon-btn"
-              disabled={!canRedo}
-              onClick={() => {
-                setActiveFloatingSession(sessionId)
-                redo()
-              }}
-              title="Ripristina (⌘⇧Z / Ctrl+⇧Z)"
-              aria-label="Ripristina"
-            >
-              <IconRedo />
-            </button>
+              </div>
+              <div
+                className="floating-playlist-actions-undo"
+                role="group"
+                aria-label="Annulla e ripristina"
+              >
+                <button
+                  type="button"
+                  className="floating-playlist-icon-btn"
+                  disabled={!canUndo}
+                  onClick={() => {
+                    setActiveFloatingSession(sessionId)
+                    undo()
+                  }}
+                  title="Annulla (⌘Z / Ctrl+Z)"
+                  aria-label="Annulla"
+                >
+                  <IconUndo />
+                </button>
+                <button
+                  type="button"
+                  className="floating-playlist-icon-btn"
+                  disabled={!canRedo}
+                  onClick={() => {
+                    setActiveFloatingSession(sessionId)
+                    redo()
+                  }}
+                  title="Ripristina (⌘⇧Z / Ctrl+⇧Z)"
+                  aria-label="Ripristina"
+                >
+                  <IconRedo />
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        ) : null}
       </div>
       {!collapsed && (
         <div className="floating-playlist-crossfade">
           <div className="floating-playlist-crossfade-row">
+            <div className="floating-playlist-actions floating-playlist-chrome-actions">
+              <div className="floating-playlist-actions-main">
+                {!isLaunchpad ? (
+                  <>
+                    <button
+                      type="button"
+                      className="floating-playlist-icon-btn"
+                      onClick={() => void openFolder(sessionId)}
+                      title="Apri cartella"
+                      aria-label="Apri cartella"
+                    >
+                      <IconFolder />
+                    </button>
+                    <button
+                      type="button"
+                      className="floating-playlist-icon-btn"
+                      onClick={() => void addMediaToPlaylist(sessionId)}
+                      title="Aggiungi file alla playlist"
+                      aria-label="Aggiungi file alla playlist"
+                    >
+                      <IconAddFiles />
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  className="floating-playlist-icon-btn floating-playlist-theme-picker-btn"
+                  onClick={(ev) => {
+                    if (ev.altKey) {
+                      ev.preventDefault()
+                      setPlaylistThemeColor(null, sessionId)
+                      return
+                    }
+                    playlistColorInputRef.current?.click()
+                  }}
+                  title="Colore tema playlist (Alt+clic: predefinito)"
+                  aria-label="Scegli colore tema playlist. Alt e clic per tema predefinito."
+                >
+                  <IconColorWheel />
+                </button>
+                <button
+                  type="button"
+                  className="floating-playlist-icon-btn floating-playlist-save-disk"
+                  disabled={!savedPlaylistDirty(sessionId)}
+                  onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
+                  title={
+                    savedPlaylistDirty(sessionId)
+                      ? 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
+                      : 'Nessuna modifica da salvare sul file collegato'
+                  }
+                  aria-label="Salva sovrascrivendo la voce caricata da PLAYLIST"
+                >
+                  <IconSaveDisk />
+                </button>
+              </div>
+              <div
+                className="floating-playlist-actions-undo"
+                role="group"
+                aria-label="Annulla e ripristina"
+              >
+                <button
+                  type="button"
+                  className="floating-playlist-icon-btn"
+                  disabled={!canUndo}
+                  onClick={() => {
+                    setActiveFloatingSession(sessionId)
+                    undo()
+                  }}
+                  title="Annulla (⌘Z / Ctrl+Z)"
+                  aria-label="Annulla"
+                >
+                  <IconUndo />
+                </button>
+                <button
+                  type="button"
+                  className="floating-playlist-icon-btn"
+                  disabled={!canRedo}
+                  onClick={() => {
+                    setActiveFloatingSession(sessionId)
+                    redo()
+                  }}
+                  title="Ripristina (⌘⇧Z / Ctrl+⇧Z)"
+                  aria-label="Ripristina"
+                >
+                  <IconRedo />
+                </button>
+              </div>
+            </div>
             <button
               type="button"
               className={`floating-playlist-icon-btn floating-playlist-crossfade-toggle ${playlistCrossfade ? 'is-active' : ''}`}
-              title="Crossfade tra brani: dissolvenza incrociata in uscita tra due brani dello stesso tipo (solo video/video o immagine/immagine)."
-              aria-label="Crossfade tra brani"
+              title="Crossfade tra brani: dissolvenza incrociata in uscita tra due brani dello stesso tipo."
+              aria-label="Crossfade tra brani. Solo tra video/video o immagine/immagine."
               aria-pressed={playlistCrossfade}
               onClick={() => {
                 setActiveFloatingSession(sessionId)
@@ -1969,6 +2499,12 @@ export default function FloatingPlaylist({
               }}
             >
               <IconCrossfade />
+              <span
+                className="floating-playlist-crossfade-hint-tooltip"
+                aria-hidden="true"
+              >
+                Solo tra video/video o immagine/immagine
+              </span>
             </button>
             <div
               className="floating-playlist-panel-volume"
@@ -1988,7 +2524,7 @@ export default function FloatingPlaylist({
             </div>
             <button
               type="button"
-              className={`btn-toggle floating-playlist-icon-btn floating-playlist-mute-output ${playlistOutputMuted ? 'is-on' : ''}`}
+              className={`floating-playlist-icon-btn floating-playlist-mute-output ${playlistOutputMuted ? 'is-on' : ''}`}
               onClick={onTogglePlaylistOutputMute}
               aria-pressed={playlistOutputMuted}
               title="Silenzia solo l'uscita sul secondo schermo per i brani avviati da questa playlist (si somma al Mute globale in alto). Valore salvato per questo pannello."
@@ -2056,24 +2592,6 @@ export default function FloatingPlaylist({
                 </button>
               </div>
             </div>
-          ) : null}
-          <span className="floating-playlist-crossfade-hint">
-            Solo tra video/video o immagine/immagine
-          </span>
-          {isLaunchpad ? (
-            <span className="floating-playlist-launchpad-toolbar-hint">
-              Griglia 4×4: slot vuoto → dialog file · trascina file su slot o griglia
-              · Maiusc+clic file · Alt+clic colore ·{' '}
-              {launchPadCueEnabled
-                ? 'tap breve = play intero · tenere premuto = CUE (audio fino al rilascio)'
-                : 'clic = play intero (CUE disattivato in Impostazioni)'}
-              {' '}
-              · tasto destro: gain / tasto / svuota · tasto: Play sempre play, Toggle
-              play/stop
-              {launchPadCueEnabled
-                ? ' · tenere premuto il tasto = CUE (senza modificatori)'
-                : ''}
-            </span>
           ) : null}
           {launchPadCtx && isLaunchpad && launchPadCells ? (
             <div
@@ -2192,6 +2710,57 @@ export default function FloatingPlaylist({
                 >
                   Rimuovi tasto
                 </button>
+                <div className="launchpad-ctx-menu-label">Appunti</div>
+                <div className="launchpad-ctx-menu-row-btns">
+                  <button
+                    type="button"
+                    className="launchpad-ctx-menu-mini"
+                    disabled={!ctxSlotCell}
+                    onClick={() => {
+                      if (ctxSlotCell) setLaunchPadClipboard({ ...ctxSlotCell })
+                      setLaunchPadCtx(null)
+                    }}
+                  >
+                    Copia slot
+                  </button>
+                  <button
+                    type="button"
+                    className="launchpad-ctx-menu-mini"
+                    disabled={!launchPadClipboard}
+                    onClick={() => {
+                      const clip = launchPadClipboard
+                      if (!clip) return
+                      void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                        samplePath: clip.samplePath,
+                        padColor: clip.padColor,
+                        padGain: clip.padGain,
+                        padKeyCode: null,
+                        padKeyMode: clip.padKeyMode,
+                      })
+                      setLaunchPadCtx(null)
+                    }}
+                  >
+                    Incolla
+                  </button>
+                </div>
+                <div className="launchpad-ctx-menu-label">Categoria (colore)</div>
+                <div className="launchpad-ctx-menu-cat-swatches">
+                  {LAUNCHPAD_CATEGORY_SWATCHES.map((hex) => (
+                    <button
+                      key={hex}
+                      type="button"
+                      className="launchpad-ctx-cat-swatch"
+                      style={{ ['--sw' as string]: hex }}
+                      title={`Imposta colore ${hex}`}
+                      aria-label={`Categoria colore ${hex}`}
+                      onClick={() => {
+                        void updateLaunchPadCell(sessionId, launchPadCtx.slot, {
+                          padColor: hex,
+                        })
+                      }}
+                    />
+                  ))}
+                </div>
                 <button
                   type="button"
                   className="launchpad-ctx-menu-clear"
@@ -2225,6 +2794,24 @@ export default function FloatingPlaylist({
             </div>
           ) : null}
           <div
+            className="launchpad-bank-tabs"
+            role="tablist"
+            aria-label="Pagine launchpad"
+          >
+            {Array.from({ length: LAUNCHPAD_BANK_COUNT }, (_, bi) => (
+              <button
+                key={`bank-${sessionId}-${bi}`}
+                type="button"
+                role="tab"
+                aria-selected={bi === launchPadBankIndex}
+                className={`launchpad-bank-tab ${bi === launchPadBankIndex ? 'is-active' : ''}`}
+                onClick={() => setLaunchPadBankIndex(sessionId, bi)}
+              >
+                {bi + 1}
+              </button>
+            ))}
+          </div>
+          <div
             className="floating-playlist-launchpad-grid"
             onDragOver={onLaunchpadDragOver}
             onDrop={onLaunchPadGridBackgroundDrop}
@@ -2237,6 +2824,8 @@ export default function FloatingPlaylist({
               const isLoaded =
                 playbackLoadedTrack != null &&
                 playbackLoadedTrack.sessionId === sessionId &&
+                (playbackLoadedTrack.launchPadBankIndex ?? 0) ===
+                  launchPadBankIndex &&
                 playbackLoadedTrack.index === i
               const padProg = isLoaded
                 ? getLaunchpadSampleProgress()
@@ -2314,20 +2903,6 @@ export default function FloatingPlaylist({
                         active={padRingActive}
                         size={16}
                       />
-                      <button
-                        type="button"
-                        className="launchpad-cell-clear"
-                        title="Rimuovi sample"
-                        aria-label={`Rimuovi sample dallo slot ${i + 1}`}
-                        onClick={(ev) => {
-                          ev.stopPropagation()
-                          void updateLaunchPadCell(sessionId, i, {
-                            samplePath: null,
-                          })
-                        }}
-                      >
-                        ×
-                      </button>
                     </div>
                   ) : null}
                 </div>

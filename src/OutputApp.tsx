@@ -459,6 +459,78 @@ export default function OutputApp() {
     return unsub
   }, [apply])
 
+  useEffect(() => {
+    const report = window.electronAPI?.reportOutputAudioLevel
+    if (typeof report !== 'function') return
+    let ctx: AudioContext | null = null
+    let merger: GainNode | null = null
+    let analyser: AnalyserNode | null = null
+    let src0: MediaElementAudioSourceNode | null = null
+    let src1: MediaElementAudioSourceNode | null = null
+    let raf = 0
+    let tick = 0
+
+    const connectIfPossible = () => {
+      const a0 = vRef0.current
+      const a1 = vRef1.current
+      if (!a0 || !a1 || ctx) return
+      try {
+        const c = new AudioContext()
+        ctx = c
+        merger = c.createGain()
+        merger.gain.value = 1
+        analyser = c.createAnalyser()
+        analyser.fftSize = 512
+        merger.connect(analyser)
+        analyser.connect(c.destination)
+        src0 = c.createMediaElementSource(a0)
+        src1 = c.createMediaElementSource(a1)
+        src0.connect(merger)
+        src1.connect(merger)
+      } catch {
+        ctx = null
+      }
+    }
+
+    const loop = () => {
+      raf = requestAnimationFrame(loop)
+      if (!analyser) return
+      tick += 1
+      if (tick % 2 !== 0) return
+      const buf = new Uint8Array(analyser.frequencyBinCount)
+      analyser.getByteTimeDomainData(buf)
+      let sum = 0
+      for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i]! - 128) / 128
+        sum += v * v
+      }
+      const rms = Math.sqrt(sum / buf.length)
+      report(Math.min(1, rms * 4.2))
+    }
+
+    const onAnyPlay = () => {
+      void ctx?.resume().catch(() => {})
+      connectIfPossible()
+      if (ctx && !raf) raf = requestAnimationFrame(loop)
+    }
+
+    const v0 = vRef0.current
+    const v1 = vRef1.current
+    v0?.addEventListener('playing', onAnyPlay)
+    v1?.addEventListener('playing', onAnyPlay)
+    connectIfPossible()
+    if (ctx) raf = requestAnimationFrame(loop)
+
+    return () => {
+      v0?.removeEventListener('playing', onAnyPlay)
+      v1?.removeEventListener('playing', onAnyPlay)
+      cancelAnimationFrame(raf)
+      raf = 0
+      void ctx?.close()
+      ctx = null
+    }
+  }, [])
+
   const onVideoEnded = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
     const t = e.currentTarget
     if (t.loop) return

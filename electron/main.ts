@@ -734,6 +734,15 @@ function setupIpc() {
     regiaWindow.webContents.send('video:ended-to-regia')
   })
 
+  ipcMain.on('output:audio-level', (_e, level: unknown) => {
+    const v =
+      typeof level === 'number' && Number.isFinite(level)
+        ? Math.min(1, Math.max(0, level))
+        : 0
+    if (!regiaWindow || regiaWindow.isDestroyed()) return
+    regiaWindow.webContents.send('regia:output-audio-level', v)
+  })
+
   ipcMain.handle('playlists:list', () => listSavedPlaylists())
 
   ipcMain.handle(
