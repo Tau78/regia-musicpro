@@ -12,6 +12,7 @@ import {
   clampPanelInViewport,
   clampPosToViewport,
   hitTestPanelResizeEdge,
+  resizeEdgeToCssCursor,
   type PanelPos,
   type PanelSize,
   type ResizeEdge,
@@ -33,7 +34,7 @@ import {
   readPreviewLayoutFromLs,
   writePreviewLayoutToLs,
 } from '../lib/previewLayoutStorage.ts'
-import PreviewBlock from './PreviewBlock.tsx'
+import PreviewProgramNextLayout from './PreviewProgramNextLayout.tsx'
 
 const MIN_W = 280
 const MIN_H = 240
@@ -253,21 +254,46 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
 
   const onPanelPointerMove = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
+      const el = e.currentTarget
       const rs = resizeStateRef.current
-      if (!rs) return
-      const dx = e.clientX - rs.startX
-      const dy = e.clientY - rs.startY
-      const { pos: np, size: ns } = resizePreviewWithSnap(
-        rs.edge,
-        rs.startPos,
-        rs.startSize,
-        dx,
-        dy,
+      if (rs) {
+        const dx = e.clientX - rs.startX
+        const dy = e.clientY - rs.startY
+        const { pos: np, size: ns } = resizePreviewWithSnap(
+          rs.edge,
+          rs.startPos,
+          rs.startSize,
+          dx,
+          dy,
+        )
+        setPos(np)
+        setPanelSize(ns)
+        el.style.cursor = resizeEdgeToCssCursor(rs.edge)
+        return
+      }
+      const root = panelRef.current
+      if (!root) {
+        el.style.cursor = ''
+        return
+      }
+      const rect = root.getBoundingClientRect()
+      const edge = hitTestPanelResizeEdge(
+        e.clientX,
+        e.clientY,
+        rect,
+        false,
       )
-      setPos(np)
-      setPanelSize(ns)
+      el.style.cursor = edge ? resizeEdgeToCssCursor(edge) : ''
     },
     [resizePreviewWithSnap],
+  )
+
+  const onPanelPointerLeave = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (resizeStateRef.current) return
+      e.currentTarget.style.cursor = ''
+    },
+    [],
   )
 
   const onPanelPointerUp = useCallback(
@@ -288,6 +314,7 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
       persistLayoutToLs(np, ns)
       resizeStateRef.current = null
       setIsResizing(false)
+      if (panelRef.current) panelRef.current.style.cursor = ''
       try {
         panelRef.current?.releasePointerCapture(e.pointerId)
       } catch {
@@ -389,6 +416,7 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
       }}
       onPointerDownCapture={onPanelPointerDownCapture}
       onPointerMove={onPanelPointerMove}
+      onPointerLeave={onPanelPointerLeave}
       onPointerUp={onPanelPointerUp}
       onPointerCancel={onPanelPointerUp}
     >
@@ -412,8 +440,9 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
         </div>
       </div>
       <div className="floating-preview-body">
-        <PreviewBlock
-          className="preview-panel--floating"
+        <PreviewProgramNextLayout
+          className="preview-program-next-layout--floating"
+          previewClassName="preview-panel--floating"
           frameClassName="preview-frame--floating"
         />
       </div>

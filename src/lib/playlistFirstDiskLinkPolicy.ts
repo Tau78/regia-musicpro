@@ -6,6 +6,7 @@
  */
 import { normalizePlaylistThemeColor } from './playlistThemeColor.ts'
 import {
+  CHALKBOARD_BANK_COUNT,
   defaultLaunchPadCells,
   launchPadCellsEqual,
   type FloatingPlaylistSession,
@@ -30,6 +31,13 @@ export type FirstDiskLinkPlan =
       crossfade: boolean
       loopMode: ShellLoopMode
     }
+  | {
+      kind: 'chalkboard_new'
+      label: string
+      themeColor: string
+      chalkboardBankPaths: string[]
+      chalkboardMigrateDraftSessionId: string
+    }
 
 /**
  * @param trimmedTitle Valore grezzo dal campo titolo (prima del commit stato).
@@ -52,6 +60,24 @@ export function planFirstDiskLinkForUnlinkedSession(args: {
     const themePristine = themeCur === ''
     if (stillDefaultTitle && cellsPristine && themePristine) return { kind: 'skip' }
     return { kind: 'launchpad_new', label, themeColor: themeCur, cells }
+  }
+
+  if (s.playlistMode === 'chalkboard') {
+    const pathsCb = s.chalkboardBankPaths ?? []
+    if (pathsCb.length < CHALKBOARD_BANK_COUNT) return { kind: 'skip' }
+    const titleNorm = args.trimmedTitle.trim()
+    const stillDefaultTitle =
+      titleNorm === '' || titleNorm.toLowerCase() === 'chalkboard'
+    const pristine =
+      (s.chalkboardContentRev ?? 0) === 0 && themeCur === ''
+    if (stillDefaultTitle && pristine) return { kind: 'skip' }
+    return {
+      kind: 'chalkboard_new',
+      label,
+      themeColor: themeCur,
+      chalkboardBankPaths: [...pathsCb],
+      chalkboardMigrateDraftSessionId: s.id,
+    }
   }
 
   const paths = s.paths ?? []

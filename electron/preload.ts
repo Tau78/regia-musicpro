@@ -49,9 +49,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
       updatedAt: string
       totalDurationSec?: number
       themeColor?: string
-      playlistMode?: 'tracks' | 'launchpad'
+      playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'
     }>
   > => ipcRenderer.invoke('playlists:list'),
+
+  chalkboardEnsureBanks: (opts: {
+    folderBaseName: string
+    draft: boolean
+    width: number
+    height: number
+    backgroundColor?: string
+  }): Promise<string[]> =>
+    ipcRenderer.invoke('chalkboard:ensureBanks', opts),
+
+  chalkboardWriteBankDataUrl: (opts: {
+    absPath: string
+    dataUrl: string
+  }): Promise<{ ok: true }> =>
+    ipcRenderer.invoke('chalkboard:writeBankDataUrl', opts),
 
   playlistsSave: (opts: {
     id?: string
@@ -60,7 +75,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     crossfade?: boolean
     loopMode?: 'off' | 'one' | 'all'
     themeColor?: string | null
-    playlistMode?: 'tracks' | 'launchpad'
+    playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'
     launchPadCells?: Array<{
       samplePath: string | null
       padColor: string
@@ -69,6 +84,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       padKeyCode?: string | null
       padKeyMode?: 'play' | 'toggle'
     }>
+    chalkboardBankPaths?: string[]
+    chalkboardMigrateDraftSessionId?: string | null
     totalDurationSec?: number
   }): Promise<{ id: string }> => ipcRenderer.invoke('playlists:save', opts),
 
@@ -84,7 +101,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     crossfade: boolean
     loopMode: 'off' | 'one' | 'all'
     themeColor: string
-    playlistMode: 'tracks' | 'launchpad'
+    playlistMode: 'tracks' | 'launchpad' | 'chalkboard'
     launchPadCells: Array<{
       samplePath: string | null
       padColor: string
@@ -93,6 +110,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       padKeyCode?: string | null
       padKeyMode?: 'play' | 'toggle'
     }>
+    chalkboardBankPaths: string[]
   } | null> =>
     ipcRenderer.invoke('playlists:load', id),
 
@@ -118,6 +136,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     height: number
   }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('output:setResolution', opts),
+
+  getOutputIdleCap: (): Promise<{
+    mode: 'black' | 'color' | 'image'
+    color: string
+    imagePath: string | null
+  }> => ipcRenderer.invoke('output:getIdleCap'),
+
+  setOutputIdleCap: (v: {
+    mode: 'black' | 'color' | 'image'
+    color: string
+    imagePath: string | null
+  }): Promise<{ ok: true }> => ipcRenderer.invoke('output:setIdleCap', v),
+
+  ensureOutputIdleCap: (
+    fallbackFromRegiaLs: unknown,
+  ): Promise<{
+    mode: 'black' | 'color' | 'image'
+    color: string
+    imagePath: string | null
+  }> => ipcRenderer.invoke('output:ensureIdleCap', fallbackFromRegiaLs),
 
   reportOutputAudioLevel: (level: number): void => {
     ipcRenderer.send('output:audio-level', level)
@@ -207,4 +245,86 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () =>
       ipcRenderer.removeListener('playlist-floater-os-closed', fn)
   },
+
+  lanServerStart: (opts?: { port?: number }) =>
+    ipcRenderer.invoke('lanServer:start', opts ?? {}),
+
+  lanServerStop: (): Promise<{ running: false }> =>
+    ipcRenderer.invoke('lanServer:stop'),
+
+  lanServerStatus: (): Promise<{
+    running: boolean
+    port: number
+    token: string | null
+    lanUrl: string | null
+    localUrl: string | null
+    remotePath: string
+    primaryLanIp: string | null
+    firewallHint: string
+  }> => ipcRenderer.invoke('lanServer:status'),
+
+  onLanServerIpChanged: (
+    handler: (msg: {
+      ip: string | null
+      lanUrl: string | null
+      localUrl: string | null
+    }) => void,
+  ): (() => void) => {
+    const fn = (_: Electron.IpcRendererEvent, m: unknown) =>
+      handler(
+        m as {
+          ip: string | null
+          lanUrl: string | null
+          localUrl: string | null
+        },
+      )
+    ipcRenderer.on('lanServer:ip-changed', fn)
+    return () => ipcRenderer.removeListener('lanServer:ip-changed', fn)
+  },
+
+  onRemoteDispatch: (
+    handler: (msg: { reqId: number; payload: unknown }) => void | Promise<void>,
+  ): (() => void) => {
+    const fn = (_: Electron.IpcRendererEvent, m: unknown) => {
+      void Promise.resolve(
+        handler(m as { reqId: number; payload: unknown }),
+      )
+    }
+    ipcRenderer.on('remote:dispatch', fn)
+    return () => ipcRenderer.removeListener('remote:dispatch', fn)
+  },
+
+  remoteDispatchResult: (
+    reqId: number,
+    ok: boolean,
+    error?: string,
+  ): void => {
+    ipcRenderer.send('remote:dispatch:result', { reqId, ok, error })
+  },
+
+  reportRemotePlaybackSnapshotPatch: (
+    patch: Record<string, unknown>,
+  ): void => {
+    ipcRenderer.send('remote:snapshot:patch', patch)
+  },
+
+  getUpdateCheckSchedule: (): Promise<
+    'on_startup' | 'daily' | 'hourly' | 'every_5_minutes'
+  > => ipcRenderer.invoke('debug:getUpdateCheckSchedule'),
+
+  setUpdateCheckSchedule: (
+    schedule: 'on_startup' | 'daily' | 'hourly' | 'every_5_minutes',
+  ): Promise<'on_startup' | 'daily' | 'hourly' | 'every_5_minutes'> =>
+    ipcRenderer.invoke('debug:setUpdateCheckSchedule', schedule),
+
+  getBuildInfo: (): Promise<{
+    isPackaged: boolean
+    version: string
+    buildHash: string
+    builtAt: string
+  }> => ipcRenderer.invoke('debug:getBuildInfo'),
+
+  checkForUpdatesNow: (): Promise<
+    { ok: true } | { ok: false; reason: string }
+  > => ipcRenderer.invoke('debug:checkForUpdatesNow'),
 })

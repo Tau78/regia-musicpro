@@ -30,6 +30,12 @@ import {
   setLaunchpadSampleSink,
   stopLaunchpadSample,
 } from '../lib/launchpadSamplePlayer.ts'
+import {
+  buildRegiaBugReportSnapshot,
+  type RegiaBugReportSnapshotFields,
+  type RegiaBugReportSnapshotV1,
+} from '../lib/regiaBugReportSnapshot.ts'
+import { deriveOutputTrackListSession } from '../lib/deriveOutputTrackListSession.ts'
 import { planFirstDiskLinkForUnlinkedSession } from '../lib/playlistFirstDiskLinkPolicy.ts'
 import { normalizePlaylistThemeColor } from '../lib/playlistThemeColor.ts'
 import { totalDurationSecForPlaylistSave } from '../lib/sumMediaDurationsSec.ts'
@@ -53,8 +59,13 @@ import {
   persistShellToLocalStorage,
   readSidebarMainTabFromLs,
   readStandaloneWorkspaceShell,
+  REGIA_LS_CUE_SINK_KEY,
   type WorkspaceShellPersist,
 } from '../lib/workspaceShell.ts'
+import {
+  outputIdleCapToPlaybackCommand,
+  readOutputIdleCapFromLs,
+} from '../lib/outputIdleCapStorage.ts'
 import { isTypingTarget } from '../hooks/useKeyboardShortcuts.ts'
 import {
   LAUNCHPAD_BANK_COUNT,
@@ -71,9 +82,20 @@ import {
   type FloatingPlaylistPanelSize,
   type FloatingPlaylistPos,
   type FloatingPlaylistSession,
+  type ChalkboardOutputMode,
+  type ChalkboardPlacedImage,
+  CHALKBOARD_DEFAULT_BG,
+  createChalkboardFloatingSession,
+  normalizeChalkboardBackgroundHex,
   createEmptyFloatingSession,
   createLaunchPadFloatingSession,
   createLaunchPadFloatingSessionWithKit,
+  chalkboardPathsEqual,
+  chalkboardPlacementsEqual,
+  cloneChalkboardPlacementsByBank,
+  isTracksPlaylistMode,
+  normalizeChalkboardPlacementsFromDisk,
+  normalizeChalkboardOutputMode,
 } from './floatingPlaylistSession.ts'
 
 function sessionHasSavedEditLink(
@@ -81,7 +103,9 @@ function sessionHasSavedEditLink(
 ): s is FloatingPlaylistSession & { editingSavedPlaylistId: string } {
   return (
     s.editingSavedPlaylistId != null &&
-    (s.savedEditPathsBaseline != null || s.savedEditLaunchPadBaseline != null)
+    (s.savedEditPathsBaseline != null ||
+      s.savedEditLaunchPadBaseline != null ||
+      s.savedEditChalkboardPathsBaseline != null)
   )
 }
 
@@ -170,6 +194,12 @@ export type RegiaContextValue = {
   /** deviceId Chromium per setSinkId; stringa vuota = predefinito. */
   outputSinkId: string
   setOutputSinkId: (sinkId: string) => void
+  /**
+   * Uscita dedicata al pre-ascolto CUE / PFL (cuffia). `''` = predefinito di sistema.
+   * Il routing audio verso questo dispositivo sarà usato dalle funzioni di cue (separate dal program).
+   */
+  cueSinkId: string
+  setCueSinkId: (sinkId: string) => void
   /** True se il brano della playlist sta andando in anteprima / uscita video. */
   videoPlaying: boolean
   /** True se un sample launchpad è in riproduzione (non in pausa CUE). */
@@ -201,7 +231,7 @@ export type RegiaContextValue = {
   removePathAt: (index: number, sessionId: string) => Promise<void>
   refreshSavedPlaylists: () => Promise<void>
   saveCurrentPlaylist: (label: string) => Promise<void>
-  loadSavedPlaylist: (id: string) => Promise<void>
+  loadSavedPlaylist: (id: string) => Promise<string | null>
   deleteSavedPlaylist: (id: string) => Promise<void>
   /** Persiste l’ordine delle playlist/launchpad salvati (id nell’ordine desiderato). */
   reorderSavedPlaylists: (orderedIds: string[]) => Promise<void>
@@ -240,6 +270,14 @@ export type RegiaContextValue = {
   toggleSecondScreen: () => void
   goNext: () => Promise<void>
   goPrev: () => Promise<void>
+  /**
+   * Brano armato come prossimo (stile load-to-preview): al prossimo avanzamento
+   * manuale o a fine clip viene caricato questo indice, se la playlist comanda l’uscita.
+   */
+  playbackArmedNext: { sessionId: string; index: number } | null
+  /** Imposta il brano che sarà caricato al prossimo take (decode warm-up in background). */
+  armPlayNext: (sessionId: string, index: number) => void
+  clearPlaybackArmedNext: () => void
   selectItem: (index: number, sessionId: string) => void
   reorderPaths: (
     fromIndex: number,
@@ -301,6 +339,8 @@ export type RegiaContextValue = {
    * campioni se rigenerati con gli script npm; vedi `public/launchpad-*`).
    */
   addFloatingLaunchPad: (kit?: 'base' | 'sfx') => Promise<void>
+  /** Nuova lavagna (4 banchi PNG, risoluzione uscita). */
+  addFloatingChalkboard: () => Promise<void>
   removeFloatingPlaylist: (id: string) => Promise<void>
   /** True se chiudere il pannello interromperebbe video o sample launchpad in play. */
   floatingCloseWouldInterruptPlay: (sessionId: string) => boolean
@@ -317,10 +357,18 @@ export type RegiaContextValue = {
       playlistOutputMuted?: boolean
       playlistOutputVolume?: number
       windowAlwaysOnTopPinned?: boolean
+      chalkboardFullscreen?: boolean
     },
   ) => void
   /** Dispone i pannelli flottanti a cascata dentro l’area plancia (anti fuori schermo). */
   repositionAllFloatingPanels: () => void
+  /** Aggiornamento parziale di una sessione floating (lavagna, ecc.). */
+  patchFloatingPlaylistSession: (
+    sessionId: string,
+    patch:
+      | Partial<FloatingPlaylistSession>
+      | ((s: FloatingPlaylistSession) => FloatingPlaylistSession),
+  ) => void
   /** True se la playlist del pannello è una salvata modificata. */
   savedPlaylistDirty: (sessionId: string) => boolean
   /** Salva sovrascrivendo la playlist salvata associata a quel pannello. */
@@ -345,6 +393,13 @@ export type RegiaContextValue = {
     index: number
     launchPadBankIndex?: number
   } | null
+  /** Playlist a elenco che comanda l’uscita video (`null` se in uso solo launchpad). */
+  outputTrackListSession: FloatingPlaylistSession | null
+  /** Sessione associata al trasporto (`playbackSessionId` risolto). */
+  playbackControlSession: FloatingPlaylistSession | null
+  videoOutputSessionId: string | null
+  /** Id sessione playback (persistenza workspace). */
+  playbackSessionId: string | null
   /** Workspace nominati (layout plancia + pannelli). */
   namedWorkspaces: NamedWorkspaceMeta[]
   refreshNamedWorkspaces: () => void
@@ -375,6 +430,8 @@ export type RegiaContextValue = {
   sidebarWidthPx: number
   /** Larghezza sidebar; con `persist` false (default true) non scrive su disco fino al commit (es. trascinamento). */
   setSidebarWidthPx: (w: number, persist?: boolean) => void
+  /** Snapshot JSON per segnalazione bug (playlist, trasporto, routing). */
+  exportBugReportSnapshot: () => RegiaBugReportSnapshotV1
 }
 
 export type NamedWorkspaceMeta = {
@@ -490,9 +547,11 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
   const playlistMode =
     r.playlistMode === 'launchpad'
       ? ('launchpad' as const)
-      : r.playlistMode === 'tracks'
-        ? ('tracks' as const)
-        : undefined
+      : r.playlistMode === 'chalkboard'
+        ? ('chalkboard' as const)
+        : r.playlistMode === 'tracks'
+          ? ('tracks' as const)
+          : undefined
 
   let launchPadCells: LaunchPadCell[] | undefined
   if (playlistMode === 'launchpad') {
@@ -544,6 +603,78 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
       launchPadBanks = migrateLaunchPadBanksFromCells(launchPadCells)
       launchPadBankIndex = 0
       launchPadCells = launchPadBanks[0]!.map((c) => ({ ...c }))
+    }
+  }
+
+  let chalkboardBankPaths: string[] | undefined
+  let chalkboardBankIndex: number | undefined
+  let chalkboardContentRev: number | undefined
+  let chalkboardOutputMode: ChalkboardOutputMode | undefined
+  let chalkboardFullscreenSaved: boolean | undefined
+  let chalkboardPlacementsByBank: ChalkboardPlacedImage[][] | undefined
+  let chalkboardBackgroundColor: string | undefined
+  let savedEditChalkboardPathsBaseline: string[] | null = null
+  let savedEditChalkboardContentRevBaseline: number | undefined
+  let savedEditChalkboardPlacementsBaseline:
+    | ChalkboardPlacedImage[][]
+    | null
+    | undefined
+  let savedEditChalkboardBackgroundBaseline: string | undefined
+  if (playlistMode === 'chalkboard') {
+    const rawCb = r.chalkboardBankPaths
+    if (Array.isArray(rawCb)) {
+      chalkboardBankPaths = rawCb.filter(
+        (p): p is string => typeof p === 'string',
+      )
+    }
+    const rawCbi = r.chalkboardBankIndex
+    chalkboardBankIndex =
+      typeof rawCbi === 'number' && Number.isFinite(rawCbi)
+        ? Math.max(0, Math.min(3, Math.floor(rawCbi)))
+        : 0
+    const rev = r.chalkboardContentRev
+    chalkboardContentRev =
+      typeof rev === 'number' && Number.isFinite(rev) ? Math.floor(rev) : 0
+    chalkboardOutputMode = normalizeChalkboardOutputMode(
+      r.chalkboardOutputMode,
+      r.chalkboardOutputToProgram,
+    )
+    if (r.chalkboardFullscreen === true) {
+      chalkboardFullscreenSaved = true
+    }
+    if (r.savedEditChalkboardPathsBaseline === null) {
+      savedEditChalkboardPathsBaseline = null
+    } else if (Array.isArray(r.savedEditChalkboardPathsBaseline)) {
+      savedEditChalkboardPathsBaseline =
+        r.savedEditChalkboardPathsBaseline.filter(
+          (p): p is string => typeof p === 'string',
+        )
+    }
+    const br = r.savedEditChalkboardContentRevBaseline
+    if (typeof br === 'number' && Number.isFinite(br)) {
+      savedEditChalkboardContentRevBaseline = Math.floor(br)
+    }
+    if (Array.isArray(r.chalkboardPlacementsByBank)) {
+      chalkboardPlacementsByBank = normalizeChalkboardPlacementsFromDisk(
+        r.chalkboardPlacementsByBank,
+      )
+    }
+    chalkboardBackgroundColor = normalizeChalkboardBackgroundHex(
+      r.chalkboardBackgroundColor,
+    )
+    if (typeof r.savedEditChalkboardBackgroundBaseline === 'string') {
+      savedEditChalkboardBackgroundBaseline = normalizeChalkboardBackgroundHex(
+        r.savedEditChalkboardBackgroundBaseline,
+      )
+    }
+    if (r.savedEditChalkboardPlacementsBaseline === null) {
+      savedEditChalkboardPlacementsBaseline = null
+    } else if (Array.isArray(r.savedEditChalkboardPlacementsBaseline)) {
+      savedEditChalkboardPlacementsBaseline = cloneChalkboardPlacementsByBank(
+        normalizeChalkboardPlacementsFromDisk(
+          r.savedEditChalkboardPlacementsBaseline,
+        ),
+      )
     }
   }
 
@@ -640,6 +771,34 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
       : {}),
     savedEditThemeColorBaseline,
     savedEditLaunchPadBaseline,
+    ...(playlistMode === 'chalkboard'
+      ? {
+          chalkboardBankPaths,
+          chalkboardBankIndex,
+          chalkboardContentRev,
+          chalkboardBackgroundColor:
+            chalkboardBackgroundColor ?? CHALKBOARD_DEFAULT_BG,
+          ...(chalkboardPlacementsByBank
+            ? { chalkboardPlacementsByBank }
+            : {}),
+          ...(chalkboardOutputMode && chalkboardOutputMode !== 'off'
+            ? { chalkboardOutputMode }
+            : {}),
+          ...(chalkboardFullscreenSaved
+            ? { chalkboardFullscreen: true as const }
+            : {}),
+          savedEditChalkboardPathsBaseline,
+          ...(savedEditChalkboardContentRevBaseline !== undefined
+            ? { savedEditChalkboardContentRevBaseline }
+            : {}),
+          ...(savedEditChalkboardPlacementsBaseline !== undefined
+            ? { savedEditChalkboardPlacementsBaseline }
+            : {}),
+          ...(savedEditChalkboardBackgroundBaseline !== undefined
+            ? { savedEditChalkboardBackgroundBaseline }
+            : {}),
+        }
+      : {}),
     ...(r.windowAlwaysOnTopPinned === true
       ? { windowAlwaysOnTopPinned: true as const }
       : {}),
@@ -841,9 +1000,9 @@ function initialVideoOutputSessionId(
 ): string | null {
   if (playbackId) {
     const p = sessions.find((s) => s.id === playbackId)
-    if (p && p.playlistMode !== 'launchpad') return playbackId
+    if (p && isTracksPlaylistMode(p.playlistMode)) return playbackId
   }
-  const first = sessions.find((s) => s.playlistMode !== 'launchpad')
+  const first = sessions.find((s) => isTracksPlaylistMode(s.playlistMode))
   return first?.id ?? null
 }
 
@@ -870,6 +1029,34 @@ function deepCloneFloatingSessions(
     savedEditLaunchPadBaseline: s.savedEditLaunchPadBaseline
       ? s.savedEditLaunchPadBaseline.map((c) => ({ ...c }))
       : null,
+    chalkboardBankPaths: s.chalkboardBankPaths
+      ? [...s.chalkboardBankPaths]
+      : undefined,
+    chalkboardBankIndex: s.chalkboardBankIndex,
+    chalkboardContentRev: s.chalkboardContentRev,
+    chalkboardOutputMode: normalizeChalkboardOutputMode(
+      s.chalkboardOutputMode,
+      (s as { chalkboardOutputToProgram?: boolean }).chalkboardOutputToProgram,
+    ),
+    chalkboardFullscreen: s.chalkboardFullscreen,
+    chalkboardPlacementsByBank: cloneChalkboardPlacementsByBank(
+      s.chalkboardPlacementsByBank,
+    ),
+    chalkboardBackgroundColor: normalizeChalkboardBackgroundHex(
+      s.chalkboardBackgroundColor,
+    ),
+    savedEditChalkboardPathsBaseline: s.savedEditChalkboardPathsBaseline
+      ? [...s.savedEditChalkboardPathsBaseline]
+      : null,
+    savedEditChalkboardContentRevBaseline: s.savedEditChalkboardContentRevBaseline,
+    savedEditChalkboardPlacementsBaseline:
+      s.savedEditChalkboardPlacementsBaseline === null
+        ? null
+        : cloneChalkboardPlacementsByBank(s.savedEditChalkboardPlacementsBaseline),
+    savedEditChalkboardBackgroundBaseline:
+      s.savedEditChalkboardBackgroundBaseline !== undefined
+        ? normalizeChalkboardBackgroundHex(s.savedEditChalkboardBackgroundBaseline)
+        : undefined,
   }))
 }
 
@@ -959,6 +1146,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const [outputSinkId, setOutputSinkIdState] = useState(
     () => bootstrap.shell.outputSinkId,
   )
+  const [cueSinkId, setCueSinkIdState] = useState(
+    () => bootstrap.shell.cueSinkId,
+  )
+  const [playbackArmedNext, setPlaybackArmedNext] = useState<{
+    sessionId: string
+    index: number
+  } | null>(null)
   const [videoPlaying, setVideoPlaying] = useState(false)
   const [launchpadAudioPlaying, setLaunchpadAudioPlaying] = useState(false)
   const playing = videoPlaying || launchpadAudioPlaying
@@ -1128,7 +1322,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (
         cur &&
         floatingSessions.some(
-          (s) => s.id === cur && s.playlistMode !== 'launchpad',
+          (s) => s.id === cur && isTracksPlaylistMode(s.playlistMode),
         )
       )
         return cur
@@ -1155,6 +1349,14 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     )
   }, [floatingSessions, resolvedPlaybackId])
 
+  const outputTrackListSession = useMemo((): FloatingPlaylistSession | null => {
+    return deriveOutputTrackListSession(
+      floatingSessions,
+      videoOutputSessionId,
+      resolvedPlaybackId,
+    )
+  }, [floatingSessions, videoOutputSessionId, resolvedPlaybackId])
+
   const outputTrackLoopMode = useMemo((): LoopMode => {
     const videoS =
       videoOutputSessionId &&
@@ -1162,9 +1364,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         ? floatingSessions.find((s) => s.id === videoOutputSessionId)
         : null
     const pathSource =
-      videoS && videoS.playlistMode !== 'launchpad'
+      videoS && isTracksPlaylistMode(videoS.playlistMode)
         ? videoS
-        : playbackSession && playbackSession.playlistMode !== 'launchpad'
+        : playbackSession && isTracksPlaylistMode(playbackSession.playlistMode)
           ? playbackSession
           : null
     return pathSource?.playlistLoopMode !== undefined
@@ -1193,6 +1395,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     floatingSessionsRef.current = floatingSessions
   }, [floatingSessions])
 
+  /** Evita salvataggi duplicati se Invio (repeat) o blur girano mentre il primo `playlistsSave` è ancora in corso. */
+  const persistFloatingTitleBlurBySessionRef = useRef(
+    new Map<string, Promise<void>>(),
+  )
+
   const patchFloatingSession = useCallback(
     (
       id: string,
@@ -1213,6 +1420,21 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  useEffect(() => {
+    setPlaybackArmedNext((a) => {
+      if (!a) return a
+      const sess = floatingSessions.find((s) => s.id === a.sessionId)
+      if (
+        !sess ||
+        sess.playlistMode === 'launchpad' ||
+        sess.playlistMode === 'chalkboard'
+      )
+        return null
+      if (a.index < 0 || a.index >= sess.paths.length) return null
+      return a
+    })
+  }, [floatingSessions])
+
   const pathsRef = useRef(paths)
   const currentIndexRef = useRef(currentIndex)
   const loopModeRef = useRef(loopMode)
@@ -1229,6 +1451,19 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     outputSinkIdRef.current = outputSinkId
   }, [outputSinkId])
 
+  const cueSinkIdRef = useRef(cueSinkId)
+  useLayoutEffect(() => {
+    cueSinkIdRef.current = cueSinkId
+  }, [cueSinkId])
+
+  const playbackArmedNextRef = useRef(playbackArmedNext)
+  useLayoutEffect(() => {
+    playbackArmedNextRef.current = playbackArmedNext
+  }, [playbackArmedNext])
+
+  /** Sessione la cui playlist comanda pathsRef / goNext (stesso criterio di `outputTrackListSession`). */
+  const outputTrackListSessionIdRef = useRef<string | null>(null)
+
   useLayoutEffect(() => {
     const videoS =
       videoOutputSessionId &&
@@ -1236,11 +1471,12 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         ? floatingSessions.find((s) => s.id === videoOutputSessionId)
         : null
     const pathSource =
-      videoS && videoS.playlistMode !== 'launchpad'
+      videoS && isTracksPlaylistMode(videoS.playlistMode)
         ? videoS
-        : playbackSession && playbackSession.playlistMode !== 'launchpad'
+        : playbackSession && isTracksPlaylistMode(playbackSession.playlistMode)
           ? playbackSession
           : null
+    outputTrackListSessionIdRef.current = pathSource?.id ?? null
     pathsRef.current = pathSource?.paths ?? []
     currentIndexRef.current = pathSource?.currentIndex ?? 0
     loopModeRef.current =
@@ -1280,6 +1516,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         muted: mutedRef.current,
         outputVolume: outputVolumeRef.current,
         outputSinkId: outputSinkIdRef.current,
+        cueSinkId: cueSinkIdRef.current,
         secondScreenOn: secondScreenOnRef.current,
         sidebarMainTab: readSidebarMainTabFromLs(),
         stillImageDurationSec: stillImageDurationSecRef.current,
@@ -1328,6 +1565,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     muted,
     outputVolume,
     outputSinkId,
+    cueSinkId,
     secondScreenOn,
     stillImageDurationSec,
     persistFloatingWorkspaceBlob,
@@ -1445,7 +1683,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     ) => {
       if (!list.length) return
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
-      if (s0?.playlistMode === 'launchpad') return
+      if (
+        s0?.playlistMode === 'launchpad' ||
+        s0?.playlistMode === 'chalkboard'
+      )
+        return
       if (!opts?.skipHistory) {
         recordUndoPoint()
       }
@@ -1478,7 +1720,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setLaunchpadAudioPlaying(false)
       loadedIndexRef.current = null
       setPlaybackLoadedTrack(null)
-      await send({ type: 'pause' })
+      await send({ type: 'programVacant' })
     },
     [patchFloatingSession, recordUndoPoint, send],
   )
@@ -1574,6 +1816,14 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
+    const nextCue = typeof shell.cueSinkId === 'string' ? shell.cueSinkId : ''
+    setCueSinkIdState(nextCue)
+    cueSinkIdRef.current = nextCue
+    try {
+      localStorage.setItem(REGIA_LS_CUE_SINK_KEY, nextCue)
+    } catch {
+      /* ignore */
+    }
     setSecondScreenOn(shell.secondScreenOn)
     lastOutputResolutionRef.current = shell.outputResolution
     persistShellToLocalStorage(shell)
@@ -1598,6 +1848,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         muted: mutedRef.current,
         outputVolume: outputVolumeRef.current,
         outputSinkId: outputSinkIdRef.current,
+        cueSinkId: cueSinkIdRef.current,
         secondScreenOn: secondScreenOnRef.current,
         sidebarMainTab: readSidebarMainTabFromLs(),
         stillImageDurationSec: stillImageDurationSecRef.current,
@@ -1685,7 +1936,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setVideoPlaying(false)
       loadedIndexRef.current = null
       setPlaybackLoadedTrack(null)
-      await send({ type: 'pause' })
+      await send({ type: 'programVacant' })
       setVideoOutputSessionId(
         initialVideoOutputSessionId(
           floating.sessions,
@@ -1778,6 +2029,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         playlistOutputMuted?: boolean
         playlistOutputVolume?: number
         windowAlwaysOnTopPinned?: boolean
+        chalkboardFullscreen?: boolean
       },
     ) => {
       patchFloatingSession(sessionId, patch)
@@ -1867,6 +2119,19 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     })
   }, [recordUndoPoint])
 
+  const addFloatingChalkboard = useCallback(async () => {
+    recordUndoPoint()
+    setFloatingSessions((prev) => {
+      const last = prev[prev.length - 1]
+      const pos = last
+        ? { x: last.pos.x + 28, y: last.pos.y + 28 }
+        : { x: 24, y: 96 }
+      const s = createChalkboardFloatingSession(pos)
+      setActiveFloatingSessionId(s.id)
+      return [...prev, s]
+    })
+  }, [recordUndoPoint])
+
   const setPlaylistTitle = useCallback((title: string, sessionId: string) => {
     patchFloatingSession(sessionId, {
       playlistTitle: title.slice(0, 120),
@@ -1935,16 +2200,43 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           )
         )
           return true
+      } else if (s.playlistMode === 'chalkboard') {
+        if (
+          (s.chalkboardContentRev ?? 0) !==
+          (s.savedEditChalkboardContentRevBaseline ?? 0)
+        )
+          return true
+        if (
+          !chalkboardPathsEqual(
+            s.chalkboardBankPaths,
+            s.savedEditChalkboardPathsBaseline ?? undefined,
+          )
+        )
+          return true
+        if (
+          !chalkboardPlacementsEqual(
+            s.chalkboardPlacementsByBank,
+            s.savedEditChalkboardPlacementsBaseline ?? undefined,
+          )
+        )
+          return true
+        if (
+          normalizeChalkboardBackgroundHex(s.chalkboardBackgroundColor) !==
+          normalizeChalkboardBackgroundHex(
+            s.savedEditChalkboardBackgroundBaseline ?? CHALKBOARD_DEFAULT_BG,
+          )
+        )
+          return true
       } else if (!pathsEqual(s.paths, s.savedEditPathsBaseline!)) {
         return true
       }
       if (s.playlistTitle.trim() !== s.savedEditTitleBaseline.trim()) return true
       if (
-        s.playlistMode !== 'launchpad' &&
+        isTracksPlaylistMode(s.playlistMode) &&
         s.playlistCrossfade !== s.savedEditCrossfadeBaseline
       )
         return true
-      if (s.playlistMode !== 'launchpad') {
+      if (isTracksPlaylistMode(s.playlistMode)) {
         const curLoop = s.playlistLoopMode ?? loopMode
         const baseLoop = s.savedEditPlaylistLoopBaseline ?? loopMode
         if (curLoop !== baseLoop) return true
@@ -2001,6 +2293,57 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         })
         return
       }
+      if (s.playlistMode === 'chalkboard') {
+        const pathsCb = s.chalkboardBankPaths ?? []
+        const basePaths = s.savedEditChalkboardPathsBaseline ?? []
+        const rev = s.chalkboardContentRev ?? 0
+        const baseRev = s.savedEditChalkboardContentRevBaseline ?? 0
+        const pl = cloneChalkboardPlacementsByBank(s.chalkboardPlacementsByBank)
+        const basePl = cloneChalkboardPlacementsByBank(
+          s.savedEditChalkboardPlacementsBaseline ?? undefined,
+        )
+        const bgCur = normalizeChalkboardBackgroundHex(s.chalkboardBackgroundColor)
+        const bgBase = normalizeChalkboardBackgroundHex(
+          s.savedEditChalkboardBackgroundBaseline,
+        )
+        if (
+          chalkboardPathsEqual(pathsCb, basePaths) &&
+          rev === baseRev &&
+          chalkboardPlacementsEqual(pl, basePl) &&
+          bgCur === bgBase &&
+          label.trim() === s.savedEditTitleBaseline.trim() &&
+          themeCur === themeBase
+        )
+          return
+        if (pathsCb.length < 4) return
+        recordUndoPoint()
+        const totalDurationSec = await totalDurationSecForPlaylistSave({
+          playlistMode: 'chalkboard',
+          paths: [],
+        })
+        await window.electronAPI.playlistsSave({
+          id,
+          label,
+          paths: [],
+          crossfade: false,
+          themeColor: themeCur === '' ? undefined : themeCur,
+          playlistMode: 'chalkboard',
+          chalkboardBankPaths: [...pathsCb],
+          chalkboardBackgroundColor: bgCur,
+          chalkboardPlacementsByBank: pl,
+          totalDurationSec,
+        })
+        await refreshSavedPlaylists()
+        patchFloatingSession(sessionId, {
+          savedEditChalkboardPathsBaseline: [...pathsCb],
+          savedEditChalkboardContentRevBaseline: rev,
+          savedEditChalkboardPlacementsBaseline: cloneChalkboardPlacementsByBank(pl),
+          savedEditChalkboardBackgroundBaseline: bgCur,
+          savedEditTitleBaseline: label.trim(),
+          savedEditThemeColorBaseline: themeCur,
+        })
+        return
+      }
       const list = s.paths
       const trackLoop = s.playlistLoopMode ?? loopMode
       const baseLoop = s.savedEditPlaylistLoopBaseline ?? loopMode
@@ -2041,6 +2384,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
 
   const persistSavedPlaylistAfterFloatingTitleBlur = useCallback(
     async (trimmedTitle: string, sessionId: string) => {
+      const chainMap = persistFloatingTitleBlurBySessionRef.current
+      const prev = chainMap.get(sessionId) ?? Promise.resolve()
+      const next = prev.catch(() => {}).then(async () => {
       const s = floatingSessionsRef.current.find((x) => x.id === sessionId)
       if (!s) return
       const label = trimmedTitle.trim().slice(0, 120) || 'Senza titolo'
@@ -2080,6 +2426,50 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           })
           return
         }
+        if (plan.kind === 'chalkboard_new') {
+          const totalDurationSec = await totalDurationSecForPlaylistSave({
+            playlistMode: 'chalkboard',
+            paths: [],
+          })
+          const plNew = cloneChalkboardPlacementsByBank(s.chalkboardPlacementsByBank)
+          const { id: newId } = await window.electronAPI.playlistsSave({
+            label: plan.label,
+            paths: [],
+            crossfade: false,
+            themeColor: plan.themeColor === '' ? undefined : plan.themeColor,
+            playlistMode: 'chalkboard',
+            chalkboardBankPaths: [...plan.chalkboardBankPaths],
+            chalkboardBackgroundColor: normalizeChalkboardBackgroundHex(
+              s.chalkboardBackgroundColor,
+            ),
+            chalkboardPlacementsByBank: plNew,
+            chalkboardMigrateDraftSessionId: plan.chalkboardMigrateDraftSessionId,
+            totalDurationSec,
+          })
+          await refreshSavedPlaylists()
+          const migrated = await window.electronAPI.playlistsLoad(newId)
+          const nextPaths =
+            migrated?.playlistMode === 'chalkboard' &&
+            migrated.chalkboardBankPaths.length >= 4
+              ? [...migrated.chalkboardBankPaths]
+              : [...plan.chalkboardBankPaths]
+          patchFloatingSession(sessionId, {
+            editingSavedPlaylistId: newId,
+            chalkboardBankPaths: nextPaths,
+            savedEditChalkboardPathsBaseline: [...nextPaths],
+            savedEditChalkboardContentRevBaseline: s.chalkboardContentRev ?? 0,
+            savedEditChalkboardPlacementsBaseline:
+              cloneChalkboardPlacementsByBank(plNew),
+            savedEditChalkboardBackgroundBaseline:
+              normalizeChalkboardBackgroundHex(s.chalkboardBackgroundColor),
+            savedEditPathsBaseline: null,
+            savedEditLaunchPadBaseline: null,
+            savedEditTitleBaseline: plan.label.trim(),
+            savedEditCrossfadeBaseline: false,
+            savedEditThemeColorBaseline: plan.themeColor,
+          })
+          return
+        }
         const totalDurationSec = await totalDurationSecForPlaylistSave({
           playlistMode: 'tracks',
           paths: plan.paths,
@@ -2110,7 +2500,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const titleDirty =
         label.trim() !== s.savedEditTitleBaseline.trim()
       const pathsDirty =
-        s.playlistMode !== 'launchpad' &&
+        isTracksPlaylistMode(s.playlistMode) &&
         !pathsEqual(s.paths, s.savedEditPathsBaseline!)
       const cellsDirty =
         s.playlistMode === 'launchpad' &&
@@ -2118,12 +2508,28 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           s.launchPadCells,
           s.savedEditLaunchPadBaseline ?? undefined,
         )
+      const chalkboardDirty =
+        s.playlistMode === 'chalkboard' &&
+        ((s.chalkboardContentRev ?? 0) !==
+          (s.savedEditChalkboardContentRevBaseline ?? 0) ||
+          !chalkboardPathsEqual(
+            s.chalkboardBankPaths,
+            s.savedEditChalkboardPathsBaseline ?? undefined,
+          ) ||
+          !chalkboardPlacementsEqual(
+            s.chalkboardPlacementsByBank,
+            s.savedEditChalkboardPlacementsBaseline ?? undefined,
+          ) ||
+          normalizeChalkboardBackgroundHex(s.chalkboardBackgroundColor) !==
+            normalizeChalkboardBackgroundHex(
+              s.savedEditChalkboardBackgroundBaseline ?? CHALKBOARD_DEFAULT_BG,
+            ))
       const crossfadeDirty =
-        s.playlistMode !== 'launchpad' &&
+        isTracksPlaylistMode(s.playlistMode) &&
         s.playlistCrossfade !== s.savedEditCrossfadeBaseline
       const shellLoop = shellLoopModeRef.current
       const loopDirty =
-        s.playlistMode !== 'launchpad' &&
+        isTracksPlaylistMode(s.playlistMode) &&
         (s.playlistLoopMode ?? shellLoop) !==
           (s.savedEditPlaylistLoopBaseline ?? shellLoop)
       const themeBase = normalizePlaylistThemeColor(
@@ -2134,6 +2540,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         !titleDirty &&
         !pathsDirty &&
         !cellsDirty &&
+        !chalkboardDirty &&
         !crossfadeDirty &&
         !loopDirty &&
         !themeDirty
@@ -2165,6 +2572,44 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         })
         return
       }
+      if (s.playlistMode === 'chalkboard') {
+        const pathsCb = s.chalkboardBankPaths ?? []
+        if (pathsCb.length < 4) return
+        const totalDurationSec = await totalDurationSecForPlaylistSave({
+          playlistMode: 'chalkboard',
+          paths: [],
+        })
+        const plPersist = cloneChalkboardPlacementsByBank(
+          s.chalkboardPlacementsByBank,
+        )
+        await window.electronAPI.playlistsSave({
+          id,
+          label,
+          paths: [],
+          crossfade: false,
+          themeColor: themeCur === '' ? undefined : themeCur,
+          playlistMode: 'chalkboard',
+          chalkboardBankPaths: [...pathsCb],
+          chalkboardBackgroundColor: normalizeChalkboardBackgroundHex(
+            s.chalkboardBackgroundColor,
+          ),
+          chalkboardPlacementsByBank: plPersist,
+          totalDurationSec,
+        })
+        await refreshSavedPlaylists()
+        patchFloatingSession(sessionId, {
+          savedEditChalkboardPathsBaseline: [...pathsCb],
+          savedEditChalkboardContentRevBaseline: s.chalkboardContentRev ?? 0,
+          savedEditChalkboardPlacementsBaseline:
+            cloneChalkboardPlacementsByBank(plPersist),
+          savedEditChalkboardBackgroundBaseline: normalizeChalkboardBackgroundHex(
+            s.chalkboardBackgroundColor,
+          ),
+          savedEditTitleBaseline: label.trim(),
+          savedEditThemeColorBaseline: themeCur,
+        })
+        return
+      }
       const list = s.paths
       const trackLoop = s.playlistLoopMode ?? shellLoopModeRef.current
       const totalDurationSec = await totalDurationSecForPlaylistSave({
@@ -2189,6 +2634,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         savedEditPlaylistLoopBaseline: trackLoop,
         savedEditThemeColorBaseline: themeCur,
       })
+      })
+      chainMap.set(sessionId, next)
+      await next
     },
     [patchFloatingSession, refreshSavedPlaylists],
   )
@@ -2207,15 +2655,24 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         stopLaunchpadSample()
         setLaunchpadAudioPlaying(false)
       }
+      if (
+        s?.playlistMode === 'chalkboard' &&
+        normalizeChalkboardOutputMode(
+          s.chalkboardOutputMode,
+          (s as { chalkboardOutputToProgram?: boolean }).chalkboardOutputToProgram,
+        ) !== 'off'
+      ) {
+        void send({ type: 'chalkboardLayer', visible: false })
+      }
       if (videoOutputSessionIdRef.current === id) {
         const nv =
-          next.find((x) => x.playlistMode !== 'launchpad')?.id ?? null
+          next.find((x) => isTracksPlaylistMode(x.playlistMode))?.id ?? null
         setVideoOutputSessionId(nv)
         setPreviewSrc(null)
         setPreviewSyncKey((k) => k + 1)
         loadedIndexRef.current = null
         setVideoPlaying(false)
-        void send({ type: 'pause' })
+        void send({ type: 'programVacant' })
       }
       setFloatingSessions(next)
       if (next.length === 0) {
@@ -2261,6 +2718,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const s = floatingSessionsRef.current.find((x) => x.id === id)
       if (!s) return
       const themeCur = normalizePlaylistThemeColor(s.playlistThemeColor ?? '')
+      if (s.playlistMode === 'chalkboard') return
       if (s.playlistMode === 'launchpad') {
         const cells = s.launchPadCells ?? defaultLaunchPadCells()
         const totalDurationSec = await totalDurationSecForPlaylistSave({
@@ -2302,16 +2760,23 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   )
 
   const loadSavedPlaylist = useCallback(
-    async (id: string) => {
+    async (id: string): Promise<string | null> => {
       const data = await window.electronAPI.playlistsLoad(id)
-      if (!data) return
+      if (!data) return null
       const isLaunchpad = data.playlistMode === 'launchpad'
-      if (!isLaunchpad && !data.paths.length) return
+      const isChalkboard = data.playlistMode === 'chalkboard'
+      if (!isLaunchpad && !isChalkboard && !data.paths.length) return null
       if (
         isLaunchpad &&
         (!data.launchPadCells || data.launchPadCells.length < LAUNCHPAD_CELL_COUNT)
       )
-        return
+        return null
+      if (
+        isChalkboard &&
+        (!data.chalkboardBankPaths ||
+          data.chalkboardBankPaths.length < 4)
+      )
+        return null
       recordUndoPoint()
       const prev = floatingSessionsRef.current
       const last = prev[prev.length - 1]
@@ -2338,6 +2803,37 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditCrossfadeBaseline: false,
           savedEditThemeColorBaseline: loadedTheme,
         }
+      } else if (isChalkboard) {
+        const cbPaths = [...data.chalkboardBankPaths]
+        const plLoaded = normalizeChalkboardPlacementsFromDisk(
+          data.chalkboardPlacementsByBank,
+        )
+        const bgLoaded = normalizeChalkboardBackgroundHex(
+          data.chalkboardBackgroundColor,
+        )
+        newS = {
+          ...createChalkboardFloatingSession(pos),
+          playlistTitle: label,
+          chalkboardBankPaths: cbPaths,
+          chalkboardBankIndex: 0,
+          chalkboardContentRev: 0,
+          chalkboardOutputMode: 'off',
+          chalkboardBackgroundColor: bgLoaded,
+          chalkboardPlacementsByBank: plLoaded,
+          playlistThemeColor: loadedTheme,
+          playlistCrossfade: false,
+          editingSavedPlaylistId: id,
+          savedEditPathsBaseline: null,
+          savedEditLaunchPadBaseline: null,
+          savedEditChalkboardPathsBaseline: [...cbPaths],
+          savedEditChalkboardContentRevBaseline: 0,
+          savedEditChalkboardPlacementsBaseline:
+            cloneChalkboardPlacementsByBank(plLoaded),
+          savedEditChalkboardBackgroundBaseline: bgLoaded,
+          savedEditTitleBaseline: label.trim(),
+          savedEditCrossfadeBaseline: false,
+          savedEditThemeColorBaseline: loadedTheme,
+        }
       } else {
         const loadedLoop = parsePersistedPlaylistLoopMode(data.loopMode) ?? 'off'
         newS = {
@@ -2357,14 +2853,18 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           playlistThemeColor: loadedTheme,
         }
       }
-      setFloatingSessions((p) => [...p, newS])
+      const nextFloating = [...floatingSessionsRef.current, newS]
+      floatingSessionsRef.current = nextFloating
+      setFloatingSessions(nextFloating)
       setActiveFloatingSessionId(newS.id)
+      activeFloatingSessionIdRef.current = newS.id
       setPlaybackSessionId(newS.id)
+      playbackSessionIdStateRef.current = newS.id
       const firstTracks = [...prev, newS].find(
-        (x) => x.playlistMode !== 'launchpad',
+        (x) => isTracksPlaylistMode(x.playlistMode),
       )
       setVideoOutputSessionId(
-        newS.playlistMode === 'launchpad'
+        newS.playlistMode === 'launchpad' || newS.playlistMode === 'chalkboard'
           ? (firstTracks?.id ?? null)
           : newS.id,
       )
@@ -2374,8 +2874,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setLaunchpadAudioPlaying(false)
       loadedIndexRef.current = null
       setPlaybackLoadedTrack(null)
-      await send({ type: 'pause' })
+      await send({ type: 'programVacant' })
       openFloatingPlaylist()
+      return newS.id
     },
     [recordUndoPoint, send, openFloatingPlaylist],
   )
@@ -2392,6 +2893,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
                 editingSavedPlaylistId: null,
                 savedEditPathsBaseline: null,
                 savedEditLaunchPadBaseline: null,
+                savedEditChalkboardPathsBaseline: null,
+                savedEditChalkboardContentRevBaseline: undefined,
+                savedEditChalkboardPlacementsBaseline: undefined,
+                savedEditChalkboardBackgroundBaseline: undefined,
                 savedEditTitleBaseline: '',
                 savedEditCrossfadeBaseline: false,
                 savedEditThemeColorBaseline: '',
@@ -2429,7 +2934,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const sid = sessionId ?? fallbackPlaybackId
       if (!sid) return
       const sess = floatingSessionsRef.current.find((x) => x.id === sid)
-      if (sess?.playlistMode === 'launchpad') return
+      if (
+        sess?.playlistMode === 'launchpad' ||
+        sess?.playlistMode === 'chalkboard'
+      )
+        return
       const list = sess?.paths ?? []
       if (list.length === 0 || index < 0 || index >= list.length) return
       const playlistMuted = Boolean(sess?.playlistOutputMuted)
@@ -2467,9 +2976,26 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       loadedIndexRef.current = index
       setPlaybackLoadedTrack({ sessionId: sid, index })
       setVideoPlaying(true)
+      setPlaybackArmedNext(null)
     },
     [muted, send, patchFloatingSession],
   )
+
+  const clearPlaybackArmedNext = useCallback(() => {
+    setPlaybackArmedNext(null)
+  }, [])
+
+  const armPlayNext = useCallback((sessionId: string, index: number) => {
+    const sess = floatingSessionsRef.current.find((s) => s.id === sessionId)
+    if (
+      !sess ||
+      sess.playlistMode === 'launchpad' ||
+      sess.playlistMode === 'chalkboard'
+    )
+      return
+    if (index < 0 || index >= sess.paths.length) return
+    setPlaybackArmedNext({ sessionId, index })
+  }, [])
 
   const loadLaunchPadSlotAndPlay = useCallback(
     async (sessionId: string, slotIndex: number) => {
@@ -2530,6 +3056,52 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     setPlaybackLoadedTrack(null)
   }, [])
 
+  /** Tap / rilascio tasto su pad: toggle ferma se stesso slot; altrimenti patch banco e play (come keyup tastiera). */
+  const handleLaunchPadShortTap = useCallback(
+    async (sessionId: string, slotIndex: number) => {
+      const sess = floatingSessionsRef.current.find((x) => x.id === sessionId)
+      if (sess?.playlistMode !== 'launchpad' || !sess.launchPadCells) return
+      const bi = Math.max(
+        0,
+        Math.min(LAUNCHPAD_BANK_COUNT - 1, sess.launchPadBankIndex ?? 0),
+      )
+      const banks =
+        sess.launchPadBanks ??
+        migrateLaunchPadBanksFromCells(sess.launchPadCells)
+      const cell0 = banks[bi]![slotIndex]
+      if (!cell0?.samplePath) return
+      const keyMode =
+        cell0.padKeyMode === 'toggle' ? ('toggle' as const) : ('play' as const)
+      const loadedThisSlot =
+        playbackLoadedTrackRef.current?.sessionId === sessionId &&
+        playbackLoadedTrackRef.current?.index === slotIndex &&
+        (playbackLoadedTrackRef.current?.launchPadBankIndex ?? 0) === bi
+      const stillActiveThisSlot =
+        loadedThisSlot &&
+        (launchpadAudioPlayingRef.current ||
+          isLaunchpadSamplePausedWithSrc())
+      if (keyMode === 'toggle' && stillActiveThisSlot) {
+        stopLaunchPadCueRelease()
+        return
+      }
+      const bnk = cloneLaunchPadBanksDeep(
+        sess.launchPadBanks ??
+          migrateLaunchPadBanksFromCells(sess.launchPadCells),
+      )
+      patchFloatingSession(sessionId, {
+        launchPadBankIndex: bi,
+        launchPadBanks: bnk,
+        launchPadCells: bnk[bi]!.map((c) => ({ ...c })),
+      })
+      await loadLaunchPadSlotAndPlay(sessionId, slotIndex)
+    },
+    [
+      patchFloatingSession,
+      loadLaunchPadSlotAndPlay,
+      stopLaunchPadCueRelease,
+    ],
+  )
+
   const loadLaunchPadSlotAndPlayRef = useRef(loadLaunchPadSlotAndPlay)
   useLayoutEffect(() => {
     loadLaunchPadSlotAndPlayRef.current = loadLaunchPadSlotAndPlay
@@ -2539,6 +3111,25 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     stopLaunchPadCueReleaseRef.current = stopLaunchPadCueRelease
   }, [stopLaunchPadCueRelease])
+
+  type RemoteLaunchPadGesture = {
+    sessionId: string
+    slotIndex: number
+    timer: ReturnType<typeof setTimeout> | null
+    cueCommitted: boolean
+    cancelled: boolean
+  }
+  const remoteLaunchPadGestureRef = useRef<RemoteLaunchPadGesture | null>(
+    null,
+  )
+
+  useEffect(() => {
+    return () => {
+      const g = remoteLaunchPadGestureRef.current
+      if (g?.timer != null) clearTimeout(g.timer)
+      remoteLaunchPadGestureRef.current = null
+    }
+  }, [])
 
   type PadKeyboardGesture = {
     code: string
@@ -2981,13 +3572,29 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
 
   const goNext = useCallback(async () => {
     const list = pathsRef.current
+    const outSid = outputTrackListSessionIdRef.current
+    const armed = playbackArmedNextRef.current
+    if (
+      list.length > 0 &&
+      armed &&
+      armed.sessionId === outSid &&
+      armed.index >= 0 &&
+      armed.index < list.length
+    ) {
+      await loadIndexAndPlayRef.current(armed.index)
+      return
+    }
     if (list.length === 0) {
       const pb = resolvedPlaybackIdRef.current
       const sess =
         pb != null
           ? floatingSessionsRef.current.find((x) => x.id === pb)
           : undefined
-      if (sess?.playlistMode === 'launchpad') return
+      if (
+        sess?.playlistMode === 'launchpad' ||
+        sess?.playlistMode === 'chalkboard'
+      )
+        return
       return
     }
     const idx = currentIndexRef.current
@@ -3007,7 +3614,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         pb != null
           ? floatingSessionsRef.current.find((x) => x.id === pb)
           : undefined
-      if (sess?.playlistMode === 'launchpad') return
+      if (
+        sess?.playlistMode === 'launchpad' ||
+        sess?.playlistMode === 'chalkboard'
+      )
+        return
       return
     }
     const idx = currentIndexRef.current
@@ -3022,13 +3633,24 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const stopPlayback = useCallback(async () => {
     stopLaunchpadSample()
     setLaunchpadAudioPlaying(false)
-    await send({ type: 'pause' })
+    await send({ type: 'programVacant' })
     setVideoPlaying(false)
   }, [send])
 
   const handleEnded = useCallback(() => {
     const len = pathsRef.current.length
     if (len === 0) return
+    const outSid = outputTrackListSessionIdRef.current
+    const armed = playbackArmedNextRef.current
+    if (
+      armed &&
+      armed.sessionId === outSid &&
+      armed.index >= 0 &&
+      armed.index < len
+    ) {
+      void loadIndexAndPlayRef.current(armed.index)
+      return
+    }
     const idx = currentIndexRef.current
     const mode = loopModeRef.current
     if (mode === 'one') return
@@ -3040,7 +3662,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     if (idx < len - 1) {
       void loadIndexAndPlayRef.current(idx + 1)
     } else {
-      void send({ type: 'pause' })
+      void send({ type: 'programVacant' })
       setVideoPlaying(false)
     }
   }, [send])
@@ -3060,6 +3682,15 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       seconds: stillImageDurationSec,
     })
   }, [stillImageDurationSec, send])
+
+  useLayoutEffect(() => {
+    const api = window.electronAPI
+    if (!api?.ensureOutputIdleCap) {
+      void send(outputIdleCapToPlaybackCommand(readOutputIdleCapFromLs()))
+      return
+    }
+    void api.ensureOutputIdleCap(readOutputIdleCapFromLs())
+  }, [send])
 
   const videoOutputPlaylistMuted =
     videoOutputSession?.playlistOutputMuted ?? false
@@ -3128,7 +3759,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     const s = floatingSessions.find(
       (x) => x.id === playbackLoadedTrack.sessionId,
     )
-    if (!s || s.playlistMode !== 'launchpad' || !s.launchPadCells) return
+    if (!s || isTracksPlaylistMode(s.playlistMode) || !s.launchPadCells) return
     const bi = Math.max(
       0,
       Math.min(
@@ -3317,7 +3948,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     async (index: number, sessionId: string) => {
       const playbackSid = videoOutputSessionIdRef.current
       const s = floatingSessionsRef.current.find((x) => x.id === sessionId)
-      if (!s || s.playlistMode === 'launchpad') return
+      if (!s || s.playlistMode === 'launchpad' || s.playlistMode === 'chalkboard')
+        return
       const prev = s.paths
       if (index < 0 || index >= prev.length) return
       recordUndoPoint()
@@ -3339,7 +3971,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           loadedIndexRef.current = null
           setPlaybackLoadedTrack(null)
           setVideoPlaying(false)
-          await send({ type: 'pause' })
+          await send({ type: 'programVacant' })
         }
         return
       }
@@ -3357,7 +3989,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           setVideoPlaying(false)
           setPreviewSrc(null)
           setPreviewSyncKey((k) => k + 1)
-          await send({ type: 'pause' })
+          await send({ type: 'programVacant' })
         } else {
           loadedIndexRef.current = newLi
           setPlaybackLoadedTrack({ sessionId: playbackSid, index: newLi })
@@ -3554,7 +4186,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             loadedIndexRef.current = null
             setPlaybackLoadedTrack(null)
             setVideoPlaying(false)
-            await send({ type: 'pause' })
+            await send({ type: 'programVacant' })
           } else if (playbackSid === srcSid && loadedPath != null) {
             const newLi = fromPaths.findIndex((p) => p === loadedPath)
             if (newLi < 0) {
@@ -3563,7 +4195,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
               setVideoPlaying(false)
               setPreviewSrc(null)
               setPreviewSyncKey((k) => k + 1)
-              await send({ type: 'pause' })
+              await send({ type: 'programVacant' })
             } else {
               loadedIndexRef.current = newLi
               setPlaybackLoadedTrack({ sessionId: playbackSid, index: newLi })
@@ -3633,7 +4265,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           loadedIndexRef.current = null
           setPlaybackLoadedTrack(null)
           setVideoPlaying(false)
-          await send({ type: 'pause' })
+          await send({ type: 'programVacant' })
         } else if (playbackSid === srcSid && loadedPath != null) {
           const newLi = fromPaths.findIndex((p) => p === loadedPath)
           if (newLi < 0) {
@@ -3642,7 +4274,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             setVideoPlaying(false)
             setPreviewSrc(null)
             setPreviewSyncKey((k) => k + 1)
-            await send({ type: 'pause' })
+            await send({ type: 'programVacant' })
           } else {
             loadedIndexRef.current = newLi
             setPlaybackLoadedTrack({ sessionId: playbackSid, index: newLi })
@@ -3889,6 +4521,16 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const setCueSinkId = useCallback((sinkId: string) => {
+    setCueSinkIdState(sinkId)
+    cueSinkIdRef.current = sinkId
+    try {
+      localStorage.setItem(REGIA_LS_CUE_SINK_KEY, sinkId)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   const toggleSecondScreen = useCallback(() => {
     setSecondScreenOn((v) => !v)
   }, [])
@@ -3902,6 +4544,380 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     [historyRev],
   )
 
+  useEffect(() => {
+    if (!window.electronAPI?.onRemoteDispatch) return
+    return window.electronAPI.onRemoteDispatch(
+      async (msg: { reqId: number; payload: unknown }) => {
+        const finish = (ok: boolean, error?: string) => {
+          window.electronAPI.remoteDispatchResult(msg.reqId, ok, error)
+        }
+        try {
+          const p = msg.payload as Record<string, unknown>
+          const type = p.type
+          if (type === 'loadSavedPlaylist' && typeof p.savedId === 'string') {
+            const sid = await loadSavedPlaylist(p.savedId)
+            if (!sid) finish(false, 'load_failed')
+            else finish(true)
+            return
+          }
+          if (
+            type === 'playTrack' &&
+            typeof p.savedId === 'string' &&
+            typeof p.index === 'number'
+          ) {
+            let sid = floatingSessionsRef.current.find(
+              (s) => s.editingSavedPlaylistId === p.savedId,
+            )?.id
+            if (!sid) {
+              const nid = await loadSavedPlaylist(p.savedId)
+              if (!nid) {
+                finish(false, 'load_failed')
+                return
+              }
+              sid = nid
+            } else {
+              setActiveFloatingSession(sid)
+              setPlaybackSessionId(sid)
+              activeFloatingSessionIdRef.current = sid
+              playbackSessionIdStateRef.current = sid
+            }
+            await loadIndexAndPlay(p.index, sid)
+            finish(true)
+            return
+          }
+          if (
+            type === 'playPad' &&
+            typeof p.savedId === 'string' &&
+            typeof p.slotIndex === 'number'
+          ) {
+            const rawPhase = p.pointerPhase
+            const pointerPhase =
+              rawPhase === 'down' || rawPhase === 'up' || rawPhase === 'cancel'
+                ? rawPhase
+                : undefined
+
+            let sid = floatingSessionsRef.current.find(
+              (s) => s.editingSavedPlaylistId === p.savedId,
+            )?.id
+            if (!sid) {
+              const nid = await loadSavedPlaylist(p.savedId)
+              if (!nid) {
+                finish(false, 'load_failed')
+                return
+              }
+              sid = nid
+            } else {
+              setActiveFloatingSession(sid)
+              setPlaybackSessionId(sid)
+              activeFloatingSessionIdRef.current = sid
+              playbackSessionIdStateRef.current = sid
+            }
+
+            const clearRemotePadTimer = () => {
+              const g0 = remoteLaunchPadGestureRef.current
+              if (g0?.timer != null) {
+                clearTimeout(g0.timer)
+                g0.timer = null
+              }
+            }
+
+            if (!pointerPhase) {
+              await handleLaunchPadShortTap(sid, p.slotIndex)
+              finish(true)
+              return
+            }
+
+            if (pointerPhase === 'down') {
+              clearRemotePadTimer()
+              remoteLaunchPadGestureRef.current = null
+              const sess0 = floatingSessionsRef.current.find(
+                (x) => x.id === sid,
+              )
+              if (sess0?.playlistMode !== 'launchpad' || !sess0.launchPadCells) {
+                finish(false, 'not_launchpad')
+                return
+              }
+              const g: RemoteLaunchPadGesture = {
+                sessionId: sid,
+                slotIndex: p.slotIndex,
+                timer: null,
+                cueCommitted: false,
+                cancelled: false,
+              }
+              remoteLaunchPadGestureRef.current = g
+              if (readLaunchPadCueEnabled()) {
+                g.timer = setTimeout(() => {
+                  const cur = remoteLaunchPadGestureRef.current
+                  if (
+                    !cur ||
+                    cur.sessionId !== g.sessionId ||
+                    cur.slotIndex !== g.slotIndex ||
+                    cur.cancelled
+                  )
+                    return
+                  cur.cueCommitted = true
+                  cur.timer = null
+                  void loadLaunchPadSlotAndPlay(g.sessionId, g.slotIndex)
+                }, LAUNCHPAD_CUE_HOLD_MS)
+              }
+              finish(true)
+              return
+            }
+
+            if (pointerPhase === 'cancel') {
+              const g1 = remoteLaunchPadGestureRef.current
+              if (
+                g1 &&
+                g1.sessionId === sid &&
+                g1.slotIndex === p.slotIndex
+              ) {
+                g1.cancelled = true
+                clearRemotePadTimer()
+              }
+              finish(true)
+              return
+            }
+
+            const g2 = remoteLaunchPadGestureRef.current
+            if (
+              !g2 ||
+              g2.sessionId !== sid ||
+              g2.slotIndex !== p.slotIndex
+            ) {
+              finish(true)
+              return
+            }
+            clearRemotePadTimer()
+            remoteLaunchPadGestureRef.current = null
+            if (g2.cueCommitted) {
+              stopLaunchPadCueRelease()
+              finish(true)
+              return
+            }
+            if (g2.cancelled) {
+              finish(true)
+              return
+            }
+            await handleLaunchPadShortTap(sid, p.slotIndex)
+            finish(true)
+            return
+          }
+          if (type === 'transport') {
+            const a = p.action
+            if (a === 'togglePlay') void togglePlay()
+            else if (a === 'prev') void goPrev()
+            else if (a === 'next') void goNext()
+            else if (a === 'setVolume' && typeof p.volume === 'number')
+              setOutputVolume(p.volume)
+            else if (a === 'undo') {
+              undo()
+            } else if (a === 'setLoopMode') {
+              const lm = p.loopMode
+              if (lm !== 'off' && lm !== 'one' && lm !== 'all') {
+                finish(false, 'bad_loop')
+                return
+              }
+              const outSess = deriveOutputTrackListSession(
+                floatingSessionsRef.current,
+                videoOutputSessionIdRef.current,
+                playbackSessionIdStateRef.current,
+              )
+              if (outSess) setPlaylistLoopMode(outSess.id, lm)
+              else setLoopMode(lm)
+            } else {
+              finish(false, 'unknown_transport')
+              return
+            }
+            finish(true)
+            return
+          }
+          finish(false, 'unknown_command')
+        } catch (err) {
+          finish(false, err instanceof Error ? err.message : 'error')
+        }
+      },
+    )
+  }, [
+    loadSavedPlaylist,
+    loadIndexAndPlay,
+    loadLaunchPadSlotAndPlay,
+    handleLaunchPadShortTap,
+    stopLaunchPadCueRelease,
+    togglePlay,
+    goPrev,
+    goNext,
+    setOutputVolume,
+    setActiveFloatingSession,
+    setPlaybackSessionId,
+    undo,
+    setPlaylistLoopMode,
+    setLoopMode,
+  ])
+
+  useEffect(() => {
+    if (!window.electronAPI?.reportRemotePlaybackSnapshotPatch) return
+    const pl = playbackLoadedTrack
+    const sess = pl
+      ? floatingSessions.find((s) => s.id === pl.sessionId)
+      : undefined
+    let launchpadTitle: string | null = null
+    if (launchpadAudioPlaying && pl && sess?.playlistMode === 'launchpad') {
+      const banks =
+        sess.launchPadBanks ??
+        migrateLaunchPadBanksFromCells(sess.launchPadCells ?? [])
+      const bi = Math.max(
+        0,
+        Math.min(LAUNCHPAD_BANK_COUNT - 1, sess.launchPadBankIndex ?? 0),
+      )
+      const cell = banks[bi]![pl.index]
+      const rawPath = cell?.samplePath ?? null
+      const base =
+        (typeof cell?.padDisplayName === 'string' && cell.padDisplayName.trim()) ||
+        (rawPath
+          ? rawPath.replace(/\\/g, '/').split('/').pop() ?? ''
+          : '')
+      const plLab = (sess.playlistTitle || '').trim()
+      launchpadTitle = plLab
+        ? `${plLab} — ${base || `Pad ${pl.index + 1}`}`
+        : base || `Pad ${pl.index + 1}`
+    }
+    window.electronAPI.reportRemotePlaybackSnapshotPatch({
+      launchpadActive: launchpadAudioPlaying,
+      launchpadSlot: launchpadAudioPlaying && pl ? pl.index : null,
+      launchpadTitle,
+      outputVolume,
+      playlistLoopMode: outputTrackLoopMode,
+      canUndo,
+    })
+  }, [
+    playbackLoadedTrack,
+    launchpadAudioPlaying,
+    floatingSessions,
+    outputVolume,
+    outputTrackLoopMode,
+    canUndo,
+  ])
+
+  const bugReportSnapshotRef = useRef<RegiaBugReportSnapshotFields | null>(null)
+  useLayoutEffect(() => {
+    bugReportSnapshotRef.current = {
+      scope: 'main',
+      appVersionFromUi: __REGIA_APP_VERSION__,
+      buildHashFromUi: __REGIA_BUILD_HASH__,
+      transport: {
+        playing,
+        videoPlaying,
+        launchpadAudioPlaying,
+        muted,
+        outputVolume,
+        loopMode,
+        secondScreenOn,
+        previewSrc,
+        previewSyncKey,
+        previewMediaTimes: { ...previewMediaTimesRef.current },
+      },
+      routing: {
+        activeFloatingSessionId: resolvedActiveId,
+        playbackSessionId,
+        videoOutputSessionId,
+        playbackLoadedTrack,
+        playbackArmedNext,
+        outputTrackLoopMode,
+        floatingZOrder: [...floatingZOrder],
+        previewDetached,
+        floatingPlaylistOpen,
+        playlistFloaterOsSessionIds: [...playlistFloaterOsSessionIds],
+      },
+      workspaceUi: {
+        sidebarOpen,
+        sidebarWidthPx,
+      },
+      namedWorkspaces: namedWorkspaces.map((w) => ({
+        id: w.id,
+        label: w.label,
+        savedAt: w.savedAt,
+      })),
+      activeNamedWorkspaceId,
+      activeNamedWorkspaceLabel,
+      savedPlaylists: savedPlaylists.map((p) => ({
+        id: p.id,
+        label: p.label,
+        trackCount: p.trackCount,
+      })),
+      floatingSessions,
+    }
+  }, [
+    playing,
+    videoPlaying,
+    launchpadAudioPlaying,
+    muted,
+    outputVolume,
+    loopMode,
+    secondScreenOn,
+    previewSrc,
+    previewSyncKey,
+    resolvedActiveId,
+    playbackSessionId,
+    videoOutputSessionId,
+    playbackLoadedTrack,
+    playbackArmedNext,
+    outputTrackLoopMode,
+    floatingZOrder,
+    previewDetached,
+    floatingPlaylistOpen,
+    playlistFloaterOsSessionIds,
+    sidebarOpen,
+    sidebarWidthPx,
+    namedWorkspaces,
+    activeNamedWorkspaceId,
+    activeNamedWorkspaceLabel,
+    savedPlaylists,
+    floatingSessions,
+    previewMediaTimesTick,
+  ])
+
+  const exportBugReportSnapshot = useCallback((): RegiaBugReportSnapshotV1 => {
+    const cur = bugReportSnapshotRef.current
+    if (!cur) {
+      return buildRegiaBugReportSnapshot({
+        scope: 'main',
+        appVersionFromUi: __REGIA_APP_VERSION__,
+        buildHashFromUi: __REGIA_BUILD_HASH__,
+        transport: {
+          playing: false,
+          videoPlaying: false,
+          launchpadAudioPlaying: false,
+          muted: false,
+          outputVolume: 0,
+          loopMode: 'off',
+          secondScreenOn: false,
+          previewSrc: null,
+          previewSyncKey: 0,
+          previewMediaTimes: { currentTime: 0, duration: 0 },
+        },
+        routing: {
+          activeFloatingSessionId: '',
+          playbackSessionId: null,
+          videoOutputSessionId: null,
+          playbackLoadedTrack: null,
+          playbackArmedNext: null,
+          outputTrackLoopMode: 'off',
+          floatingZOrder: [],
+          previewDetached: false,
+          floatingPlaylistOpen: false,
+          playlistFloaterOsSessionIds: [],
+        },
+        workspaceUi: { sidebarOpen: false, sidebarWidthPx: 0 },
+        namedWorkspaces: [],
+        activeNamedWorkspaceId: null,
+        activeNamedWorkspaceLabel: '',
+        savedPlaylists: [],
+        floatingSessions: [],
+      })
+    }
+    return buildRegiaBugReportSnapshot(cur)
+  }, [])
+
   const value = useMemo<RegiaContextValue>(
     () => ({
       paths,
@@ -3912,6 +4928,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setOutputVolume,
       outputSinkId,
       setOutputSinkId,
+      cueSinkId,
+      setCueSinkId,
       playing,
       videoPlaying,
       launchpadAudioPlaying,
@@ -3927,6 +4945,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       bringFloatingPanelToFront,
       addFloatingPlaylist,
       addFloatingLaunchPad,
+      addFloatingChalkboard,
       removeFloatingPlaylist,
       floatingCloseWouldInterruptPlay,
       openFolder,
@@ -3952,6 +4971,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       toggleSecondScreen,
       goNext,
       goPrev,
+      playbackArmedNext,
+      armPlayNext,
+      clearPlaybackArmedNext,
       selectItem,
       reorderPaths,
       applyFloatingInternalDrop,
@@ -3974,6 +4996,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       hideFloatingPlaylistPanels,
       updateFloatingPlaylistChrome,
       repositionAllFloatingPanels,
+      patchFloatingPlaylistSession: patchFloatingSession,
       savedPlaylistDirty,
       saveLoadedPlaylistOverwrite,
       persistSavedPlaylistAfterFloatingTitleBlur,
@@ -3983,6 +5006,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       redo,
       recordUndoPoint,
       playbackLoadedTrack,
+      outputTrackListSession,
+      playbackControlSession: playbackSession,
+      videoOutputSessionId,
+      playbackSessionId,
       namedWorkspaces,
       refreshNamedWorkspaces,
       createNewNamedWorkspace,
@@ -4003,6 +5030,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       sidebarWidthPx,
       setSidebarWidthPx,
       playlistFloaterOsSessionIds,
+      exportBugReportSnapshot,
     }),
     [
       paths,
@@ -4013,6 +5041,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setOutputVolume,
       outputSinkId,
       setOutputSinkId,
+      cueSinkId,
+      setCueSinkId,
       playing,
       videoPlaying,
       launchpadAudioPlaying,
@@ -4028,6 +5058,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       bringFloatingPanelToFront,
       addFloatingPlaylist,
       addFloatingLaunchPad,
+      addFloatingChalkboard,
       removeFloatingPlaylist,
       floatingCloseWouldInterruptPlay,
       openFolder,
@@ -4053,6 +5084,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       toggleSecondScreen,
       goNext,
       goPrev,
+      playbackArmedNext,
+      armPlayNext,
+      clearPlaybackArmedNext,
       selectItem,
       reorderPaths,
       applyFloatingInternalDrop,
@@ -4075,6 +5109,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       hideFloatingPlaylistPanels,
       updateFloatingPlaylistChrome,
       repositionAllFloatingPanels,
+      patchFloatingSession,
       savedPlaylistDirty,
       saveLoadedPlaylistOverwrite,
       persistSavedPlaylistAfterFloatingTitleBlur,
@@ -4084,6 +5119,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       redo,
       recordUndoPoint,
       playbackLoadedTrack,
+      outputTrackListSession,
+      playbackSession,
+      videoOutputSessionId,
+      playbackSessionId,
       namedWorkspaces,
       refreshNamedWorkspaces,
       createNewNamedWorkspace,
@@ -4104,6 +5143,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       sidebarWidthPx,
       setSidebarWidthPx,
       playlistFloaterOsSessionIds,
+      exportBugReportSnapshot,
     ],
   )
 
@@ -4155,6 +5195,7 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
   'setPlaylistLoopMode',
   'setOutputVolume',
   'setOutputSinkId',
+  'setCueSinkId',
   'togglePlay',
   'stopPlayback',
   'setLoopMode',
@@ -4162,6 +5203,8 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
   'toggleSecondScreen',
   'goNext',
   'goPrev',
+  'armPlayNext',
+  'clearPlaybackArmedNext',
   'selectItem',
   'refreshSavedPlaylists',
   'saveCurrentPlaylist',
@@ -4189,6 +5232,8 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
   'setStillImageDurationSec',
   'addFloatingPlaylist',
   'addFloatingLaunchPad',
+  'addFloatingChalkboard',
+  'patchFloatingPlaylistSession',
 ])
 
 function FloaterOsPlaylistBridge({

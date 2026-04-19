@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from 'react'
 import PreviewSeekBar from './PreviewSeekBar.tsx'
 import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
@@ -24,9 +25,15 @@ type Props = {
   className?: string
   /** Classi sulla preview-frame (altezza minima diversa da docked). */
   frameClassName?: string
+  /** Contenuto in overlay sul bordo del riquadro video (es. badge Program). */
+  frameOverlay?: ReactNode
 }
 
-export default function PreviewBlock({ className, frameClassName }: Props) {
+export default function PreviewBlock({
+  className,
+  frameClassName,
+  frameOverlay,
+}: Props) {
   const previewRef = useRef<HTMLVideoElement>(null)
   const lastVideoTimeRef = useRef(0)
   const lastVideoTickRef = useRef(0)
@@ -230,6 +237,9 @@ export default function PreviewBlock({ className, frameClassName }: Props) {
         </label>
       </div>
       <div className={frameClass}>
+        {frameOverlay ? (
+          <div className="preview-frame-overlay">{frameOverlay}</div>
+        ) : null}
         <div className="preview-aspect-wrap" style={ratioStyle}>
           {stillPreview ? (
             <img

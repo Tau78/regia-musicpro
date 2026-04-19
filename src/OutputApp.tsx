@@ -6,7 +6,17 @@ import {
   useState,
 } from 'react'
 import type { PlaybackCommand } from './playbackTypes'
+import {
+  outputMeterLevelFromPeak,
+  rmsFromByteTimeDomain,
+} from './lib/outputAudioMeter.ts'
 import { isStillImagePath } from './mediaPaths.ts'
+import {
+  OUTPUT_IDLE_CAP_LS_KEY,
+  readOutputIdleCapFromLs,
+  normalizeOutputIdleCap,
+  type OutputIdleCapPersist,
+} from './lib/outputIdleCapStorage.ts'
 
 const CROSSFADE_MS = 480
 const DEFAULT_STILL_IMAGE_DURATION_MS = 8000
@@ -83,6 +93,19 @@ export default function OutputApp() {
   const [outputLoopOne, setOutputLoopOne] = useState(false)
   const stillImageDurationMsRef = useRef(DEFAULT_STILL_IMAGE_DURATION_MS)
   const [stillDurationEpoch, setStillDurationEpoch] = useState(0)
+  const [chalkboardLayer, setChalkboardLayer] = useState<{
+    visible: boolean
+    src: string | null
+    /** Incrementato a ogni frame inviato: forza reload `<img>` (stesso path file). */
+    bust: number
+    /** Allineato a Chalkboard: `transparent` = buchi → PGM o tappo sotto. */
+    composite: 'solid' | 'transparent'
+  }>({ visible: false, src: null, bust: 0, composite: 'solid' })
+
+  const [idleCap, setIdleCap] = useState<OutputIdleCapPersist>(() =>
+    readOutputIdleCapFromLs(),
+  )
+  const [idleCapImageUrl, setIdleCapImageUrl] = useState<string | null>(null)
 
   const applySinkToVideo = useCallback((el: HTMLVideoElement) => {
     const setSink = (
@@ -157,6 +180,21 @@ export default function OutputApp() {
       stillAdvanceTimerRef.current = null
     }
   }, [])
+
+  const vacateProgramSlots = useCallback(() => {
+    loadGenRef.current += 1
+    clearTransitionTimer()
+    clearStillAdvanceTimer()
+    crossfadeIncomingRef.current = null
+    stillCrossfadePreparingRef.current = false
+    pauseBoth()
+    setTransportPlaying(false)
+    setVideoSrc([null, null])
+    setImageSrc([null, null])
+    setFront(0)
+    setOpacityTransition(false)
+    setOpacity([1, 0])
+  }, [clearStillAdvanceTimer, clearTransitionTimer, pauseBoth])
 
   const applyInstantLoad = useCallback(
     (src: string) => {
@@ -452,6 +490,9 @@ export default function OutputApp() {
           clearStillAdvanceTimer()
           pauseBoth()
           break
+        case 'programVacant':
+          vacateProgramSlots()
+          break
         case 'setMuted':
           mutedRef.current = cmd.muted
           if (vRef0.current) vRef0.current.muted = cmd.muted
@@ -484,11 +525,47 @@ export default function OutputApp() {
           setStillDurationEpoch((n) => n + 1)
           break
         }
+        case 'chalkboardLayer': {
+          if (!cmd.visible) {
+            setChalkboardLayer((p) => ({
+              visible: false,
+              src: null,
+              bust: p.bust,
+              composite: 'solid',
+            }))
+            break
+          }
+          const s = cmd.src && cmd.src.length > 0 ? cmd.src : null
+          const composite =
+            cmd.composite === 'transparent' ? 'transparent' : 'solid'
+          setChalkboardLayer((p) => ({
+            visible: true,
+            src: s,
+            bust: p.bust + 1,
+            composite,
+          }))
+          break
+        }
+        case 'setOutputIdleCap': {
+          const next = normalizeOutputIdleCap({
+            mode: cmd.mode,
+            color: cmd.color,
+            imagePath: cmd.imagePath,
+          })
+          setIdleCap(next)
+          break
+        }
         default:
           break
       }
     },
-    [applySinkToVideo, clearStillAdvanceTimer, handleLoad, pauseBoth],
+    [
+      applySinkToVideo,
+      clearStillAdvanceTimer,
+      handleLoad,
+      pauseBoth,
+      vacateProgramSlots,
+    ],
   )
 
   useEffect(() => {
@@ -498,10 +575,282 @@ export default function OutputApp() {
     return unsub
   }, [apply])
 
-  /** Dopo hide/show della finestra Electron il decoder può restare fermo: riprendi play se il trasporto è in «play». */
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== OUTPUT_IDLE_CAP_LS_KEY) return
+      try {
+        const next = e.newValue
+          ? normalizeOutputIdleCap(JSON.parse(e.newValue) as unknown)
+          : readOutputIdleCapFromLs()
+        setIdleCap(next)
+      } catch {
+        setIdleCap(readOutputIdleCapFromLs())
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  const pullIdleCapFromMain = useCallback(() => {
+    const api = window.electronAPI
+    if (!api?.getOutputIdleCap) {
+      setIdleCap(readOutputIdleCapFromLs())
+      return
+    }
+    void api
+      .getOutputIdleCap()
+      .then((cap) => setIdleCap(normalizeOutputIdleCap(cap)))
+      .catch(() => setIdleCap(readOutputIdleCapFromLs()))
+  }, [])
+
+  /**
+   * Disco + IPC possono arrivare dopo il primo paint; la regia scrive il JSON in un tick successivo.
+   * Ripetiamo il pull e usiamo localStorage come fallback se l’invoke fallisce (preload vecchio).
+   */
+  useEffect(() => {
+    pullIdleCapFromMain()
+    const t1 = window.setTimeout(pullIdleCapFromMain, 100)
+    const t2 = window.setTimeout(pullIdleCapFromMain, 450)
+    const t3 = window.setTimeout(pullIdleCapFromMain, 1200)
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+      clearTimeout(t3)
+    }
+  }, [pullIdleCapFromMain])
+
+  useEffect(() => {
+    if (idleCap.mode !== 'image' || !idleCap.imagePath) {
+      setIdleCapImageUrl(null)
+      return
+    }
+    const api = window.electronAPI
+    if (!api?.toFileUrl) {
+      setIdleCapImageUrl(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const url = await api.toFileUrl(idleCap.imagePath!)
+        if (!cancelled) setIdleCapImageUrl(url)
+      } catch {
+        if (!cancelled) setIdleCapImageUrl(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [idleCap.mode, idleCap.imagePath])
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.reportRemotePlaybackSnapshotPatch) return
+    const tick = () => {
+      const snap = mediaSnapRef.current
+      const fr = snap.front
+      const fel = fr === 0 ? vRef0.current : vRef1.current
+      const img = snap.image[fr]
+      const vidUrl = snap.video[fr]
+      const playing = transportPlayingRef.current
+      let title: string | null = null
+      let pos: number | null = null
+      let dur: number | null = null
+      const hasMedia = Boolean(vidUrl || img)
+      if (img) {
+        title = 'Immagine'
+        pos = 0
+        dur = null
+      } else if (fel && vidUrl) {
+        const src = fel.currentSrc || fel.src || vidUrl
+        try {
+          const u = new URL(src, window.location.href)
+          if (u.protocol === 'file:') {
+            const dec = decodeURIComponent(
+              u.pathname.split('/').pop() || '',
+            )
+            title = dec || 'Media'
+          } else {
+            title = src.split('/').pop() || 'Media'
+          }
+        } catch {
+          title = 'Media'
+        }
+        pos = Number.isFinite(fel.currentTime) ? fel.currentTime : 0
+        dur =
+          Number.isFinite(fel.duration) && fel.duration > 0 ? fel.duration : null
+      }
+      api.reportRemotePlaybackSnapshotPatch({
+        programPlaying: playing && hasMedia,
+        programTitle: title,
+        programPositionSec: pos,
+        programDurationSec: dur,
+      })
+    }
+    const id = window.setInterval(tick, 320)
+    tick()
+    return () => window.clearInterval(id)
+  }, [])
+
+  /**
+   * VU sulla barra regia: tap via `captureStream()` + `createMediaStreamSource`.
+   * Non usare `createMediaElementSource` sui `<video>`: intercetta l’audio e fa ignorare
+   * `setSinkId` sul media element; `AudioContext.setSinkId('')` può silenziare l’uscita.
+   */
+  useLayoutEffect(() => {
+    const report = window.electronAPI?.reportOutputAudioLevel
+    if (typeof report !== 'function') return
+    const v0 = vRef0.current
+    const v1 = vRef1.current
+    if (!v0 || !v1) return
+
+    const capture = (el: HTMLVideoElement): MediaStream | null => {
+      const fn = (el as HTMLVideoElement & { captureStream?: () => MediaStream })
+        .captureStream
+      if (typeof fn !== 'function') return null
+      try {
+        return fn.call(el)
+      } catch {
+        return null
+      }
+    }
+
+    const ctx = new AudioContext()
+    const silent = ctx.createGain()
+    silent.gain.value = 0
+    silent.connect(ctx.destination)
+
+    const a0 = ctx.createAnalyser()
+    const a1 = ctx.createAnalyser()
+    a0.fftSize = 512
+    a1.fftSize = 512
+    a0.smoothingTimeConstant = 0.45
+    a1.smoothingTimeConstant = 0.45
+
+    const buf0 = new Uint8Array(a0.fftSize)
+    const buf1 = new Uint8Array(a1.fftSize)
+
+    let src0: MediaStreamAudioSourceNode | null = null
+    let src1: MediaStreamAudioSourceNode | null = null
+    let stream0: MediaStream | null = null
+    let stream1: MediaStream | null = null
+
+    const disconnectTap = () => {
+      try {
+        src0?.disconnect()
+        src1?.disconnect()
+      } catch {
+        /* ignore */
+      }
+      try {
+        a0.disconnect()
+        a1.disconnect()
+      } catch {
+        /* ignore */
+      }
+      src0 = null
+      src1 = null
+      stream0?.getAudioTracks().forEach((t) => t.stop())
+      stream1?.getAudioTracks().forEach((t) => t.stop())
+      stream0 = null
+      stream1 = null
+    }
+
+    const connectTap = () => {
+      disconnectTap()
+      const s0 = capture(v0)
+      const s1 = capture(v1)
+      /* Un solo slot può avere media: richiedere entrambi gli stream annulla sempre il tap. */
+      if (!s0 && !s1) return
+      try {
+        if (s0) {
+          const n0 = ctx.createMediaStreamSource(s0)
+          n0.connect(a0)
+          a0.connect(silent)
+          src0 = n0
+          stream0 = s0
+        }
+        if (s1) {
+          const n1 = ctx.createMediaStreamSource(s1)
+          n1.connect(a1)
+          a1.connect(silent)
+          src1 = n1
+          stream1 = s1
+        }
+      } catch {
+        disconnectTap()
+      }
+    }
+
+    connectTap()
+
+    let rebuildCoalesce = false
+    const scheduleRebuild = () => {
+      if (rebuildCoalesce) return
+      rebuildCoalesce = true
+      queueMicrotask(() => {
+        rebuildCoalesce = false
+        connectTap()
+      })
+    }
+
+    let raf = 0
+    const tick = () => {
+      raf = requestAnimationFrame(tick)
+      if (ctx.state === 'suspended') void ctx.resume().catch(() => {})
+      a0.getByteTimeDomainData(buf0)
+      a1.getByteTimeDomainData(buf1)
+      const peak = Math.max(
+        rmsFromByteTimeDomain(buf0),
+        rmsFromByteTimeDomain(buf1),
+      )
+      report(
+        outputMeterLevelFromPeak(
+          peak,
+          mutedRef.current,
+          volumeRef.current,
+          /* captureStream tende a dare RMS più bassi del tap diretto */
+          5.5,
+        ),
+      )
+    }
+    raf = requestAnimationFrame(tick)
+
+    const onPlaying = () => {
+      void ctx.resume().catch(() => {})
+      /* La traccia audio compare spesso nello stream solo dopo il play. */
+      scheduleRebuild()
+    }
+    v0.addEventListener('playing', onPlaying)
+    v1.addEventListener('playing', onPlaying)
+    v0.addEventListener('loadeddata', scheduleRebuild)
+    v1.addEventListener('loadeddata', scheduleRebuild)
+    v0.addEventListener('emptied', scheduleRebuild)
+    v1.addEventListener('emptied', scheduleRebuild)
+
+    return () => {
+      cancelAnimationFrame(raf)
+      v0.removeEventListener('playing', onPlaying)
+      v1.removeEventListener('playing', onPlaying)
+      v0.removeEventListener('loadeddata', scheduleRebuild)
+      v1.removeEventListener('loadeddata', scheduleRebuild)
+      v0.removeEventListener('emptied', scheduleRebuild)
+      v1.removeEventListener('emptied', scheduleRebuild)
+      disconnectTap()
+      try {
+        silent.disconnect()
+      } catch {
+        /* ignore */
+      }
+      void ctx.close()
+    }
+  }, [])
+
+  /** Dopo hide/show della finestra Electron: riallinea tappo; riprendi play se il trasporto è in «play». */
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState !== 'visible') return
+      pullIdleCapFromMain()
       if (!transportPlayingRef.current) return
       if (opacityTransitionRef.current) return
       if (crossfadeIncomingRef.current != null) return
@@ -514,7 +863,7 @@ export default function OutputApp() {
     }
     document.addEventListener('visibilitychange', onVis)
     return () => document.removeEventListener('visibilitychange', onVis)
-  }, [])
+  }, [pullIdleCapFromMain])
 
   const onVideoEnded = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
     const t = e.currentTarget
@@ -528,8 +877,39 @@ export default function OutputApp() {
   const showImg0 = Boolean(imageSrc[0])
   const showImg1 = Boolean(imageSrc[1])
 
+  const chalkboardOnAir =
+    chalkboardLayer.visible && Boolean(chalkboardLayer.src)
+  const chalkboardTransparentOnAir =
+    chalkboardOnAir && chalkboardLayer.composite === 'transparent'
+  const chalkboardOpaqueOnAir =
+    chalkboardOnAir && chalkboardLayer.composite === 'solid'
+  const slotsHaveMedia = Boolean(
+    videoSrc[0] || videoSrc[1] || imageSrc[0] || imageSrc[1],
+  )
+  /**
+   * In onda: trasporto in play e c’è PGM (slot) oppure lavagna **opaca** (ON).
+   * TRANSP non riempie il buco “vuoto”: con slot vuoti resta il tappo sotto i pixel trasparenti.
+   */
+  const programInPlay =
+    transportPlaying && (slotsHaveMedia || chalkboardOpaqueOnAir)
+  /** Tappo: quando non c’è programma in play, salvo lavagna TRANSP (sotto si vede ancora il tappo). */
+  const showIdleCapLayer =
+    !programInPlay &&
+    (!chalkboardOnAir || chalkboardTransparentOnAir)
+
   return (
     <div className="output-root">
+      {chalkboardLayer.visible && chalkboardLayer.src ? (
+        <div className="output-chalkboard-layer" aria-hidden>
+          <img
+            key={chalkboardLayer.bust}
+            src={chalkboardLayer.src}
+            alt=""
+            className="output-chalkboard-img"
+            draggable={false}
+          />
+        </div>
+      ) : null}
       <div className="output-stack">
         <div
           className="output-slot"
@@ -583,6 +963,39 @@ export default function OutputApp() {
             />
           ) : null}
         </div>
+      </div>
+      {showIdleCapLayer ? (
+        <div
+          className={`output-idle-cap output-idle-cap--${idleCap.mode}`}
+          aria-hidden
+        >
+          {idleCap.mode === 'color' ? (
+            <div
+              className="output-idle-cap-fill"
+              style={{ backgroundColor: idleCap.color }}
+            />
+          ) : idleCap.mode === 'image' && idleCapImageUrl ? (
+            <img
+              src={idleCapImageUrl}
+              alt=""
+              className="output-idle-cap-img"
+              draggable={false}
+            />
+          ) : (
+            <div
+              className="output-idle-cap-fill"
+              style={{ backgroundColor: '#000' }}
+            />
+          )}
+        </div>
+      ) : null}
+      <div
+        className="output-program-badge"
+        role="status"
+        aria-label="Solo programma al pubblico. Nessuna anteprima «prossimo» in questa finestra."
+      >
+        <span className="output-program-badge-kicker">Uscita</span>
+        <span className="output-program-badge-main">Programma</span>
       </div>
     </div>
   )

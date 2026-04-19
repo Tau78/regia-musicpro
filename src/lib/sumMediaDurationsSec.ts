@@ -52,7 +52,7 @@ export async function sumMediaDurationsSec(
 type LaunchCell = { samplePath: string | null }
 
 export async function totalDurationSecForPlaylistSave(opts: {
-  playlistMode?: 'tracks' | 'launchpad'
+  playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'
   paths: string[]
   launchPadCells?: readonly LaunchCell[] | null
 }): Promise<number> {
@@ -62,5 +62,6 @@ export async function totalDurationSecForPlaylistSave(opts: {
       .filter((p): p is string => Boolean(p))
     return sumMediaDurationsSec(samplePaths)
   }
+  if (opts.playlistMode === 'chalkboard') return 0
   return sumMediaDurationsSec(opts.paths)
 }

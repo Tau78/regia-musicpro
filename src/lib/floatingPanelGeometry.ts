@@ -43,6 +43,26 @@ export function hitTestPanelResizeEdge(
   return null
 }
 
+/** Cursore standard del sistema per il bordo / angolo di ridimensionamento. */
+export function resizeEdgeToCssCursor(edge: ResizeEdge): string {
+  switch (edge) {
+    case 'n':
+    case 's':
+      return 'ns-resize'
+    case 'e':
+    case 'w':
+      return 'ew-resize'
+    case 'ne':
+    case 'sw':
+      return 'nesw-resize'
+    case 'nw':
+    case 'se':
+      return 'nwse-resize'
+    default:
+      return 'auto'
+  }
+}
+
 export type ClampPanelOptions = {
   /** Larghezza massima del pannello (oltre al limite del viewport). */
   maxW?: number

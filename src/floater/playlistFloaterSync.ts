@@ -1,4 +1,6 @@
 import type { MutableRefObject } from 'react'
+import { deriveOutputTrackListSession } from '../lib/deriveOutputTrackListSession.ts'
+import { buildRegiaBugReportSnapshot } from '../lib/regiaBugReportSnapshot.ts'
 import type { RegiaContextValue } from '../state/RegiaContext.tsx'
 
 /** Stato serializzabile inviato dalla finestra Regia al pannello playlist in finestra OS. */
@@ -22,6 +24,7 @@ export type PlaylistFloaterSyncPayload = {
   muted: boolean
   outputVolume: number
   outputSinkId: string
+  cueSinkId: string
   playing: boolean
   videoPlaying: boolean
   previewSrc: string | null
@@ -37,6 +40,9 @@ export type PlaylistFloaterSyncPayload = {
   activeNamedWorkspaceLabel: string
   sidebarOpen: boolean
   sidebarWidthPx: number
+  videoOutputSessionId: string | null
+  playbackSessionId: string | null
+  playbackArmedNext: RegiaContextValue['playbackArmedNext']
 }
 
 export function buildPlaylistFloaterSyncPayload(
@@ -67,6 +73,7 @@ export function buildPlaylistFloaterSyncPayload(
     muted: v.muted,
     outputVolume: v.outputVolume,
     outputSinkId: v.outputSinkId,
+    cueSinkId: v.cueSinkId,
     playing: v.playing,
     videoPlaying: v.videoPlaying,
     previewSrc: v.previewSrc,
@@ -82,6 +89,9 @@ export function buildPlaylistFloaterSyncPayload(
     activeNamedWorkspaceLabel: v.activeNamedWorkspaceLabel,
     sidebarOpen: v.sidebarOpen,
     sidebarWidthPx: v.sidebarWidthPx,
+    videoOutputSessionId: v.videoOutputSessionId,
+    playbackSessionId: v.playbackSessionId,
+    playbackArmedNext: v.playbackArmedNext,
   }
 }
 
@@ -102,6 +112,23 @@ export function buildPlaylistFloaterMirrorRegiaValue(
       void send(method, args)
     }
 
+  const resolvedPlaybackId =
+    sync.playbackSessionId &&
+    sync.floatingPlaylistSessions.some((s) => s.id === sync.playbackSessionId)
+      ? sync.playbackSessionId
+      : sync.activeFloatingSessionId
+
+  const outputTrackListSession = deriveOutputTrackListSession(
+    sync.floatingPlaylistSessions,
+    sync.videoOutputSessionId,
+    resolvedPlaybackId,
+  )
+
+  const playbackControlSession =
+    sync.floatingPlaylistSessions.find((s) => s.id === resolvedPlaybackId) ??
+    sync.floatingPlaylistSessions[0] ??
+    null
+
   return {
     paths: sync.paths,
     currentIndex: sync.currentIndex,
@@ -111,6 +138,8 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     setOutputVolume: call('setOutputVolume'),
     outputSinkId: sync.outputSinkId,
     setOutputSinkId: call('setOutputSinkId'),
+    cueSinkId: sync.cueSinkId,
+    setCueSinkId: call('setCueSinkId') as RegiaContextValue['setCueSinkId'],
     videoPlaying: sync.videoPlaying,
     launchpadAudioPlaying: sync.launchpadAudioPlaying,
     playing: sync.playing,
@@ -171,6 +200,11 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     ) as RegiaContextValue['toggleSecondScreen'],
     goNext: call('goNext') as RegiaContextValue['goNext'],
     goPrev: call('goPrev') as RegiaContextValue['goPrev'],
+    playbackArmedNext: sync.playbackArmedNext,
+    armPlayNext: call('armPlayNext') as RegiaContextValue['armPlayNext'],
+    clearPlaybackArmedNext: call(
+      'clearPlaybackArmedNext',
+    ) as RegiaContextValue['clearPlaybackArmedNext'],
     selectItem: call('selectItem') as RegiaContextValue['selectItem'],
     reorderPaths: call('reorderPaths') as RegiaContextValue['reorderPaths'],
     applyFloatingInternalDrop: call(
@@ -218,6 +252,9 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     addFloatingLaunchPad: call(
       'addFloatingLaunchPad',
     ) as RegiaContextValue['addFloatingLaunchPad'],
+    addFloatingChalkboard: call(
+      'addFloatingChalkboard',
+    ) as RegiaContextValue['addFloatingChalkboard'],
     removeFloatingPlaylist: call(
       'removeFloatingPlaylist',
     ) as RegiaContextValue['removeFloatingPlaylist'],
@@ -240,6 +277,9 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     repositionAllFloatingPanels: call(
       'repositionAllFloatingPanels',
     ) as RegiaContextValue['repositionAllFloatingPanels'],
+    patchFloatingPlaylistSession: call(
+      'patchFloatingPlaylistSession',
+    ) as RegiaContextValue['patchFloatingPlaylistSession'],
     savedPlaylistDirty: (sid: string) =>
       sid === floaterSessionId ? sync.savedPlaylistDirtyForFloater : false,
     saveLoadedPlaylistOverwrite: call(
@@ -254,6 +294,10 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     redo: call('redo') as RegiaContextValue['redo'],
     recordUndoPoint: call('recordUndoPoint') as RegiaContextValue['recordUndoPoint'],
     playbackLoadedTrack: sync.playbackLoadedTrack,
+    outputTrackListSession,
+    playbackControlSession,
+    videoOutputSessionId: sync.videoOutputSessionId,
+    playbackSessionId: sync.playbackSessionId,
     namedWorkspaces: sync.namedWorkspaces,
     refreshNamedWorkspaces: call(
       'refreshNamedWorkspaces',
@@ -296,5 +340,53 @@ export function buildPlaylistFloaterMirrorRegiaValue(
       'setSidebarWidthPx',
     ) as RegiaContextValue['setSidebarWidthPx'],
     playlistFloaterOsSessionIds: [],
+    exportBugReportSnapshot: () =>
+      buildRegiaBugReportSnapshot({
+        scope: 'playlist_os_floater',
+        floaterSessionId,
+        appVersionFromUi: __REGIA_APP_VERSION__,
+        buildHashFromUi: __REGIA_BUILD_HASH__,
+        transport: {
+          playing: sync.playing,
+          videoPlaying: sync.videoPlaying,
+          launchpadAudioPlaying: sync.launchpadAudioPlaying,
+          muted: sync.muted,
+          outputVolume: sync.outputVolume,
+          loopMode: sync.loopMode,
+          secondScreenOn: sync.secondScreenOn,
+          previewSrc: sync.previewSrc,
+          previewSyncKey: sync.previewSyncKey,
+          previewMediaTimes: { ...previewMediaTimesRef.current },
+        },
+        routing: {
+          activeFloatingSessionId: sync.activeFloatingSessionId,
+          playbackSessionId: sync.playbackSessionId,
+          videoOutputSessionId: sync.videoOutputSessionId,
+          playbackLoadedTrack: sync.playbackLoadedTrack,
+          playbackArmedNext: sync.playbackArmedNext,
+          outputTrackLoopMode: sync.outputTrackLoopMode,
+          floatingZOrder: [...sync.floatingZOrder],
+          previewDetached: sync.previewDetached,
+          floatingPlaylistOpen: sync.floatingPlaylistOpen,
+          playlistFloaterOsSessionIds: [floaterSessionId],
+        },
+        workspaceUi: {
+          sidebarOpen: sync.sidebarOpen,
+          sidebarWidthPx: sync.sidebarWidthPx,
+        },
+        namedWorkspaces: sync.namedWorkspaces.map((w) => ({
+          id: w.id,
+          label: w.label,
+          savedAt: w.savedAt,
+        })),
+        activeNamedWorkspaceId: sync.activeNamedWorkspaceId,
+        activeNamedWorkspaceLabel: sync.activeNamedWorkspaceLabel,
+        savedPlaylists: sync.savedPlaylists.map((p) => ({
+          id: p.id,
+          label: p.label,
+          trackCount: p.trackCount,
+        })),
+        floatingSessions: sync.floatingPlaylistSessions,
+      }),
   } as RegiaContextValue
 }

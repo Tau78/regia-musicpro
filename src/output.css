@@ -19,10 +19,92 @@ body,
   width: 100%;
   height: 100%;
   background: #000;
+  /* Isola gli z-index così il tappo resta sopra ai layer video (compositor). */
+  isolation: isolate;
+}
+
+.output-chalkboard-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: transparent;
+}
+
+.output-chalkboard-img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  user-select: none;
+}
+
+.output-program-badge {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.55rem;
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.06rem;
+  padding: 0.28rem 0.45rem 0.32rem;
+  border-radius: 6px;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.52);
+  border: 1px solid rgba(74, 222, 128, 0.42);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+.output-program-badge-kicker {
+  font-size: 0.52rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(187, 247, 208, 0.92);
+  line-height: 1;
+}
+
+.output-program-badge-main {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(240, 253, 244, 0.98);
+  line-height: 1.1;
+}
+
+.output-idle-cap {
+  position: absolute;
+  inset: 0;
+  /* Sopra lo stack video (spesso promosso dal GPU); sotto lavagna e badge. */
+  z-index: 12;
+  pointer-events: none;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.output-idle-cap-fill,
+.output-idle-cap-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.output-idle-cap-img {
+  object-fit: cover;
+  object-position: center;
+  user-select: none;
 }
 
 .output-stack {
   position: relative;
+  z-index: 1;
   width: 100%;
   height: 100%;
 }

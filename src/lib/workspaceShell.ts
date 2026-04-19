@@ -18,9 +18,11 @@ import {
 
 const LS_OUTPUT_VOLUME = 'regia-output-volume'
 const LS_OUTPUT_SINK = 'regia-output-sink-id'
+/** Chiave localStorage per uscita audio CUE / PFL (pre-ascolto cuffia). */
+export const REGIA_LS_CUE_SINK_KEY = 'regia-cue-sink-id'
 const LS_SIDEBAR_MAIN_TAB = 'regia-sidebar-main-tab'
 
-export type SidebarMainTabPersist = 'playlist' | 'workspace'
+export type SidebarMainTabPersist = 'playlist' | 'workspace' | 'chalkboard'
 
 export type WorkspaceLoopModePersist = 'off' | 'one' | 'all'
 
@@ -55,6 +57,11 @@ export type WorkspaceShellPersist = {
   muted: boolean
   outputVolume: number
   outputSinkId: string
+  /**
+   * DeviceId Chromium per pre-ascolto (CUE / PFL). `''` = dispositivo predefinito.
+   * Il routing verso questo sink sarà usato da funzioni dedicate (es. anteprima audio next).
+   */
+  cueSinkId: string
   secondScreenOn: boolean
   sidebarMainTab: SidebarMainTabPersist
 }
@@ -79,10 +86,20 @@ function readOutputSinkLs(): string {
   }
 }
 
+function readCueSinkLs(): string {
+  try {
+    return localStorage.getItem(REGIA_LS_CUE_SINK_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
 export function readSidebarMainTabFromLs(): SidebarMainTabPersist {
   try {
     const v = localStorage.getItem(LS_SIDEBAR_MAIN_TAB)
-    return v === 'workspace' ? 'workspace' : 'playlist'
+    if (v === 'workspace') return 'workspace'
+    if (v === 'chalkboard') return 'chalkboard'
+    return 'playlist'
   } catch {
     return 'playlist'
   }
@@ -116,6 +133,7 @@ export function readStandaloneWorkspaceShell(): WorkspaceShellPersist {
     muted: false,
     outputVolume: readOutputVolumeLs(),
     outputSinkId: readOutputSinkLs(),
+    cueSinkId: readCueSinkLs(),
     secondScreenOn: false,
     sidebarMainTab: readSidebarMainTabFromLs(),
   }
@@ -179,9 +197,15 @@ export function parseWorkspaceShell(raw: unknown): WorkspaceShellPersist | null 
     })(),
     outputSinkId:
       typeof s.outputSinkId === 'string' ? s.outputSinkId : readOutputSinkLs(),
+    cueSinkId:
+      typeof s.cueSinkId === 'string' ? s.cueSinkId : readCueSinkLs(),
     secondScreenOn: Boolean(s.secondScreenOn),
     sidebarMainTab:
-      s.sidebarMainTab === 'workspace' ? 'workspace' : 'playlist',
+      s.sidebarMainTab === 'workspace'
+        ? 'workspace'
+        : s.sidebarMainTab === 'chalkboard'
+          ? 'chalkboard'
+          : 'playlist',
   }
 }
 
@@ -197,6 +221,11 @@ export function persistShellToLocalStorage(shell: WorkspaceShellPersist): void {
   }
   try {
     localStorage.setItem(LS_OUTPUT_SINK, shell.outputSinkId)
+  } catch {
+    /* ignore */
+  }
+  try {
+    localStorage.setItem(REGIA_LS_CUE_SINK_KEY, shell.cueSinkId)
   } catch {
     /* ignore */
   }

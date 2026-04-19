@@ -19,6 +19,7 @@ import {
   clampPanelInViewport,
   clampPosToViewport,
   hitTestPanelResizeEdge,
+  resizeEdgeToCssCursor,
   type PanelPos,
   type ResizeEdge,
 } from '../lib/floatingPanelGeometry.ts'
@@ -65,13 +66,18 @@ import {
 } from '../hooks/usePlaylistMediaDurations.ts'
 import { useRegia, type LoopMode } from '../state/RegiaContext.tsx'
 import MediaDurationRing from './MediaDurationRing.tsx'
+import ChalkboardPanel from './ChalkboardPanel.tsx'
 import {
+  cloneChalkboardPlacementsByBank,
   DEFAULT_FLOATING_PANEL_SIZE,
+  emptyChalkboardPlacementsByBank,
   LAUNCHPAD_BANK_COUNT,
   LAUNCHPAD_CELL_COUNT,
   LAUNCHPAD_CUE_HOLD_MS,
   defaultLaunchPadCells,
   launchPadCellShownLabel,
+  normalizeChalkboardBackgroundHex,
+  normalizeChalkboardOutputMode,
   type LaunchPadCell,
   type FloatingPlaylistPanelSize,
 } from '../state/floatingPlaylistSession.ts'
@@ -203,6 +209,45 @@ function IconPanelExpand() {
         stroke="currentColor"
         strokeWidth={2}
       />
+    </svg>
+  )
+}
+
+/** Lavagna a tutto schermo (corners). */
+function IconChalkboardFullscreen() {
+  return (
+    <svg
+      className="floating-playlist-header-icon"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5" />
+    </svg>
+  )
+}
+
+function IconChalkboardFullscreenExit() {
+  return (
+    <svg
+      className="floating-playlist-header-icon"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 10V4h6M14 4h6v6M20 14v6h-6M10 20H4v-6" />
     </svg>
   )
 }
@@ -431,6 +476,9 @@ function isFloatingPlaylistPanelDragBlockedTarget(
 ): boolean {
   if (!root.contains(t)) return true
   if (t.closest('.floating-playlist-panel-help-popover')) return true
+  /** Lavagna: canvas, toolbar e testo non devono trascinare il pannello. */
+  if (t.closest('.floating-playlist-chalkboard-viewport')) return true
+  if (t.closest('.floating-playlist-chalkboard-stack')) return true
   if (
     t.closest(
       'button, [role="button"], input, textarea, select, a, [role="slider"]',
@@ -657,6 +705,40 @@ function isTypingTarget(el: EventTarget | null): boolean {
 /** Stesso riferimento quando `session` è assente, così gli effetti non dipendono da `[]` nuovo ogni render. */
 const EMPTY_PLAYLIST_PATHS: string[] = []
 
+function readPlaylistGridColumnCount(ul: HTMLElement): number {
+  const st = getComputedStyle(ul)
+  if (st.display !== 'grid') return 1
+  const gtc = st.gridTemplateColumns
+  if (!gtc || gtc === 'none') return 1
+  const parts = gtc.trim().split(/\s+/).filter(Boolean)
+  return Math.max(1, parts.length)
+}
+
+/** Punto clampato nel rettangolo + indice playlist → indice di inserimento (0…pathCount). */
+function resolveInsertFromPointerInItem(
+  r: DOMRect,
+  idx: number,
+  pathCount: number,
+  cols: number,
+  x: number,
+  y: number,
+): number {
+  const midX = (r.left + r.right) / 2
+  const midY = (r.top + r.bottom) / 2
+  const isLast = idx >= pathCount - 1
+  if (!isLast) {
+    if ((idx + 1) % cols !== 0) {
+      return x < midX ? idx : idx + 1
+    }
+    return y < midY ? idx : idx + 1
+  }
+  const lastInRow = cols <= 1 || idx % cols === cols - 1
+  if (lastInRow) {
+    return y < midY ? idx : pathCount
+  }
+  return x < midX ? idx : pathCount
+}
+
 /** Indice di inserimento 0…`pathCount` (prima del brano `i`, oppure in coda). */
 function pickPlaylistInsertBeforeIndex(
   ul: HTMLUListElement | null,
@@ -676,6 +758,7 @@ function pickPlaylistInsertBeforeIndex(
       return 0
     return 0
   }
+  const cols = readPlaylistGridColumnCount(ul)
   const nodes = ul.querySelectorAll<HTMLElement>(
     'li.floating-playlist-item[data-pl-idx]',
   )
@@ -691,8 +774,14 @@ function pickPlaylistInsertBeforeIndex(
     ) {
       const raw = el.dataset.plIdx
       const idx = raw != null ? parseInt(raw, 10) : 0
-      const mid = (r.top + r.bottom) / 2
-      const insertBefore = clientY < mid ? idx : idx + 1
+      const insertBefore = resolveInsertFromPointerInItem(
+        r,
+        idx,
+        pathCount,
+        cols,
+        clientX,
+        clientY,
+      )
       return Math.max(0, Math.min(pathCount, insertBefore))
     }
   }
@@ -701,16 +790,46 @@ function pickPlaylistInsertBeforeIndex(
   for (let k = 0; k < nodes.length; k++) {
     const el = nodes[k]!
     const r = el.getBoundingClientRect()
-    const mid = (r.top + r.bottom) / 2
-    const d = Math.abs(clientY - mid)
+    const raw = el.dataset.plIdx
+    const idx = raw != null ? parseInt(raw, 10) : 0
+    const px = Math.min(r.right, Math.max(r.left, clientX))
+    const py = Math.min(r.bottom, Math.max(r.top, clientY))
+    const d = (clientX - px) ** 2 + (clientY - py) ** 2
     if (d < bestDist) {
       bestDist = d
-      const raw = el.dataset.plIdx
-      const idx = raw != null ? parseInt(raw, 10) : 0
-      best = clientY < mid ? idx : idx + 1
+      best = resolveInsertFromPointerInItem(r, idx, pathCount, cols, px, py)
     }
   }
   return Math.max(0, Math.min(pathCount, best))
+}
+
+function playlistDropCueClasses(
+  internalDropInsertBefore: number | null,
+  idx: number,
+  pathCount: number,
+  cols: number,
+): string {
+  if (internalDropInsertBefore == null) return ''
+  const ib = internalDropInsertBefore
+  if (ib === idx) {
+    if (idx === 0) return ' is-drop-cue-top'
+    if (idx % cols !== 0) return ' is-drop-cue-left'
+    return ' is-drop-cue-top'
+  }
+  if (ib === pathCount && idx === pathCount - 1) {
+    if (cols > 1 && pathCount > 0 && idx % cols !== cols - 1) {
+      return ' is-drop-cue-right'
+    }
+    return ' is-drop-cue-bottom'
+  }
+  return ''
+}
+
+function playlistEmptyDropCueClasses(
+  internalDropInsertBefore: number | null,
+): string {
+  if (internalDropInsertBefore === 0) return ' is-drop-cue-top'
+  return ''
 }
 
 export default function FloatingPlaylist({
@@ -757,6 +876,10 @@ export default function FloatingPlaylist({
     launchpadAudioPlaying,
     previewMediaTimesRef,
     previewMediaTimesTick,
+    playbackArmedNext,
+    armPlayNext,
+    clearPlaybackArmedNext,
+    patchFloatingPlaylistSession,
   } = useRegia()
 
   const launchPadCueEnabled = useLaunchPadCueEnabled()
@@ -787,6 +910,7 @@ export default function FloatingPlaylist({
 
   const session = floatingPlaylistSessions.find((s) => s.id === sessionId)
   const isLaunchpad = session?.playlistMode === 'launchpad'
+  const isChalkboard = session?.playlistMode === 'chalkboard'
   const paths = session?.paths ?? EMPTY_PLAYLIST_PATHS
   const trackDurations = usePlaylistMediaDurations(paths)
   const launchPadCells =
@@ -816,6 +940,12 @@ export default function FloatingPlaylist({
   const pos = session?.pos ?? { x: 24, y: 96 }
   const panelSize =
     session?.panelSize ?? DEFAULT_FLOATING_PANEL_SIZE
+  const chalkboardFullscreen = session?.chalkboardFullscreen === true
+
+  const chalkboardPreFullscreenRef = useRef<{
+    pos: { x: number; y: number }
+    panelSize: FloatingPlaylistPanelSize
+  } | null>(null)
 
   const [launchPadClipboard, setLaunchPadClipboard] =
     useState<LaunchPadCell | null>(null)
@@ -827,6 +957,10 @@ export default function FloatingPlaylist({
     null,
   )
   const launchPadMenuRef = useRef<HTMLDivElement>(null)
+  const playlistTrackCtxMenuRef = useRef<HTMLDivElement>(null)
+  const [playlistTrackCtxSlot, setPlaylistTrackCtxSlot] = useState<
+    number | null
+  >(null)
   const [launchPadCtx, setLaunchPadCtx] = useState<{
     slot: number
   } | null>(null)
@@ -854,6 +988,7 @@ export default function FloatingPlaylist({
   const playlistDndDepth = useRef(0)
   const launchpadDndDepth = useRef(0)
   const listRef = useRef<HTMLUListElement>(null)
+  const [playlistGridCols, setPlaylistGridCols] = useState(1)
   /** Inserimento DnD interno (0…paths.length) durante passaggio su questa lista. */
   const [internalDropInsertBefore, setInternalDropInsertBefore] = useState<
     number | null
@@ -1043,6 +1178,23 @@ export default function FloatingPlaylist({
       : null
 
   useLayoutEffect(() => {
+    if (collapsed || isLaunchpad) {
+      return
+    }
+    const ul = listRef.current
+    if (!ul) return
+    const update = () => {
+      setPlaylistGridCols(readPlaylistGridColumnCount(ul))
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(ul)
+    return () => {
+      ro.disconnect()
+    }
+  }, [collapsed, isLaunchpad, paths.length, sessionId])
+
+  useLayoutEffect(() => {
     if (
       isLaunchpad ||
       collapsed ||
@@ -1203,6 +1355,8 @@ export default function FloatingPlaylist({
 
       if (isFloatingPlaylistPanelDragBlockedTarget(t, root)) return
 
+      if (isChalkboard && chalkboardFullscreen) return
+
       const rect = root.getBoundingClientRect()
       const resizeEdge = hitTestPanelResizeEdge(
         e.clientX,
@@ -1258,7 +1412,9 @@ export default function FloatingPlaylist({
     },
     [
       bringFloatingPanelToFront,
+      chalkboardFullscreen,
       collapsed,
+      isChalkboard,
       isPlaylistOsFloaterWindow,
       panelSize.height,
       panelSize.width,
@@ -1271,6 +1427,7 @@ export default function FloatingPlaylist({
 
   const onPointerMove = useCallback(
     (e: PointerEvent<HTMLDivElement>) => {
+      const chrome = e.currentTarget
       const rs = resizeStateRef.current
       if (rs) {
         const dx = e.clientX - rs.startX
@@ -1283,6 +1440,7 @@ export default function FloatingPlaylist({
           dy,
         )
         updateFloatingPlaylistChrome(sessionId, { pos: np, panelSize: ns })
+        chrome.style.cursor = resizeEdgeToCssCursor(rs.edge)
         if (isPlaylistOsFloaterWindow) {
           void window.electronAPI?.playlistFloaterSetBounds?.({
             x: Math.round(window.screenX + np.x),
@@ -1294,6 +1452,30 @@ export default function FloatingPlaylist({
         return
       }
       const d = drag.current
+      if (d?.active) {
+        chrome.style.cursor = 'grabbing'
+      } else {
+        const root = panelRef.current
+        if (
+          root &&
+          !(isChalkboard && chalkboardFullscreen) &&
+          !isFloatingPlaylistPanelDragBlockedTarget(
+            e.target as HTMLElement,
+            root,
+          )
+        ) {
+          const rect = root.getBoundingClientRect()
+          const edge = hitTestPanelResizeEdge(
+            e.clientX,
+            e.clientY,
+            rect,
+            collapsed,
+          )
+          chrome.style.cursor = edge ? resizeEdgeToCssCursor(edge) : ''
+        } else {
+          chrome.style.cursor = ''
+        }
+      }
       if (!d?.active) return
       if (d.floater) {
         const f = d.floater
@@ -1334,13 +1516,24 @@ export default function FloatingPlaylist({
       updateFloatingPlaylistChrome(sessionId, { pos: c })
     },
     [
+      chalkboardFullscreen,
+      collapsed,
       dragSnapPeerRects,
+      isChalkboard,
       isPlaylistOsFloaterWindow,
       resizePlaylistWithSnap,
       sessionId,
       snapEnabled,
       updateFloatingPlaylistChrome,
     ],
+  )
+
+  const onPanelPointerLeave = useCallback(
+    (e: PointerEvent<HTMLDivElement>) => {
+      if (resizeStateRef.current || drag.current?.active) return
+      e.currentTarget.style.cursor = ''
+    },
+    [],
   )
 
   const onPointerUp = useCallback(
@@ -1371,6 +1564,7 @@ export default function FloatingPlaylist({
         })
         resizeStateRef.current = null
         setIsResizing(false)
+        if (panelRef.current) panelRef.current.style.cursor = ''
         try {
           panelRef.current?.releasePointerCapture(e.pointerId)
         } catch {
@@ -1381,6 +1575,7 @@ export default function FloatingPlaylist({
       const d = drag.current
       if (!d?.active) return
       d.active = false
+      if (panelRef.current) panelRef.current.style.cursor = ''
       if (d.floater) {
         const f = d.floater
         const nx = Math.round(
@@ -1528,6 +1723,15 @@ export default function FloatingPlaylist({
     [isLaunchpad, paths, session, sessionId],
   )
 
+  const onPlaylistRowContextMenu = useCallback(
+    (slotIndex: number, e: MouseEvent<HTMLButtonElement>) => {
+      e.preventDefault()
+      if (isLaunchpad) return
+      setPlaylistTrackCtxSlot(slotIndex)
+    },
+    [isLaunchpad],
+  )
+
   const onPlaylistRowDragEnd = useCallback(() => {
     setPlaylistRowDragSourceIndex(null)
     suppressPlaylistRowClickRef.current = true
@@ -1584,6 +1788,8 @@ export default function FloatingPlaylist({
   const onTitleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
       if (e.key !== 'Enter') return
+      /** Tenendo premuto Invio il browser emette keydown con `repeat`: ogni tick richiamerebbe il salvataggio. */
+      if (e.repeat) return
       e.preventDefault()
       const el = e.currentTarget
       suppressNextTitleBlurPersistRef.current = true
@@ -2127,7 +2333,7 @@ export default function FloatingPlaylist({
 
   const onPanelKeyDownCapture = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
-      if (collapsed || isLaunchpad || !paths.length) return
+      if (collapsed || isLaunchpad || isChalkboard || !paths.length) return
       const root = panelRef.current
       if (!root?.contains(e.target as Node)) return
       const listEl = root.querySelector('ul.floating-playlist-list')
@@ -2154,6 +2360,7 @@ export default function FloatingPlaylist({
     [
       collapsed,
       isLaunchpad,
+      isChalkboard,
       paths.length,
       currentIndex,
       loadIndexAndPlay,
@@ -2200,6 +2407,68 @@ export default function FloatingPlaylist({
     if (!session) setClosePlayConfirmOpen(false)
   }, [session])
 
+  useEffect(() => {
+    if (!isChalkboard) chalkboardPreFullscreenRef.current = null
+  }, [isChalkboard])
+
+  const toggleChalkboardFullscreen = useCallback(() => {
+    const s = floatingPlaylistSessions.find((x) => x.id === sessionId)
+    if (!s || s.playlistMode !== 'chalkboard') return
+    if (s.chalkboardFullscreen === true) {
+      const bak = chalkboardPreFullscreenRef.current
+      updateFloatingPlaylistChrome(sessionId, {
+        chalkboardFullscreen: false,
+        pos: bak?.pos ?? s.pos,
+        panelSize: bak?.panelSize ?? s.panelSize,
+      })
+      chalkboardPreFullscreenRef.current = null
+      return
+    }
+    chalkboardPreFullscreenRef.current = {
+      pos: { ...s.pos },
+      panelSize: { ...s.panelSize },
+    }
+    updateFloatingPlaylistChrome(sessionId, {
+      chalkboardFullscreen: true,
+      collapsed: false,
+    })
+    bringFloatingPanelToFront(sessionId)
+  }, [
+    floatingPlaylistSessions,
+    sessionId,
+    updateFloatingPlaylistChrome,
+    bringFloatingPanelToFront,
+  ])
+
+  useEffect(() => {
+    if (!isChalkboard || !chalkboardFullscreen) return
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const raw = e.target as HTMLElement | null
+      if (raw?.closest('.floating-playlist-chalkboard-text-editor-wrap')) return
+      if (isTypingTarget(e.target)) return
+      e.preventDefault()
+      e.stopPropagation()
+      const s = floatingPlaylistSessions.find((x) => x.id === sessionId)
+      if (!s) return
+      const bak = chalkboardPreFullscreenRef.current
+      updateFloatingPlaylistChrome(sessionId, {
+        chalkboardFullscreen: false,
+        pos: bak?.pos ?? s.pos,
+        panelSize: bak?.panelSize ?? s.panelSize,
+      })
+      chalkboardPreFullscreenRef.current = null
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [
+    isChalkboard,
+    chalkboardFullscreen,
+    sessionId,
+    floatingPlaylistSessions,
+    updateFloatingPlaylistChrome,
+  ])
+
   if (!session) return null
 
   const themeHex = normalizePlaylistThemeColor(session.playlistThemeColor)
@@ -2238,18 +2507,31 @@ export default function FloatingPlaylist({
     <Fragment>
     <div
       ref={panelRef}
-      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}`}
+      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${isChalkboard ? 'is-chalkboard' : ''} ${chalkboardFullscreen ? 'is-chalkboard-fullscreen' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}`}
       style={{
-        left: pos.x,
-        top: pos.y,
-        zIndex,
-        width: panelSize.width,
-        height: collapsed ? undefined : panelSize.height,
+        ...(chalkboardFullscreen
+          ? {
+              left: 0,
+              top: 0,
+              width: '100vw',
+              height: collapsed ? undefined : '100vh',
+              maxWidth: '100vw',
+              maxHeight: collapsed ? undefined : '100vh',
+              zIndex: 20000,
+            }
+          : {
+              left: pos.x,
+              top: pos.y,
+              zIndex,
+              width: panelSize.width,
+              height: collapsed ? undefined : panelSize.height,
+            }),
         ...(themeHex ? { ['--playlist-theme' as string]: themeHex } : {}),
       }}
       onKeyDownCapture={onPanelKeyDownCapture}
       onPointerDownCapture={onPanelChromePointerDownCapture}
       onPointerMove={onPointerMove}
+      onPointerLeave={onPanelPointerLeave}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
@@ -2289,28 +2571,57 @@ export default function FloatingPlaylist({
       ) : null}
       <div className="floating-playlist-top">
         <div className="floating-playlist-title-strip">
-          <input
-            type="text"
-            className="floating-playlist-title-input"
-            value={playlistTitle}
-            onChange={(ev) => setPlaylistTitle(ev.target.value, sessionId)}
-            onKeyDown={onTitleKeyDown}
-            onBlur={(e) => {
-              if (suppressNextTitleBlurPersistRef.current) {
-                suppressNextTitleBlurPersistRef.current = false
-                return
+          <div className="floating-playlist-title-strip-main">
+            <span
+              className={`floating-playlist-panel-kind ${
+                isLaunchpad
+                  ? 'is-launchpad'
+                  : isChalkboard
+                    ? 'is-chalkboard'
+                    : 'is-playlist'
+              }`}
+            >
+              {isLaunchpad
+                ? 'Launchpad'
+                : isChalkboard
+                  ? 'Chalkboard'
+                  : 'Playlist'}
+            </span>
+            <input
+              type="text"
+              className="floating-playlist-title-input"
+              value={playlistTitle}
+              onChange={(ev) => setPlaylistTitle(ev.target.value, sessionId)}
+              onKeyDown={onTitleKeyDown}
+              onBlur={(e) => {
+                if (suppressNextTitleBlurPersistRef.current) {
+                  suppressNextTitleBlurPersistRef.current = false
+                  return
+                }
+                void commitFloatingPlaylistTitle(e.currentTarget.value)
+              }}
+              placeholder={
+                isLaunchpad
+                  ? 'Nome o titolo…'
+                  : isChalkboard
+                    ? 'Nome o titolo…'
+                    : 'Nuova playlist'
               }
-              void commitFloatingPlaylistTitle(e.currentTarget.value)
-            }}
-            placeholder={isLaunchpad ? 'Launchpad' : 'Nuova Playlist'}
-            aria-label="Nome della playlist"
-            maxLength={120}
-            spellCheck={false}
-          />
+              aria-label={
+                isLaunchpad
+                  ? 'Nome del pannello Launchpad'
+                  : isChalkboard
+                    ? 'Nome del pannello Chalkboard'
+                    : 'Nome della playlist'
+              }
+              maxLength={120}
+              spellCheck={false}
+            />
+          </div>
           <div
             className="floating-playlist-title-strip-chrome"
             role="group"
-            aria-label="Aiuto, fissa in primo piano, riduci o chiudi"
+            aria-label="Aiuto, fissa in primo piano, tutto schermo lavagna, riduci o chiudi"
           >
             <div className="floating-playlist-help-popover-wrap">
               <button
@@ -2323,12 +2634,16 @@ export default function FloatingPlaylist({
                 title={
                   isLaunchpad
                     ? 'Istruzioni griglia Launchpad'
-                    : 'Istruzioni uso playlist'
+                    : isChalkboard
+                      ? 'Istruzioni Chalkboard'
+                      : 'Istruzioni uso playlist'
                 }
                 aria-label={
                   isLaunchpad
                     ? 'Apri istruzioni griglia Launchpad'
-                    : 'Apri istruzioni playlist'
+                    : isChalkboard
+                      ? 'Apri istruzioni Chalkboard'
+                      : 'Apri istruzioni playlist'
                 }
               >
                 ?
@@ -2340,7 +2655,11 @@ export default function FloatingPlaylist({
                   className="floating-playlist-panel-help-popover"
                   role="dialog"
                   aria-label={
-                    isLaunchpad ? 'Istruzioni Launchpad' : 'Istruzioni playlist'
+                    isLaunchpad
+                      ? 'Istruzioni Launchpad'
+                      : isChalkboard
+                        ? 'Istruzioni Chalkboard'
+                        : 'Istruzioni playlist'
                   }
                   onMouseDown={(ev) => ev.stopPropagation()}
                   style={
@@ -2365,7 +2684,16 @@ export default function FloatingPlaylist({
                         } satisfies CSSProperties)
                   }
                 >
-                  {isLaunchpad ? (
+                  {isChalkboard ? (
+                    <>
+                      Quattro banchi (tab 1–4) con lavagna alla risoluzione uscita:
+                      pennello, gomma, testo, immagine da file. «In uscita» sovrappone
+                      il banco corrente al video sul monitor 2. Il pulsante con angoli
+                      accanto a «Riduci» apre la lavagna a tutto schermo (Esc per
+                      uscire, tranne mentre scrivi nel campo testo). Salva su disco con
+                      il pulsante disco in barra (come playlist e launchpad).
+                    </>
+                  ) : isLaunchpad ? (
                     <>
                       Griglia 4×4 (pagine 1–{LAUNCHPAD_BANK_COUNT}, 16 pad ciascuna):
                       slot vuoto → dialog file · trascina file su slot o griglia ·
@@ -2482,14 +2810,51 @@ export default function FloatingPlaylist({
             >
               <IconWindowPin />
             </button>
+            {isChalkboard ? (
+              <button
+                type="button"
+                className={`floating-playlist-icon-btn${chalkboardFullscreen ? ' is-active' : ''}`}
+                onClick={() => void toggleChalkboardFullscreen()}
+                title={
+                  chalkboardFullscreen
+                    ? 'Esci da tutto schermo (anche Esc)'
+                    : 'Lavagna a tutto schermo'
+                }
+                aria-label={
+                  chalkboardFullscreen
+                    ? 'Esci da tutto schermo lavagna'
+                    : 'Lavagna a tutto schermo'
+                }
+              >
+                {chalkboardFullscreen ? (
+                  <IconChalkboardFullscreenExit />
+                ) : (
+                  <IconChalkboardFullscreen />
+                )}
+              </button>
+            ) : null}
             <button
               type="button"
               className="floating-playlist-icon-btn"
-              onClick={() =>
+              onClick={() => {
+                const fs = session.chalkboardFullscreen === true
+                const bak = chalkboardPreFullscreenRef.current
                 updateFloatingPlaylistChrome(sessionId, {
                   collapsed: !collapsed,
+                  ...(isChalkboard && fs
+                    ? {
+                        chalkboardFullscreen: false,
+                        ...(bak
+                          ? {
+                              pos: { ...bak.pos },
+                              panelSize: { ...bak.panelSize },
+                            }
+                          : {}),
+                      }
+                    : {}),
                 })
-              }
+                if (isChalkboard && fs) chalkboardPreFullscreenRef.current = null
+              }}
               title={collapsed ? 'Espandi' : 'Riduci'}
               aria-label={collapsed ? 'Espandi pannello' : 'Riduci pannello'}
             >
@@ -2508,30 +2873,44 @@ export default function FloatingPlaylist({
         </div>
         {collapsed ? (
           <div className="floating-playlist-toolbar">
-            <div className="floating-playlist-actions floating-playlist-chrome-actions">
-              <div className="floating-playlist-actions-main">
-                {!isLaunchpad ? (
-                  <>
-                    <button
-                      type="button"
-                      className="floating-playlist-icon-btn"
-                      onClick={() => void openFolder(sessionId)}
-                      title="Apri cartella"
-                      aria-label="Apri cartella"
-                    >
-                      <IconFolder />
-                    </button>
-                    <button
-                      type="button"
-                      className="floating-playlist-icon-btn"
-                      onClick={() => void addMediaToPlaylist(sessionId)}
-                      title="Aggiungi file alla playlist"
-                      aria-label="Aggiungi file alla playlist"
-                    >
-                      <IconAddFiles />
-                    </button>
-                  </>
-                ) : null}
+            <div className="floating-playlist-toolbar-chrome floating-playlist-chrome-actions">
+              {!isLaunchpad && !isChalkboard ? (
+                <div
+                  className="floating-playlist-chrome-group floating-playlist-chrome-group--media"
+                  role="group"
+                  aria-label="File e cartella"
+                >
+                  <button
+                    type="button"
+                    className="floating-playlist-icon-btn"
+                    onClick={() => void openFolder(sessionId)}
+                    title="Apri cartella"
+                    aria-label="Apri cartella"
+                  >
+                    <IconFolder />
+                  </button>
+                  <button
+                    type="button"
+                    className="floating-playlist-icon-btn"
+                    onClick={() => void addMediaToPlaylist(sessionId)}
+                    title="Aggiungi file alla playlist"
+                    aria-label="Aggiungi file alla playlist"
+                  >
+                    <IconAddFiles />
+                  </button>
+                </div>
+              ) : null}
+              {!isLaunchpad && !isChalkboard ? (
+                <span
+                  className="floating-playlist-chrome-sep"
+                  aria-hidden
+                />
+              ) : null}
+              <div
+                className="floating-playlist-chrome-group floating-playlist-chrome-group--doc"
+                role="group"
+                aria-label="Tema e salva"
+              >
                 <button
                   type="button"
                   className="floating-playlist-icon-btn floating-playlist-theme-picker-btn"
@@ -2543,8 +2922,8 @@ export default function FloatingPlaylist({
                     }
                     playlistColorInputRef.current?.click()
                   }}
-                  title="Colore tema playlist (Alt+clic: predefinito)"
-                  aria-label="Scegli colore tema playlist. Alt e clic per tema predefinito."
+                  title="Colore tema (Alt+clic: predefinito)"
+                  aria-label="Scegli colore tema pannello. Alt e clic per tema predefinito."
                 >
                   <IconColorWheel />
                 </button>
@@ -2563,8 +2942,9 @@ export default function FloatingPlaylist({
                   <IconSaveDisk />
                 </button>
               </div>
+              <span className="floating-playlist-chrome-sep" aria-hidden />
               <div
-                className="floating-playlist-actions-undo"
+                className="floating-playlist-chrome-group floating-playlist-chrome-group--history"
                 role="group"
                 aria-label="Annulla e ripristina"
               >
@@ -2602,7 +2982,7 @@ export default function FloatingPlaylist({
       {!collapsed && (
         <div
           className={
-            isLaunchpad
+            isLaunchpad || isChalkboard
               ? 'floating-playlist-launchpad-stack'
               : 'floating-playlist-panel-body-slot'
           }
@@ -2610,30 +2990,41 @@ export default function FloatingPlaylist({
         {/* Menu tasto destro Launchpad: stesso wrapper della griglia, non dentro crossfade (pannello overflow:hidden). */}
         <div className="floating-playlist-crossfade">
           <div className="floating-playlist-crossfade-row">
-            <div className="floating-playlist-actions floating-playlist-chrome-actions">
-              <div className="floating-playlist-actions-main">
-                {!isLaunchpad ? (
-                  <>
-                    <button
-                      type="button"
-                      className="floating-playlist-icon-btn"
-                      onClick={() => void openFolder(sessionId)}
-                      title="Apri cartella"
-                      aria-label="Apri cartella"
-                    >
-                      <IconFolder />
-                    </button>
-                    <button
-                      type="button"
-                      className="floating-playlist-icon-btn"
-                      onClick={() => void addMediaToPlaylist(sessionId)}
-                      title="Aggiungi file alla playlist"
-                      aria-label="Aggiungi file alla playlist"
-                    >
-                      <IconAddFiles />
-                    </button>
-                  </>
-                ) : null}
+            <div className="floating-playlist-chrome-row-left floating-playlist-chrome-actions">
+              {!isLaunchpad && !isChalkboard ? (
+                <div
+                  className="floating-playlist-chrome-group floating-playlist-chrome-group--media"
+                  role="group"
+                  aria-label="File e cartella"
+                >
+                  <button
+                    type="button"
+                    className="floating-playlist-icon-btn"
+                    onClick={() => void openFolder(sessionId)}
+                    title="Apri cartella"
+                    aria-label="Apri cartella"
+                  >
+                    <IconFolder />
+                  </button>
+                  <button
+                    type="button"
+                    className="floating-playlist-icon-btn"
+                    onClick={() => void addMediaToPlaylist(sessionId)}
+                    title="Aggiungi file alla playlist"
+                    aria-label="Aggiungi file alla playlist"
+                  >
+                    <IconAddFiles />
+                  </button>
+                </div>
+              ) : null}
+              {!isLaunchpad && !isChalkboard ? (
+                <span className="floating-playlist-chrome-sep" aria-hidden />
+              ) : null}
+              <div
+                className="floating-playlist-chrome-group floating-playlist-chrome-group--doc"
+                role="group"
+                aria-label="Tema e salva"
+              >
                 <button
                   type="button"
                   className="floating-playlist-icon-btn floating-playlist-theme-picker-btn"
@@ -2645,8 +3036,8 @@ export default function FloatingPlaylist({
                     }
                     playlistColorInputRef.current?.click()
                   }}
-                  title="Colore tema playlist (Alt+clic: predefinito)"
-                  aria-label="Scegli colore tema playlist. Alt e clic per tema predefinito."
+                  title="Colore tema (Alt+clic: predefinito)"
+                  aria-label="Scegli colore tema pannello. Alt e clic per tema predefinito."
                 >
                   <IconColorWheel />
                 </button>
@@ -2665,8 +3056,9 @@ export default function FloatingPlaylist({
                   <IconSaveDisk />
                 </button>
               </div>
+              <span className="floating-playlist-chrome-sep" aria-hidden />
               <div
-                className="floating-playlist-actions-undo"
+                className="floating-playlist-chrome-group floating-playlist-chrome-group--history"
                 role="group"
                 aria-label="Annulla e ripristina"
               >
@@ -2697,58 +3089,81 @@ export default function FloatingPlaylist({
                   <IconRedo />
                 </button>
               </div>
+              {!isLaunchpad && !isChalkboard ? (
+                <>
+                  <span className="floating-playlist-chrome-sep" aria-hidden />
+                  <div
+                    className="floating-playlist-chrome-group floating-playlist-chrome-group--xfade"
+                    role="group"
+                    aria-label="Crossfade"
+                  >
+                    <button
+                      type="button"
+                      className={`floating-playlist-icon-btn floating-playlist-crossfade-toggle ${playlistCrossfade ? 'is-active' : ''}`}
+                      title="Crossfade tra brani: dissolvenza incrociata in uscita tra due brani dello stesso tipo."
+                      aria-label="Crossfade tra brani. Solo tra video/video o immagine/immagine."
+                      aria-pressed={playlistCrossfade}
+                      onClick={() => {
+                        setActiveFloatingSession(sessionId)
+                        setPlaylistCrossfade(!playlistCrossfade, sessionId)
+                      }}
+                    >
+                      <IconCrossfade />
+                      <span
+                        className="floating-playlist-crossfade-hint-tooltip"
+                        aria-hidden="true"
+                      >
+                        Solo tra video/video o immagine/immagine
+                      </span>
+                    </button>
+                  </div>
+                </>
+              ) : null}
             </div>
-            <button
-              type="button"
-              className={`floating-playlist-icon-btn floating-playlist-crossfade-toggle ${playlistCrossfade ? 'is-active' : ''}`}
-              title="Crossfade tra brani: dissolvenza incrociata in uscita tra due brani dello stesso tipo."
-              aria-label="Crossfade tra brani. Solo tra video/video o immagine/immagine."
-              aria-pressed={playlistCrossfade}
-              onClick={() => {
-                setActiveFloatingSession(sessionId)
-                setPlaylistCrossfade(!playlistCrossfade, sessionId)
-              }}
-            >
-              <IconCrossfade />
-              <span
-                className="floating-playlist-crossfade-hint-tooltip"
-                aria-hidden="true"
-              >
-                Solo tra video/video o immagine/immagine
-              </span>
-            </button>
             <div
-              className="floating-playlist-panel-volume"
-              title="Volume uscita per questo pannello (moltiplicato con il volume globale in alto)"
+              className="floating-playlist-chrome-row-right"
+              role="group"
+              aria-label="Volume e mute uscita"
             >
-              <input
-                type="range"
-                className="regia-volume-slider floating-playlist-panel-volume-slider"
-                min={0}
-                max={100}
-                value={Math.round(playlistOutputVolume * 100)}
-                onPointerDown={onPlaylistPanelVolumePointerDown}
-                onChange={onPlaylistPanelVolumeChange}
-                aria-label="Volume uscita per questo pannello playlist"
-                aria-valuetext={`${Math.round(playlistOutputVolume * 100)}% sul pannello`}
-              />
+              <div
+                className="floating-playlist-panel-volume"
+                title="Volume uscita per questo pannello (moltiplicato con il volume globale in alto)"
+              >
+                <input
+                  type="range"
+                  className="regia-volume-slider floating-playlist-panel-volume-slider"
+                  min={0}
+                  max={100}
+                  value={Math.round(playlistOutputVolume * 100)}
+                  onPointerDown={onPlaylistPanelVolumePointerDown}
+                  onChange={onPlaylistPanelVolumeChange}
+                  aria-label={
+                    isLaunchpad
+                      ? 'Volume uscita Launchpad sul secondo schermo'
+                      : isChalkboard
+                        ? 'Volume uscita Chalkboard sul secondo schermo'
+                        : 'Volume uscita playlist sul secondo schermo'
+                  }
+                  aria-valuetext={`${Math.round(playlistOutputVolume * 100)}% sul pannello`}
+                />
+              </div>
+              <button
+                type="button"
+                className={`floating-playlist-icon-btn floating-playlist-mute-output ${playlistOutputMuted ? 'is-on' : ''}`}
+                onClick={onTogglePlaylistOutputMute}
+                aria-pressed={playlistOutputMuted}
+                title="Silenzia solo l'uscita sul secondo schermo per i brani avviati da questa playlist (si somma al Mute globale in alto). Valore salvato per questo pannello."
+                aria-label={
+                  playlistOutputMuted
+                    ? 'Mute uscita attivo per questo pannello: clic per disattivare'
+                    : 'Silenzia uscita sul secondo schermo per questo pannello'
+                }
+              >
+                <IconOutputSpeaker muted={playlistOutputMuted} />
+              </button>
             </div>
-            <button
-              type="button"
-              className={`floating-playlist-icon-btn floating-playlist-mute-output ${playlistOutputMuted ? 'is-on' : ''}`}
-              onClick={onTogglePlaylistOutputMute}
-              aria-pressed={playlistOutputMuted}
-              title="Silenzia solo l'uscita sul secondo schermo per i brani avviati da questa playlist (si somma al Mute globale in alto). Valore salvato per questo pannello."
-              aria-label={
-                playlistOutputMuted
-                  ? 'Mute uscita attivo per questo pannello: clic per disattivare'
-                  : 'Silenzia uscita sul secondo schermo per questo pannello'
-              }
-            >
-              <IconOutputSpeaker muted={playlistOutputMuted} />
-            </button>
           </div>
-          {!isLaunchpad ? (
+          {!isLaunchpad && !isChalkboard ? (
             <div
               className="floating-playlist-loop-row"
               role="group"
@@ -3165,10 +3580,58 @@ export default function FloatingPlaylist({
               </button>
             </div>
           </div>
+        ) : isChalkboard ? (
+          <ChalkboardPanel
+            sessionId={sessionId}
+            bankPaths={session.chalkboardBankPaths ?? []}
+            bankIndex={session.chalkboardBankIndex ?? 0}
+            placements={
+              session.chalkboardPlacementsByBank?.[
+                session.chalkboardBankIndex ?? 0
+              ] ?? []
+            }
+            onUpdateBankPlacements={(items) => {
+              patchFloatingPlaylistSession(sessionId, (s) => {
+                const bi = s.chalkboardBankIndex ?? 0
+                const banks = cloneChalkboardPlacementsByBank(
+                  s.chalkboardPlacementsByBank ??
+                    emptyChalkboardPlacementsByBank(),
+                )
+                banks[bi] = items
+                return {
+                  ...s,
+                  chalkboardPlacementsByBank: banks,
+                  chalkboardContentRev: (s.chalkboardContentRev ?? 0) + 1,
+                }
+              })
+            }}
+            outputMode={normalizeChalkboardOutputMode(
+              session.chalkboardOutputMode,
+              (session as { chalkboardOutputToProgram?: boolean })
+                .chalkboardOutputToProgram,
+            )}
+            onSetBankIndex={(i) =>
+              patchFloatingPlaylistSession(sessionId, {
+                chalkboardBankIndex: Math.max(0, Math.min(3, i)),
+              })
+            }
+            patchSession={patchFloatingPlaylistSession}
+            recordUndoPoint={recordUndoPoint}
+            backgroundColor={normalizeChalkboardBackgroundHex(
+              session.chalkboardBackgroundColor,
+            )}
+            onBackgroundColorChange={(hex) => {
+              recordUndoPoint()
+              patchFloatingPlaylistSession(sessionId, {
+                chalkboardBackgroundColor:
+                  normalizeChalkboardBackgroundHex(hex),
+              })
+            }}
+          />
         ) : null}
         </div>
       )}
-      {!collapsed && !isLaunchpad && (
+      {!collapsed && !isLaunchpad && !isChalkboard && (
         <div className="floating-playlist-list-scroll">
           <ul
             ref={listRef}
@@ -3182,7 +3645,7 @@ export default function FloatingPlaylist({
           >
           {paths.length === 0 && (
             <li
-              className={`floating-playlist-empty ${internalDropInsertBefore === 0 ? 'is-internal-drop-before' : ''}`}
+              className={`floating-playlist-empty${playlistEmptyDropCueClasses(internalDropInsertBefore)}`}
             >
               Nessun file. Apri una cartella, usa Aggiungi o trascina file qui.
             </li>
@@ -3210,7 +3673,7 @@ export default function FloatingPlaylist({
                 draggable
                 onDragStart={(ev) => onPlaylistRowDragStart(i, ev)}
                 onDragEnd={onPlaylistRowDragEnd}
-                className={`floating-playlist-item ${playlistRowDragSourceIndex === i ? 'is-dragging-source' : ''} ${internalDropInsertBefore === i ? 'is-internal-drop-before' : ''} ${internalDropInsertBefore === paths.length && i === paths.length - 1 ? 'is-internal-drop-after' : ''}`}
+                className={`floating-playlist-item${playlistRowDragSourceIndex === i ? ' is-dragging-source' : ''}${playlistDropCueClasses(internalDropInsertBefore, i, paths.length, playlistGridCols)}`}
               >
                 <button
                   type="button"
@@ -3228,10 +3691,20 @@ export default function FloatingPlaylist({
                     }
                     void loadIndexAndPlay(i, sessionId)
                   }}
-                  title={`${p} — clic per riprodurre · trascina la riga per spostarla (anche in altro pannello) · frecce sulla lista`}
+                  onContextMenu={(e) => onPlaylistRowContextMenu(i, e)}
+                  title={`${p} — clic per riprodurre · tasto destro «prossimo» · trascina la riga · frecce sulla lista`}
                 >
                   <span className="playlist-index">{i + 1}</span>
                   <span className="playlist-name">{name}</span>
+                  {playbackArmedNext?.sessionId === sessionId &&
+                  playbackArmedNext.index === i ? (
+                    <span
+                      className="playlist-armed-badge"
+                      title="Pronto: sarà caricato al prossimo avanzamento (decode in anteprima)"
+                    >
+                      Pronto
+                    </span>
+                  ) : null}
                   <span
                     className="playlist-duration"
                     title="Durata del file"
@@ -3267,6 +3740,59 @@ export default function FloatingPlaylist({
             )
           })}
           </ul>
+          {playlistTrackCtxSlot != null ? (
+            <div
+              className="playlist-track-ctx-layer"
+              role="presentation"
+              onMouseDown={(ev) => {
+                if (ev.button !== 0) return
+                const t = ev.target
+                if (
+                  t instanceof Node &&
+                  playlistTrackCtxMenuRef.current?.contains(t)
+                )
+                  return
+                setPlaylistTrackCtxSlot(null)
+              }}
+            >
+              <div
+                ref={playlistTrackCtxMenuRef}
+                className="playlist-track-ctx-menu"
+                role="menu"
+                aria-label={`Opzioni brano ${playlistTrackCtxSlot + 1}`}
+                onMouseDown={(ev) => ev.stopPropagation()}
+              >
+                <div className="playlist-track-ctx-menu-title">
+                  Brano {playlistTrackCtxSlot + 1}
+                </div>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="playlist-track-ctx-menu-item"
+                  onClick={() => {
+                    armPlayNext(sessionId, playlistTrackCtxSlot)
+                    setPlaylistTrackCtxSlot(null)
+                  }}
+                >
+                  Riproduci come prossimo
+                </button>
+                {playbackArmedNext?.sessionId === sessionId &&
+                playbackArmedNext.index === playlistTrackCtxSlot ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="playlist-track-ctx-menu-item playlist-track-ctx-menu-item--muted"
+                    onClick={() => {
+                      clearPlaybackArmedNext()
+                      setPlaylistTrackCtxSlot(null)
+                    }}
+                  >
+                    Annulla «prossimo»
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </div>

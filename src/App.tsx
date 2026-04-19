@@ -9,7 +9,8 @@ import {
 } from 'react'
 import FloatingPlaylist from './components/FloatingPlaylist.tsx'
 import FloatingPreview from './components/FloatingPreview.tsx'
-import PreviewBlock from './components/PreviewBlock.tsx'
+import PlaybackArmedPrewarmer from './components/PlaybackArmedPrewarmer.tsx'
+import PreviewProgramNextLayout from './components/PreviewProgramNextLayout.tsx'
 import PlanciaWorkspaceBanner from './components/PlanciaWorkspaceBanner.tsx'
 import SidebarTabsPanel from './components/SidebarTabsPanel.tsx'
 import DraggableAudioOutputBar from './components/DraggableAudioOutputBar.tsx'
@@ -227,8 +228,11 @@ function RegiaShell() {
         </aside>
         <div className="regia-main-content">
           {!previewDetached ? (
-            <section className="preview-panel" aria-label="Anteprima">
-              <PreviewBlock />
+            <section
+              className="preview-bus-section"
+              aria-label="Anteprima program e coda successiva"
+            >
+              <PreviewProgramNextLayout />
             </section>
           ) : (
             <section
@@ -281,6 +285,7 @@ export default function App() {
   return (
     <ElectronGate>
       <RegiaProvider>
+        <PlaybackArmedPrewarmer />
         <RegiaShell />
       </RegiaProvider>
     </ElectronGate>

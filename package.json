@@ -2,16 +2,16 @@
   "name": "regia-video",
   "description": "REGIA MUSICPRO — regia video / playlist",
   "private": true,
-  "version": "0.0.9",
+  "version": "0.0.10",
   "regiaProgramCreatedOn": "2026-04-18",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "author": "Regia Video",
   "scripts": {
-    "build:electron": "tsc -p tsconfig.electron.json && mv dist-electron/main.js dist-electron/main.cjs && mv dist-electron/preload.js dist-electron/preload.cjs",
+    "build:electron": "tsc -p tsconfig.electron.json && node scripts/electron-dist-postbuild.mjs",
     "predev": "npm run build:electron",
     "dev": "concurrently -k \"vite\" \"npm run dev:electron-watch\" \"wait-on dist-electron/dev-server-url.txt dist-electron/main.cjs && electron .\"",
-    "dev:electron-watch": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
+    "dev:electron-watch": "node scripts/tsc-electron-dev-watch.mjs",
     "dev:vite": "vite",
     "build": "tsc -b && vite build && npm run build:electron",
     "gen:launchpad-base": "node scripts/gen-launchpad-base-wavs.mjs",
@@ -28,15 +28,20 @@
     "git:commit:release-win": "bash scripts/git-commit-and-win-build.sh"
   },
   "dependencies": {
+    "bonjour": "^3.5.1",
     "electron-updater": "^6.8.3",
+    "qrcode": "^1.5.4",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@types/node": "^24.12.2",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",

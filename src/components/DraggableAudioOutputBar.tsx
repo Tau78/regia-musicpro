@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import AudioOutputBar from './AudioOutputBar.tsx'
+import LogicClockStrip from './LogicClockStrip.tsx'
 import LogicPreviewScreenStrip from './LogicPreviewScreenStrip.tsx'
 import LogicSecondaryStrip from './LogicSecondaryStrip.tsx'
 import LogicTransportStrip from './LogicTransportStrip.tsx'
@@ -169,6 +170,8 @@ export default function DraggableAudioOutputBar() {
         <LogicSecondaryStrip />
         <span className="logic-bar-divider" aria-hidden />
         <LogicPreviewScreenStrip />
+        <span className="logic-bar-divider" aria-hidden />
+        <LogicClockStrip />
         <span className="logic-bar-divider" aria-hidden />
         <div className="regia-audio-dock-audio">
           <AudioOutputBar variant="inline" />

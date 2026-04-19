@@ -120,6 +120,44 @@ function IconSidebarLaunchpadColors() {
   )
 }
 
+/** Lavagna / gesso. */
+function IconSidebarChalkboard() {
+  return (
+    <svg
+      className="regia-sidebar-primary-svg"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+    >
+      <rect
+        x="3"
+        y="4"
+        width="18"
+        height="14"
+        rx="2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+      <path
+        d="M7 18h10"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+      />
+      <path
+        d="M8 9c1.5 2 3 2 4.5 0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 /** Griglia launchpad + badge “pronto” (kit precaricato da cartella). */
 function IconSidebarLaunchpadSfx() {
   return (
@@ -152,6 +190,7 @@ export default function SidebarTabsPanel() {
   const {
     addFloatingPlaylist,
     addFloatingLaunchPad,
+    addFloatingChalkboard,
     openFloatingPlaylist,
     createNewNamedWorkspace,
   } = useRegia()
@@ -168,7 +207,7 @@ export default function SidebarTabsPanel() {
     const onApplied = (e: Event) => {
       const ce = e as CustomEvent<SidebarMainTabPersist>
       const d = ce.detail
-      if (d === 'workspace' || d === 'playlist') setTab(d)
+      if (d === 'workspace' || d === 'playlist' || d === 'chalkboard') setTab(d)
     }
     window.addEventListener(SIDEBAR_MAIN_TAB_EVENT, onApplied)
     return () => window.removeEventListener(SIDEBAR_MAIN_TAB_EVENT, onApplied)
@@ -176,6 +215,7 @@ export default function SidebarTabsPanel() {
 
   const onTabPlaylist = useCallback(() => setTab('playlist'), [])
   const onTabWorkspace = useCallback(() => setTab('workspace'), [])
+  const onTabChalkboard = useCallback(() => setTab('chalkboard'), [])
 
   const onNewPlaylistPanel = useCallback(() => {
     addFloatingPlaylist()
@@ -191,6 +231,11 @@ export default function SidebarTabsPanel() {
     await addFloatingLaunchPad('sfx')
     openFloatingPlaylist()
   }, [addFloatingLaunchPad, openFloatingPlaylist])
+
+  const onNewChalkboard = useCallback(async () => {
+    await addFloatingChalkboard()
+    openFloatingPlaylist()
+  }, [addFloatingChalkboard, openFloatingPlaylist])
 
   const onNewWorkspace = useCallback(() => {
     createNewNamedWorkspace()
@@ -224,6 +269,17 @@ export default function SidebarTabsPanel() {
           onClick={onTabWorkspace}
         >
           WORKSPACE
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-chalkboard"
+          aria-selected={tab === 'chalkboard'}
+          aria-controls="panel-chalkboard"
+          className={`regia-sidebar-tab ${tab === 'chalkboard' ? 'is-active' : ''}`}
+          onClick={onTabChalkboard}
+        >
+          CHALKBOARD
         </button>
       </div>
       <div
@@ -268,7 +324,7 @@ export default function SidebarTabsPanel() {
                 <IconSidebarLaunchpadSfx />
               </button>
             </div>
-            <SavedPlaylistsPanel listOnly />
+            <SavedPlaylistsPanel listOnly listFilter="exclude-chalkboard" />
           </>
         ) : null}
       </div>
@@ -297,6 +353,34 @@ export default function SidebarTabsPanel() {
               </button>
             </div>
             <WorkspacePresetsPanel />
+          </>
+        ) : null}
+      </div>
+      <div
+        id="panel-chalkboard"
+        role="tabpanel"
+        aria-labelledby="tab-chalkboard"
+        hidden={tab !== 'chalkboard'}
+        className="regia-sidebar-tab-panel"
+      >
+        {tab === 'chalkboard' ? (
+          <>
+            <div
+              className="saved-playlists-new-row regia-sidebar-new-pair-row regia-sidebar-chalkboard-new-row"
+              role="group"
+              aria-label="Nuova chalkboard"
+            >
+              <button
+                type="button"
+                className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-chalkboard"
+                onClick={onNewChalkboard}
+                title="Nuova Chalkboard Vuota"
+                aria-label="Nuova Chalkboard Vuota"
+              >
+                <IconSidebarChalkboard />
+              </button>
+            </div>
+            <SavedPlaylistsPanel listOnly listFilter="chalkboard-only" />
           </>
         ) : null}
       </div>

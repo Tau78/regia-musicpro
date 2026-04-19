@@ -18,7 +18,137 @@ export const LAUNCHPAD_BANK_COUNT = 4 as const
 /** Dopo questa durata su pad o tasto assegnato parte il CUE (solo fino al rilascio). */
 export const LAUNCHPAD_CUE_HOLD_MS = 380
 
-export type PlaylistMode = 'tracks' | 'launchpad'
+export type PlaylistMode = 'tracks' | 'launchpad' | 'chalkboard'
+
+/** Stesso conteggio delle pagine Launchpad (4 banchi lavagna). */
+export const CHALKBOARD_BANK_COUNT = LAUNCHPAD_BANK_COUNT
+
+/** Sfondo lavagna predefinito (ardesia scura). */
+export const CHALKBOARD_DEFAULT_BG = '#2d3436'
+
+export function normalizeChalkboardBackgroundHex(raw: unknown): string {
+  if (typeof raw !== 'string') return CHALKBOARD_DEFAULT_BG
+  const t = raw.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(t)) return t.toLowerCase()
+  return CHALKBOARD_DEFAULT_BG
+}
+
+/** Uscita video lavagna: spenta, solo tratto/immagini su PGM, oppure strato pieno con sfondo. */
+export type ChalkboardOutputMode = 'off' | 'transparent' | 'solid'
+
+export function normalizeChalkboardOutputMode(
+  raw: unknown,
+  legacyOutputToProgram?: unknown,
+): ChalkboardOutputMode {
+  if (raw === 'transparent' || raw === 'solid' || raw === 'off') return raw
+  if (legacyOutputToProgram === true) return 'solid'
+  return 'off'
+}
+
+/** Immagine inserita sulla lavagna (coordinate spazio uscita, px). */
+export type ChalkboardPlacedImage = {
+  id: string
+  path: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** Path PNG solo tratto/testo (senza immagini mobili), accanto a `bank-n.png` composito. */
+export function chalkboardDrawPathFromCompositePath(compositeAbs: string): string {
+  return compositeAbs.replace(/\.png$/i, '-draw.png')
+}
+
+export function emptyChalkboardPlacementsByBank(): ChalkboardPlacedImage[][] {
+  return Array.from({ length: CHALKBOARD_BANK_COUNT }, () => [])
+}
+
+export function cloneChalkboardPlacementsByBank(
+  src?: ChalkboardPlacedImage[][] | null,
+): ChalkboardPlacedImage[][] {
+  const base = emptyChalkboardPlacementsByBank()
+  if (!src || !Array.isArray(src)) return base
+  for (let bi = 0; bi < CHALKBOARD_BANK_COUNT; bi++) {
+    const row = src[bi]
+    if (!Array.isArray(row)) continue
+    base[bi] = row.map((im) => ({ ...im }))
+  }
+  return base
+}
+
+export function normalizeChalkboardPlacementsFromDisk(
+  raw: unknown,
+): ChalkboardPlacedImage[][] {
+  const out = emptyChalkboardPlacementsByBank()
+  if (!Array.isArray(raw)) return out
+  for (let bi = 0; bi < CHALKBOARD_BANK_COUNT; bi++) {
+    const row = raw[bi]
+    if (!Array.isArray(row)) continue
+    for (const it of row) {
+      if (!it || typeof it !== 'object') continue
+      const o = it as Record<string, unknown>
+      const id = typeof o.id === 'string' ? o.id.trim() : ''
+      const p = typeof o.path === 'string' ? o.path.trim() : ''
+      const x = Number(o.x)
+      const y = Number(o.y)
+      const w = Number(o.w)
+      const h = Number(o.h)
+      if (
+        !id ||
+        !p ||
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(w) ||
+        !Number.isFinite(h) ||
+        w < 8 ||
+        h < 8
+      )
+        continue
+      out[bi]!.push({
+        id,
+        path: p,
+        x,
+        y,
+        w,
+        h,
+      })
+    }
+  }
+  return out
+}
+
+export function chalkboardPlacementsEqual(
+  a: ChalkboardPlacedImage[][] | undefined | null,
+  b: ChalkboardPlacedImage[][] | undefined | null,
+): boolean {
+  const na = a ?? emptyChalkboardPlacementsByBank()
+  const nb = b ?? emptyChalkboardPlacementsByBank()
+  for (let bi = 0; bi < CHALKBOARD_BANK_COUNT; bi++) {
+    const ra = na[bi] ?? []
+    const rb = nb[bi] ?? []
+    if (ra.length !== rb.length) return false
+    for (let i = 0; i < ra.length; i++) {
+      const x = ra[i]!
+      const y = rb[i]!
+      if (
+        x.id !== y.id ||
+        x.path !== y.path ||
+        x.x !== y.x ||
+        x.y !== y.y ||
+        x.w !== y.w ||
+        x.h !== y.h
+      )
+        return false
+    }
+  }
+  return true
+}
+
+/** Playlist con file media in elenco (esclude launchpad e chalkboard). */
+export function isTracksPlaylistMode(m?: PlaylistMode): boolean {
+  return m !== 'launchpad' && m !== 'chalkboard'
+}
 
 /** Comportamento del tasto assegnato (solo tastiera). */
 export type LaunchPadKeyMode = 'play' | 'toggle'
@@ -149,6 +279,25 @@ export type FloatingPlaylistSession = {
   savedEditThemeColorBaseline: string
   /** Copia slot launchpad all’ultimo «Carica» (solo se collegato a salvataggio launchpad). */
   savedEditLaunchPadBaseline: LaunchPadCell[] | null
+  /** Indice banco 0…`CHALKBOARD_BANK_COUNT`-1 (solo chalkboard). */
+  chalkboardBankIndex?: number
+  /** 4 path PNG su disco (solo chalkboard). */
+  chalkboardBankPaths?: string[]
+  /** Incrementato a ogni modifica disegno/testo/immagine (dirty vs baseline). */
+  chalkboardContentRev?: number
+  /** Come la lavagna viene inviata alla finestra Uscita (Schermo 2). */
+  chalkboardOutputMode?: ChalkboardOutputMode
+  /** Lavagna a tutto schermo (solo UI; pos/dimensioni precedenti ripristinate all’uscita). */
+  chalkboardFullscreen?: boolean
+  /** Colore di sfondo lavagna (#rrggbb). */
+  chalkboardBackgroundColor?: string
+  /** Per ogni banco: immagini inserite (spostabili; i trattoni restano sul canvas / file -draw). */
+  chalkboardPlacementsByBank?: ChalkboardPlacedImage[][]
+  /** Path PNG all’ultimo salvataggio / caricamento (solo chalkboard collegata a disco). */
+  savedEditChalkboardPathsBaseline?: string[] | null
+  savedEditChalkboardContentRevBaseline?: number
+  savedEditChalkboardPlacementsBaseline?: ChalkboardPlacedImage[][] | null
+  savedEditChalkboardBackgroundBaseline?: string
   /**
    * Se true, la finestra principale Regia resta «sempre in primo piano» rispetto alle altre app
    * (Electron). Opzionale: assente = off.
@@ -187,6 +336,36 @@ export function createEmptyFloatingSession(
 const LAUNCHPAD_PANEL_SIZE: FloatingPlaylistPanelSize = {
   width: 348,
   height: 448,
+}
+
+/** Pannello più largo dell’elenco brani: serve spazio per area lavagna proporzionata all’uscita. */
+const CHALKBOARD_PANEL_SIZE: FloatingPlaylistPanelSize = {
+  width: 560,
+  height: 520,
+}
+
+export function createChalkboardFloatingSession(
+  pos?: FloatingPlaylistPos,
+): FloatingPlaylistSession {
+  const base = createEmptyFloatingSession(pos)
+  return {
+    ...base,
+    playlistMode: 'chalkboard',
+    paths: [],
+    currentIndex: 0,
+    playlistTitle: 'Chalkboard',
+    panelSize: { ...CHALKBOARD_PANEL_SIZE },
+    chalkboardBankIndex: 0,
+    chalkboardBankPaths: [],
+    chalkboardContentRev: 0,
+    chalkboardBackgroundColor: CHALKBOARD_DEFAULT_BG,
+    chalkboardPlacementsByBank: emptyChalkboardPlacementsByBank(),
+    savedEditChalkboardPathsBaseline: null,
+    savedEditChalkboardContentRevBaseline: undefined,
+    savedEditChalkboardPlacementsBaseline: null,
+    savedEditChalkboardBackgroundBaseline: CHALKBOARD_DEFAULT_BG,
+    chalkboardFullscreen: false,
+  }
 }
 
 export function createLaunchPadFloatingSession(
@@ -260,7 +439,47 @@ export function cloneFloatingSession(
     savedEditLaunchPadBaseline: s.savedEditLaunchPadBaseline
       ? s.savedEditLaunchPadBaseline.map((c) => ({ ...c }))
       : null,
+    chalkboardBankPaths: s.chalkboardBankPaths
+      ? [...s.chalkboardBankPaths]
+      : undefined,
+    chalkboardBankIndex: s.chalkboardBankIndex,
+    chalkboardContentRev: s.chalkboardContentRev,
+    chalkboardOutputMode: normalizeChalkboardOutputMode(
+      s.chalkboardOutputMode,
+      (s as { chalkboardOutputToProgram?: boolean }).chalkboardOutputToProgram,
+    ),
+    chalkboardBackgroundColor: normalizeChalkboardBackgroundHex(
+      s.chalkboardBackgroundColor,
+    ),
+    chalkboardPlacementsByBank: cloneChalkboardPlacementsByBank(
+      s.chalkboardPlacementsByBank,
+    ),
+    savedEditChalkboardPathsBaseline: s.savedEditChalkboardPathsBaseline
+      ? [...s.savedEditChalkboardPathsBaseline]
+      : null,
+    savedEditChalkboardContentRevBaseline: s.savedEditChalkboardContentRevBaseline,
+    savedEditChalkboardPlacementsBaseline:
+      s.savedEditChalkboardPlacementsBaseline === null
+        ? null
+        : cloneChalkboardPlacementsByBank(s.savedEditChalkboardPlacementsBaseline),
+    savedEditChalkboardBackgroundBaseline:
+      s.savedEditChalkboardBackgroundBaseline !== undefined
+        ? normalizeChalkboardBackgroundHex(s.savedEditChalkboardBackgroundBaseline)
+        : undefined,
   }
+}
+
+export function chalkboardPathsEqual(
+  a: string[] | undefined,
+  b: string[] | undefined,
+): boolean {
+  const na = a ?? []
+  const nb = b ?? []
+  if (na.length !== nb.length) return false
+  for (let i = 0; i < na.length; i++) {
+    if (na[i] !== nb[i]) return false
+  }
+  return true
 }
 
 /** Copia profonda celle per snapshot / salvataggio. */
