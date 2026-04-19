@@ -22,7 +22,8 @@ const LS_OUTPUT_SINK = 'regia-output-sink-id'
 export const REGIA_LS_CUE_SINK_KEY = 'regia-cue-sink-id'
 const LS_SIDEBAR_MAIN_TAB = 'regia-sidebar-main-tab'
 
-export type SidebarMainTabPersist = 'playlist' | 'workspace' | 'chalkboard'
+/** Storico: workspace/chalkboard erano tab sidebar; oggi si normalizza a playlist. */
+export type SidebarMainTabPersist = 'playlist'
 
 export type WorkspaceLoopModePersist = 'off' | 'one' | 'all'
 
@@ -95,14 +96,7 @@ function readCueSinkLs(): string {
 }
 
 export function readSidebarMainTabFromLs(): SidebarMainTabPersist {
-  try {
-    const v = localStorage.getItem(LS_SIDEBAR_MAIN_TAB)
-    if (v === 'workspace') return 'workspace'
-    if (v === 'chalkboard') return 'chalkboard'
-    return 'playlist'
-  } catch {
-    return 'playlist'
-  }
+  return 'playlist'
 }
 
 export function persistSidebarMainTab(tab: SidebarMainTabPersist): void {
@@ -200,12 +194,7 @@ export function parseWorkspaceShell(raw: unknown): WorkspaceShellPersist | null 
     cueSinkId:
       typeof s.cueSinkId === 'string' ? s.cueSinkId : readCueSinkLs(),
     secondScreenOn: Boolean(s.secondScreenOn),
-    sidebarMainTab:
-      s.sidebarMainTab === 'workspace'
-        ? 'workspace'
-        : s.sidebarMainTab === 'chalkboard'
-          ? 'chalkboard'
-          : 'playlist',
+    sidebarMainTab: 'playlist',
   }
 }
 

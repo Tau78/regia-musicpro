@@ -717,17 +717,11 @@ export default function ChalkboardPanel({
         dataUrl: compositeUrl,
       })
       if (gen !== chalkboardOutputPushGenRef.current) return
-      let srcUrl = scratch
-      try {
-        srcUrl = await window.electronAPI.toFileUrl(scratch)
-      } catch {
-        /* fallback: main normalizza anche path assoluto */
-      }
-      if (gen !== chalkboardOutputPushGenRef.current) return
+      /* Path assoluto: `playback:send` in main applica `pathToMediaUrl` come per `load`. */
       void window.electronAPI.sendPlayback({
         type: 'chalkboardLayer',
         visible: true,
-        src: srcUrl,
+        src: scratch,
         composite: mode === 'transparent' ? 'transparent' : 'solid',
       })
     },

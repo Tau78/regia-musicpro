@@ -1221,7 +1221,24 @@ function createOutputWindow(): BrowserWindow {
 
 function forwardToOutput(cmd: PlaybackCommand) {
   if (!outputWindow || outputWindow.isDestroyed()) return
-  outputWindow.webContents.send('playback:command', cmd)
+  const wc = outputWindow.webContents
+  const deliver = () => {
+    try {
+      wc.send('playback:command', cmd)
+    } catch {
+      /* finestra in chiusura */
+    }
+  }
+  /**
+   * Se la pagina Output non ha ancora finito il primo load, `send` può andare perso:
+   * accodiamo a `did-finish-load` (stesso problema per lavagna inviata prima che il preload
+   * abbia registrato `onPlaybackCommand`).
+   */
+  if (wc.isLoading()) {
+    wc.once('did-finish-load', deliver)
+    return
+  }
+  deliver()
 }
 
 function flushLastChalkboardLayerToOutput() {
@@ -1249,7 +1266,10 @@ function setOutputPresentationVisible(visible: boolean): void {
     outputWindow.show()
     outputWindow.setFullScreen(false)
     /* Dopo show: riallinea tappo (race con caricamento regia / disco). */
-    setImmediate(() => forwardOutputIdleCapFromDiskToOutput())
+    setImmediate(() => {
+      forwardOutputIdleCapFromDiskToOutput()
+      flushLastChalkboardLayerToOutput()
+    })
   } else {
     /* Non inviare pause: la regia comanda play/pause; con finestra nascosta
      * l’audio deve poter continuare (anteprima attiva, Schermo 2 off). */
@@ -1924,13 +1944,15 @@ function setupAutoUpdater(): void {
   })
 
   autoUpdater.on('update-downloaded', (info) => {
+    // NSIS: `true` = `/S` (nessuna procedura guidata in aggiornamento); `true` = `--force-run` riapre l'app.
+    // Può restare un solo prompt UAC di Windows se serve elevazione (non controllabile dall'app).
     const opts = {
       type: 'info' as const,
       title: 'Aggiornamento',
-      message: `È disponibile la versione ${info.version}.`,
+      message: `È pronta la versione ${info.version}.`,
       detail:
-        "L'applicazione si riavvierà per installare l'aggiornamento.",
-      buttons: ['Riavvia ora'],
+        "L'app si chiude, l'installazione avviene in secondo piano e si riapre da sola. Se compare il consenso di Windows (UAC), confermalo una volta.",
+      buttons: ['Installa e riapri'],
       defaultId: 0,
     }
     const owner =
@@ -1943,7 +1965,7 @@ function setupAutoUpdater(): void {
         : dialog.showMessageBox(opts)
     void finished.then(() => {
       setImmediate(() => {
-        autoUpdater.quitAndInstall(false, true)
+        autoUpdater.quitAndInstall(true, true)
       })
     })
   })

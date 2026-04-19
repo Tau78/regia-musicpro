@@ -34,6 +34,7 @@ win:
       arch: [x64]
   artifactName: '${productName}-Setup-${version}.${ext}'
 
+# In aggiornamento, electron-updater avvia l'installer con `/S` + `--updated`: pagine guidate saltate (anche con oneClick: false).
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

@@ -246,18 +246,29 @@ function IconLaunchPadSfx() {
   )
 }
 
-export type SavedPlaylistsListFilter =
-  | 'all'
-  /** Solo brani + launchpad (tab Playlist sidebar). */
-  | 'exclude-chalkboard'
-  /** Solo lavagne salvate (tab Chalkboard sidebar). */
-  | 'chalkboard-only'
+/** Tipi di pannello salvato per filtri sidebar (playlist a brani). */
+export type SidebarCardKindFilter = 'tracks' | 'launchpad' | 'chalkboard'
 
 type SavedPlaylistsPanelProps = {
   /** Solo elenco playlist su disco (pulsanti nuovo pannello gestiti fuori). */
   listOnly?: boolean
-  /** Filtro voci elenco (sidebar con più tab). */
-  listFilter?: SavedPlaylistsListFilter
+  /**
+   * Filtro per tipo di card: `undefined` o array vuoto = mostra tutto.
+   * Con uno o più valori, solo i tipi selezionati.
+   */
+  kindFilters?: readonly SidebarCardKindFilter[] | null
+}
+
+function mergeFilteredReorder(
+  fullIds: string[],
+  displayedIds: string[],
+  from: number,
+  to: number,
+): string[] {
+  const nextDisplayed = reorderSavedIds([...displayedIds], from, to)
+  const subSet = new Set(nextDisplayed)
+  let i = 0
+  return fullIds.map((id) => (subSet.has(id) ? nextDisplayed[i++]! : id))
 }
 
 function reorderSavedIds(ids: string[], from: number, to: number): string[] {
@@ -284,9 +295,18 @@ function setTransparentDragImage(ev: DragEvent) {
   ev.dataTransfer.setDragImage(c, 0, 0)
 }
 
+function playlistMatchesKindFilters(
+  playlistMode: 'tracks' | 'launchpad' | 'chalkboard',
+  filters: ReadonlySet<SidebarCardKindFilter>,
+): boolean {
+  if (playlistMode === 'launchpad') return filters.has('launchpad')
+  if (playlistMode === 'chalkboard') return filters.has('chalkboard')
+  return filters.has('tracks')
+}
+
 export default function SavedPlaylistsPanel({
   listOnly = false,
-  listFilter = 'all',
+  kindFilters = null,
 }: SavedPlaylistsPanelProps) {
   const {
     savedPlaylists,
@@ -305,15 +325,19 @@ export default function SavedPlaylistsPanel({
     void refreshSavedPlaylists()
   }, [refreshSavedPlaylists])
 
+  const filterSet = useMemo(() => {
+    if (!kindFilters?.length) return null
+    return new Set(kindFilters)
+  }, [kindFilters])
+
   const displayedPlaylists = useMemo(() => {
-    if (listFilter === 'chalkboard-only') {
-      return savedPlaylists.filter((p) => p.playlistMode === 'chalkboard')
-    }
-    if (listFilter === 'exclude-chalkboard') {
-      return savedPlaylists.filter((p) => p.playlistMode !== 'chalkboard')
-    }
-    return savedPlaylists
-  }, [savedPlaylists, listFilter])
+    if (!filterSet) return savedPlaylists
+    return savedPlaylists.filter((p) =>
+      playlistMatchesKindFilters(p.playlistMode, filterSet),
+    )
+  }, [savedPlaylists, filterSet])
+
+  const isFilteredView = Boolean(filterSet)
 
   const needsBackfillKey = useMemo(() => {
     const ids = savedPlaylists
@@ -396,19 +420,32 @@ export default function SavedPlaylistsPanel({
         clearDragUi()
         return
       }
-      const ids = savedPlaylists.map((p) => p.id)
-      const next = reorderSavedIds(ids, from, toIndex)
-      const changed = next.some((id, i) => id !== ids[i])
+      const fullIds = savedPlaylists.map((p) => p.id)
+      const displayedIds = displayedPlaylists.map((p) => p.id)
+      const next = isFilteredView
+        ? mergeFilteredReorder(fullIds, displayedIds, from, toIndex)
+        : reorderSavedIds(fullIds, from, toIndex)
+      const changed = next.some((id, i) => id !== fullIds[i])
       clearDragUi()
       if (changed) void reorderSavedPlaylists(next)
     },
-    [savedPlaylists, reorderSavedPlaylists, clearDragUi],
+    [
+      savedPlaylists,
+      displayedPlaylists,
+      isFilteredView,
+      reorderSavedPlaylists,
+      clearDragUi,
+    ],
   )
 
-  const listAriaLabel =
-    listFilter === 'chalkboard-only'
-      ? 'Chalkboard salvate'
-      : 'Playlist e launchpad salvati'
+  const listAriaLabel = (() => {
+    if (!filterSet) return 'Playlist, launchpad e chalkboard salvati'
+    const bits: string[] = []
+    if (filterSet.has('tracks')) bits.push('playlist')
+    if (filterSet.has('launchpad')) bits.push('launchpad')
+    if (filterSet.has('chalkboard')) bits.push('chalkboard')
+    return `Salvati: ${bits.join(', ')}`
+  })()
 
   return (
     <section className="saved-playlists" aria-label={listAriaLabel}>
@@ -476,20 +513,16 @@ export default function SavedPlaylistsPanel({
       ) : null}
       {displayedPlaylists.length === 0 ? (
         <p className="saved-playlists-empty">
-          {listFilter === 'chalkboard-only'
-            ? 'Nessuna chalkboard salvata.'
-            : listFilter === 'exclude-chalkboard'
-              ? 'Non ci sono playlist o launchpad salvati.'
-              : 'Nessuna playlist salvata.'}
+          {filterSet
+            ? 'Nessun elemento salvato per i filtri attivi.'
+            : 'Nessun pannello salvato.'}
         </p>
       ) : (
         <ul className="saved-playlists-list">
           {displayedPlaylists.map((pl, index) => (
             <li
               key={pl.id}
-              draggable={
-                listFilter === 'all' && displayedPlaylists.length > 1
-              }
+              draggable={displayedPlaylists.length > 1}
               title="Doppio clic per aprire. Trascina per riordinare."
               className={[
                 'saved-playlists-item',
