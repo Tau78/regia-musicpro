@@ -20,12 +20,14 @@ export type PlaybackCommand =
   /**
    * Layer immagine sopra il video in uscita (Chalkboard).
    * `composite`: `transparent` = PNG con alpha, sfondo lavagna non inviato (sotto si vede PGM o tappo).
+   * `boardBackgroundColor`: con `solid`, colore dietro l’immagine (evita «buchi» alpha letti come nero).
    */
   | {
       type: 'chalkboardLayer'
       visible: boolean
       src?: string
       composite?: 'solid' | 'transparent'
+      boardBackgroundColor?: string
     }
   /**
    * Sfondo «tappo» quando non c’è nulla in onda (nessun media sui due slot né lavagna visibile).

@@ -4702,6 +4702,66 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             finish(true)
             return
           }
+          if (
+            type === 'chalkboardBankToOutput' &&
+            typeof p.savedId === 'string' &&
+            typeof p.bankIndex === 'number'
+          ) {
+            const bankIndex = Math.max(0, Math.min(3, Math.floor(p.bankIndex)))
+            let sid = floatingSessionsRef.current.find(
+              (s) => s.editingSavedPlaylistId === p.savedId,
+            )?.id
+            if (!sid) {
+              const nid = await loadSavedPlaylist(p.savedId)
+              if (!nid) {
+                finish(false, 'load_failed')
+                return
+              }
+              sid = nid
+            } else {
+              setActiveFloatingSession(sid)
+              setPlaybackSessionId(sid)
+              activeFloatingSessionIdRef.current = sid
+              playbackSessionIdStateRef.current = sid
+            }
+            const data = await window.electronAPI.playlistsLoad(p.savedId)
+            if (data?.playlistMode !== 'chalkboard') {
+              finish(false, 'not_chalkboard')
+              return
+            }
+            const paths = data.chalkboardBankPaths
+            if (!Array.isArray(paths) || bankIndex >= paths.length) {
+              finish(false, 'no_bank')
+              return
+            }
+            const absPath = paths[bankIndex]
+            if (typeof absPath !== 'string' || !absPath.trim()) {
+              finish(false, 'no_bank_path')
+              return
+            }
+            patchFloatingSession(sid, { chalkboardBankIndex: bankIndex })
+            const composite =
+              p.composite === 'solid' ? ('solid' as const) : ('transparent' as const)
+            const boardBg = normalizeChalkboardBackgroundHex(
+              data.chalkboardBackgroundColor,
+            )
+            await send({
+              type: 'chalkboardLayer',
+              visible: true,
+              src: absPath,
+              composite,
+              ...(composite === 'solid'
+                ? { boardBackgroundColor: boardBg }
+                : {}),
+            })
+            finish(true)
+            return
+          }
+          if (type === 'chalkboardHide') {
+            await send({ type: 'chalkboardLayer', visible: false })
+            finish(true)
+            return
+          }
           if (type === 'transport') {
             const a = p.action
             if (a === 'togglePlay') void togglePlay()
@@ -4752,6 +4812,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     undo,
     setPlaylistLoopMode,
     setLoopMode,
+    patchFloatingSession,
+    send,
   ])
 
   useEffect(() => {

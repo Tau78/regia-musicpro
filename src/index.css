@@ -1391,40 +1391,58 @@ button {
   display: flex;
   flex-shrink: 0;
   flex-wrap: nowrap;
-  gap: 0.22rem;
-  padding: 0.15rem;
-  border-radius: 9px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
+  gap: 0.38rem;
+  padding: 0;
+  background: transparent;
+  border: none;
 }
 
 .regia-sidebar-filter-chip {
   flex: 1 1 0;
   min-width: 0;
-  padding: 0.36rem 0.18rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.35rem;
+  padding: 0.28rem 0.32rem;
   font-size: 0.62rem;
   font-weight: 600;
   letter-spacing: 0.02em;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
+  line-height: 1.12;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
   color: var(--muted);
   cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.22);
+}
+
+.regia-sidebar-filter-chip-text {
+  display: block;
+  max-width: 100%;
+  text-align: center;
+  overflow-wrap: break-word;
+  hyphens: manual;
 }
 
 .regia-sidebar-filter-chip:hover {
   color: var(--text);
-  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+  border-color: color-mix(in srgb, var(--border) 88%, var(--text));
+  background: color-mix(in srgb, var(--bg-elevated) 88%, var(--text));
+}
+
+.regia-sidebar-filter-chip:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 72%, transparent);
+  outline-offset: 2px;
 }
 
 .regia-sidebar-filter-chip.is-pressed {
   background: var(--bg);
   color: var(--text);
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .regia-sidebar-cards-scroll {

@@ -86,11 +86,11 @@ body {
 
 .remote-tab {
   flex: 1;
-  padding: 14px 10px;
+  padding: 14px 6px;
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   touch-action: manipulation;
@@ -195,6 +195,81 @@ body {
   color: var(--muted);
   font-size: 14px;
   line-height: 1.4;
+}
+
+.remote-chalk-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.remote-chalk-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.remote-chalk-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.remote-chalk-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.remote-chalk-bank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 52px;
+  padding: 8px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.remote-chalk-bank--solid {
+  background: #1e2433;
+  font-size: 13px;
+}
+
+.remote-chalk-bank-sub {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.remote-chalk-bank:active {
+  transform: scale(0.98);
+}
+
+.remote-chalk-hide {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #252a38;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.remote-chalk-hide:active {
+  transform: scale(0.99);
 }
 
 .remote-pad-grid {
@@ -532,6 +607,17 @@ body {
     font-size: 9px;
     padding: 4px;
     border-radius: 8px;
+  }
+
+  .remote-chalk-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .remote-chalk-bank {
+    min-height: 44px;
+    padding: 6px 4px;
+    font-size: 12px;
   }
 
   .remote-transport {

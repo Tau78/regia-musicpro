@@ -16,6 +16,7 @@ export type PlaybackCommand =
       visible: boolean
       src?: string
       composite?: 'solid' | 'transparent'
+      boardBackgroundColor?: string
     }
   | {
       type: 'setOutputIdleCap'

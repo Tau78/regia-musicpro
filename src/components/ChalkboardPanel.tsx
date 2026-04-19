@@ -623,7 +623,11 @@ export default function ChalkboardPanel({
         img.onerror = () => reject(new Error('img'))
         img.src = url
       })
-      ctx.clearRect(0, 0, outW, outH)
+      /* In ON: resetEmpty() ha già riempito lo sfondo — clearRect lascerebbe buchi alpha
+       * (sulla lavagna si vede il wrap; in uscita i buchi si leggono come nero). */
+      if (transp) {
+        ctx.clearRect(0, 0, outW, outH)
+      }
       ctx.globalCompositeOperation = 'source-over'
       ctx.drawImage(img, 0, 0, outW, outH)
     }
@@ -725,6 +729,7 @@ export default function ChalkboardPanel({
         visible: true,
         src: scratch,
         composite: mode === 'transparent' ? 'transparent' : 'solid',
+        ...(mode === 'solid' ? { boardBackgroundColor: bgHex } : {}),
       })
     },
     [resolutionReady, bankPaths, bankIndex, placements, outW, outH, bgHex],
@@ -774,6 +779,20 @@ export default function ChalkboardPanel({
     })()
     outputLivePumpDoneRef.current = p.catch(() => {})
   }, [renderAndSendChalkboardOutputLayer])
+
+  /* Dopo l’aggiornamento di textLiveRef nel layout effect precedente: proietta bozza testo su Schermo 2. */
+  useLayoutEffect(() => {
+    if (!textDraft || outputMode === 'off') return
+    scheduleLiveOutputPush()
+  }, [
+    textDraft,
+    textDraftValue,
+    textFontFamily,
+    textFontSize,
+    color,
+    outputMode,
+    scheduleLiveOutputPush,
+  ])
 
   const bumpRev = useCallback(() => {
     patchSession(sessionId, (s) => ({
@@ -1315,13 +1334,7 @@ export default function ChalkboardPanel({
                   ref={textAreaRef}
                   className="floating-playlist-chalkboard-text-editor"
                   value={textDraftValue}
-                  onChange={(ev) => {
-                    const v = ev.target.value
-                    setTextDraftValue(v)
-                    /* Stesso tick del pump: il layout effect non ha ancora aggiornato textLiveRef. */
-                    textLiveRef.current = { ...textLiveRef.current, textDraftValue: v }
-                    scheduleLiveOutputPush()
-                  }}
+                  onChange={(ev) => setTextDraftValue(ev.target.value)}
                   onKeyDown={(ev) => {
                     if (ev.key === 'Escape') {
                       ev.preventDefault()

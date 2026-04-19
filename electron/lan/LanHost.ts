@@ -424,6 +424,7 @@ export class LanHost {
         return (
           m === 'launchpad' ||
           m === 'tracks' ||
+          m === 'chalkboard' ||
           m === undefined
         )
       })

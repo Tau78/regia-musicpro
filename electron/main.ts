@@ -760,6 +760,18 @@ function getPlaylistPublicDetailForRemote(id: string): unknown | null {
       })),
     }
   }
+  if (pl.playlistMode === 'chalkboard') {
+    return {
+      id: pl.id,
+      label: pl.label,
+      mode: 'chalkboard' as const,
+      themeColor: pl.themeColor || undefined,
+      banks: Array.from({ length: CHALKBOARD_BANK_COUNT }, (_, index) => ({
+        index,
+        label: `Banco ${index + 1}`,
+      })),
+    }
+  }
   return null
 }
 
@@ -1437,11 +1449,17 @@ function setupIpc() {
           : cmd.visible
             ? 'solid'
             : undefined
+      const bg =
+        typeof cmd.boardBackgroundColor === 'string' &&
+        /^#[0-9a-fA-F]{6}$/.test(cmd.boardBackgroundColor.trim())
+          ? cmd.boardBackgroundColor.trim().toLowerCase()
+          : undefined
       const out: Extract<PlaybackCommand, { type: 'chalkboardLayer' }> = {
         type: 'chalkboardLayer',
         visible: cmd.visible,
         src,
         ...(composite ? { composite } : {}),
+        ...(bg ? { boardBackgroundColor: bg } : {}),
       }
       lastChalkboardLayerForOutput = out
       forwardToOutput(out)

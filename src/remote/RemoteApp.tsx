@@ -8,7 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 
-type Tab = 'playlist' | 'launchpad'
+type Tab = 'playlist' | 'launchpad' | 'chalkboard'
 
 type PlaylistItem = {
   id: string
@@ -33,6 +33,14 @@ type LaunchDetail = {
   mode: 'launchpad'
   themeColor?: string
   pads: { index: number; label: string; color: string; hasSample: boolean }[]
+}
+
+type ChalkDetail = {
+  id: string
+  label: string
+  mode: 'chalkboard'
+  themeColor?: string
+  banks: { index: number; label: string }[]
 }
 
 type LoopModeSnap = 'off' | 'one' | 'all'
@@ -210,7 +218,9 @@ export function RemoteApp() {
   const [lists, setLists] = useState<PlaylistItem[]>([])
   const [listErr, setListErr] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [detail, setDetail] = useState<TracksDetail | LaunchDetail | null>(null)
+  const [detail, setDetail] = useState<
+    TracksDetail | LaunchDetail | ChalkDetail | null
+  >(null)
   const [snap, setSnap] = useState<Snapshot | null>(null)
   const [conn, setConn] = useState<Conn>('offline')
   const [pageErr, setPageErr] = useState<string | null>(null)
@@ -274,6 +284,7 @@ export function RemoteApp() {
               return (
                 m === 'launchpad' ||
                 m === 'tracks' ||
+                m === 'chalkboard' ||
                 m === undefined
               )
             }),
@@ -372,7 +383,10 @@ export function RemoteApp() {
         (x) => x.playlistMode !== 'launchpad' && x.playlistMode !== 'chalkboard',
       )
     }
-    return lists.filter((x) => x.playlistMode === 'launchpad')
+    if (tab === 'launchpad') {
+      return lists.filter((x) => x.playlistMode === 'launchpad')
+    }
+    return lists.filter((x) => x.playlistMode === 'chalkboard')
   }, [lists, tab])
 
   useEffect(() => {
@@ -394,7 +408,7 @@ export function RemoteApp() {
         const r = await api(
           `/api/remote/v1/playlists/${encodeURIComponent(selectedId)}`,
         )
-        const j = (await r.json()) as TracksDetail | LaunchDetail
+        const j = (await r.json()) as TracksDetail | LaunchDetail | ChalkDetail
         if (!cancelled) setDetail(j)
       } catch {
         if (!cancelled) {
@@ -502,6 +516,32 @@ export function RemoteApp() {
     }
   }, [sendCommand])
 
+  const onChalkboardBankToOutput = useCallback(
+    async (savedId: string, bankIndex: number, composite: 'solid' | 'transparent') => {
+      setPageErr(null)
+      try {
+        await sendCommand({
+          type: 'chalkboardBankToOutput',
+          savedId,
+          bankIndex,
+          composite,
+        })
+      } catch {
+        setPageErr('Comando lavagna non inviato.')
+      }
+    },
+    [sendCommand],
+  )
+
+  const onChalkboardHide = useCallback(async () => {
+    setPageErr(null)
+    try {
+      await sendCommand({ type: 'chalkboardHide' })
+    } catch {
+      setPageErr('Comando non inviato.')
+    }
+  }, [sendCommand])
+
   if (!token) {
     return (
       <div className="remote-shell">
@@ -551,6 +591,13 @@ export function RemoteApp() {
           >
             Launchpad
           </button>
+          <button
+            type="button"
+            className={`remote-tab ${tab === 'chalkboard' ? 'is-active' : ''}`}
+            onClick={() => setTab('chalkboard')}
+          >
+            Lavagna
+          </button>
         </div>
 
         <div className="remote-main">
@@ -566,13 +613,19 @@ export function RemoteApp() {
           <p className="remote-empty">
             {tab === 'playlist'
               ? 'Nessuna playlist a elenco salvata.'
-              : 'Nessun launchpad salvato.'}
+              : tab === 'launchpad'
+                ? 'Nessun launchpad salvato.'
+                : 'Nessuna lavagna salvata.'}
           </p>
         ) : (
           <>
             <div className="remote-picker">
               <label className="remote-picker-label" htmlFor="remote-pl-sel">
-                {tab === 'playlist' ? 'Scegli playlist' : 'Scegli launchpad'}
+                {tab === 'playlist'
+                  ? 'Scegli playlist'
+                  : tab === 'launchpad'
+                    ? 'Scegli launchpad'
+                    : 'Scegli lavagna'}
               </label>
               <select
                 id="remote-pl-sel"
@@ -588,7 +641,9 @@ export function RemoteApp() {
                     {pl.label.trim() || 'Senza titolo'}
                     {tab === 'playlist'
                       ? ` — ${pl.trackCount} file`
-                      : ` — ${pl.trackCount} pad`}
+                      : tab === 'launchpad'
+                        ? ` — ${pl.trackCount} pad`
+                        : ` — ${pl.trackCount} banchi`}
                   </option>
                 ))}
               </select>
@@ -597,7 +652,11 @@ export function RemoteApp() {
             {detail && selectedId && detail.id === selectedId ? (
               <>
                 <h2 className="remote-section-title">
-                  {detail.mode === 'tracks' ? 'File in playlist' : 'Pad'}
+                  {detail.mode === 'tracks'
+                    ? 'File in playlist'
+                    : detail.mode === 'launchpad'
+                      ? 'Pad'
+                      : 'Banchi'}
                 </h2>
                 {detail.mode === 'tracks' ? (
                   <div className="remote-track-list">
@@ -614,7 +673,7 @@ export function RemoteApp() {
                       </button>
                     ))}
                   </div>
-                ) : (
+                ) : detail.mode === 'launchpad' ? (
                   <div className="remote-pad-grid">
                     {detail.pads.map((p) => (
                       <button
@@ -676,6 +735,54 @@ export function RemoteApp() {
                         {p.label || `Pad ${p.index + 1}`}
                       </button>
                     ))}
+                  </div>
+                ) : (
+                  <div className="remote-chalk-wrap">
+                    <p className="remote-chalk-hint">
+                      Invia in onda il PNG composito salvato per ogni banco. Trasparente =
+                      alpha (vedi il programma sotto); solido = sfondo lavagna opaco.
+                    </p>
+                    <div className="remote-chalk-grid">
+                      {detail.banks.map((b) => (
+                        <div key={b.index} className="remote-chalk-cell">
+                          <button
+                            type="button"
+                            className="remote-chalk-bank"
+                            onClick={() =>
+                              void onChalkboardBankToOutput(
+                                detail.id,
+                                b.index,
+                                'transparent',
+                              )
+                            }
+                          >
+                            {b.label}
+                            <span className="remote-chalk-bank-sub">Trasparente</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="remote-chalk-bank remote-chalk-bank--solid"
+                            onClick={() =>
+                              void onChalkboardBankToOutput(
+                                detail.id,
+                                b.index,
+                                'solid',
+                              )
+                            }
+                          >
+                            {b.label}
+                            <span className="remote-chalk-bank-sub">Solido</span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="remote-chalk-hide"
+                      onClick={() => void onChalkboardHide()}
+                    >
+                      Nascondi lavagna in uscita
+                    </button>
                   </div>
                 )}
               </>

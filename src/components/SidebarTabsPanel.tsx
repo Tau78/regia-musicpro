@@ -213,26 +213,31 @@ function IconSidebarLaunchpadSfx() {
 
 const FILTER_CHIPS: {
   kind: SidebarCardKindFilter
+  /** Testo visibile; `\u00ad` = soft hyphen per andare a capo dentro il pulsante se serve. */
   label: string
   title: string
+  ariaLabel: string
 }[] = [
   {
     kind: 'tracks',
     label: 'PLAYLIST',
     title:
       'Filtra le playlist a brani. Nessun filtro attivo = vedi tutti i tipi.',
+    ariaLabel: 'Filtro playlist a brani',
   },
   {
     kind: 'launchpad',
-    label: 'LAUNCHPAD',
+    label: 'LAUNCH\u00adPAD',
     title:
       'Filtra i launchpad. Nessun filtro attivo = vedi tutti i tipi. Puoi combinare più filtri.',
+    ariaLabel: 'Filtro Launchpad',
   },
   {
     kind: 'chalkboard',
-    label: 'CHALKBOARD',
+    label: 'CHALK\u00adBOARD',
     title:
       'Filtra le chalkboard. Deseleziona tutti i pulsanti per vedere di nuovo tutto.',
+    ariaLabel: 'Filtro Chalkboard',
   },
 ]
 
@@ -295,7 +300,7 @@ export default function SidebarTabsPanel() {
         role="toolbar"
         aria-label="Filtri per tipo di pannello salvato"
       >
-        {FILTER_CHIPS.map(({ kind, label, title }) => {
+        {FILTER_CHIPS.map(({ kind, label, title, ariaLabel }) => {
           const pressed = kindFilters.includes(kind)
           return (
             <button
@@ -303,10 +308,11 @@ export default function SidebarTabsPanel() {
               type="button"
               className={`regia-sidebar-filter-chip ${pressed ? 'is-pressed' : ''}`}
               aria-pressed={pressed}
+              aria-label={ariaLabel}
               title={title}
               onClick={() => toggleKind(kind)}
             >
-              {label}
+              <span className="regia-sidebar-filter-chip-text">{label}</span>
             </button>
           )
         })}

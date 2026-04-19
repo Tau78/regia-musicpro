@@ -100,7 +100,15 @@ export default function OutputApp() {
     bust: number
     /** Allineato a Chalkboard: `transparent` = buchi → PGM o tappo sotto. */
     composite: 'solid' | 'transparent'
-  }>({ visible: false, src: null, bust: 0, composite: 'solid' })
+    /** Con ON/solid: tinta lavagna dietro l’immagine (buchi alpha non diventano neri). */
+    boardBackgroundColor: string | null
+  }>({
+    visible: false,
+    src: null,
+    bust: 0,
+    composite: 'solid',
+    boardBackgroundColor: null,
+  })
 
   const [idleCap, setIdleCap] = useState<OutputIdleCapPersist>(() =>
     readOutputIdleCapFromLs(),
@@ -532,17 +540,25 @@ export default function OutputApp() {
               src: null,
               bust: p.bust,
               composite: 'solid',
+              boardBackgroundColor: null,
             }))
             break
           }
           const s = cmd.src && cmd.src.length > 0 ? cmd.src : null
           const composite =
             cmd.composite === 'transparent' ? 'transparent' : 'solid'
+          const boardBackgroundColor =
+            composite === 'solid' &&
+            typeof cmd.boardBackgroundColor === 'string' &&
+            /^#[0-9a-fA-F]{6}$/i.test(cmd.boardBackgroundColor.trim())
+              ? cmd.boardBackgroundColor.trim().toLowerCase()
+              : null
           setChalkboardLayer((p) => ({
             visible: true,
             src: s,
             bust: p.bust + 1,
             composite,
+            boardBackgroundColor,
           }))
           break
         }
@@ -899,17 +915,6 @@ export default function OutputApp() {
 
   return (
     <div className="output-root">
-      {chalkboardLayer.visible && chalkboardLayer.src ? (
-        <div className="output-chalkboard-layer" aria-hidden>
-          <img
-            key={chalkboardLayer.bust}
-            src={chalkboardLayer.src}
-            alt=""
-            className="output-chalkboard-img"
-            draggable={false}
-          />
-        </div>
-      ) : null}
       <div className="output-stack">
         <div
           className="output-slot"
@@ -964,6 +969,25 @@ export default function OutputApp() {
           ) : null}
         </div>
       </div>
+      {chalkboardLayer.visible && chalkboardLayer.src ? (
+        <div
+          className="output-chalkboard-layer"
+          aria-hidden
+          style={
+            chalkboardLayer.boardBackgroundColor
+              ? { backgroundColor: chalkboardLayer.boardBackgroundColor }
+              : undefined
+          }
+        >
+          <img
+            key={chalkboardLayer.bust}
+            src={chalkboardLayer.src}
+            alt=""
+            className="output-chalkboard-img"
+            draggable={false}
+          />
+        </div>
+      ) : null}
       {showIdleCapLayer ? (
         <div
           className={`output-idle-cap output-idle-cap--${idleCap.mode}`}

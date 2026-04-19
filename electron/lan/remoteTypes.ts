@@ -49,3 +49,12 @@ export type RemoteDispatchPayload =
       volume?: number
       loopMode?: RemoteLoopModeV1
     }
+  /** Mostra in uscita il PNG composito del banco salvato (stesso file usato dalla regia). */
+  | {
+      type: 'chalkboardBankToOutput'
+      savedId: string
+      bankIndex: number
+      composite?: 'solid' | 'transparent'
+    }
+  /** Nasconde il layer lavagna sull’uscita. */
+  | { type: 'chalkboardHide' }
