@@ -1384,43 +1384,50 @@ button {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
+  gap: 0.55rem;
 }
 
-.regia-sidebar-tabs-bar {
+.regia-sidebar-filter-bar {
   display: flex;
   flex-shrink: 0;
-  gap: 0.25rem;
+  flex-wrap: nowrap;
+  gap: 0.22rem;
   padding: 0.15rem;
   border-radius: 9px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
 }
 
-.regia-sidebar-tab {
-  flex: 1;
-  padding: 0.42rem 0.35rem;
-  font-size: 0.72rem;
+.regia-sidebar-filter-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.36rem 0.18rem;
+  font-size: 0.62rem;
   font-weight: 600;
   letter-spacing: 0.02em;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.regia-sidebar-tab:hover {
+.regia-sidebar-filter-chip:hover {
   color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.regia-sidebar-tab.is-active {
+.regia-sidebar-filter-chip.is-pressed {
   background: var(--bg);
   color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-.regia-sidebar-tab-panel {
+.regia-sidebar-cards-scroll {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -1428,14 +1435,70 @@ button {
   overflow: hidden;
 }
 
-.regia-sidebar-tab-panel[hidden] {
-  display: none !important;
-}
-
-.regia-sidebar-tab-panel > .saved-playlists,
-.regia-sidebar-tab-panel > .workspace-presets {
+.regia-sidebar-cards-scroll > .saved-playlists {
   flex: 1;
   min-height: 0;
+}
+
+.regia-sidebar-workspace-details {
+  flex-shrink: 0;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  overflow: hidden;
+}
+
+.regia-sidebar-workspace-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.regia-sidebar-workspace-summary::-webkit-details-marker {
+  display: none;
+}
+
+.regia-sidebar-workspace-summary::after {
+  content: '▸';
+  font-size: 0.65rem;
+  color: var(--muted);
+  transition: transform 0.12s ease;
+}
+
+.regia-sidebar-workspace-details[open] .regia-sidebar-workspace-summary::after {
+  transform: rotate(90deg);
+}
+
+.regia-sidebar-workspace-summary-label {
+  flex-shrink: 0;
+}
+
+.regia-sidebar-workspace-summary-hint {
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.regia-sidebar-workspace-body {
+  padding: 0 0.35rem 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.regia-sidebar-workspace-body .workspace-presets {
+  max-height: min(36vh, 320px);
 }
 
 .regia-sidebar-chalkboard-new-row {
@@ -1491,6 +1554,37 @@ button {
 .workspace-presets-rename {
   border-color: rgba(251, 191, 36, 0.4);
   color: #fde68a;
+}
+
+.workspace-presets-item .saved-playlists-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.workspace-presets-meta-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.workspace-presets-rename-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.2rem 0.35rem;
+  font-size: 0.86rem;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.workspace-presets-rename-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .saved-playlists {

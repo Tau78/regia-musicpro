@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
 import { sumMediaDurationsSec } from '../lib/sumMediaDurationsSec.ts'
+import type { SavedPlaylistKind } from '../playlistTypes.ts'
 import { useRegia } from '../state/RegiaContext.tsx'
 
 function IconOpenPlaylist() {
@@ -296,11 +297,12 @@ function setTransparentDragImage(ev: DragEvent) {
 }
 
 function playlistMatchesKindFilters(
-  playlistMode: 'tracks' | 'launchpad' | 'chalkboard',
+  playlistMode: SavedPlaylistKind | undefined,
   filters: ReadonlySet<SidebarCardKindFilter>,
 ): boolean {
-  if (playlistMode === 'launchpad') return filters.has('launchpad')
-  if (playlistMode === 'chalkboard') return filters.has('chalkboard')
+  const mode: SavedPlaylistKind = playlistMode ?? 'tracks'
+  if (mode === 'launchpad') return filters.has('launchpad')
+  if (mode === 'chalkboard') return filters.has('chalkboard')
   return filters.has('tracks')
 }
 

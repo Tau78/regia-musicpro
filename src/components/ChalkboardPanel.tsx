@@ -392,6 +392,8 @@ export default function ChalkboardPanel({
   const outputLivePendingRef = useRef(false)
   const outputLivePumpRunningRef = useRef(false)
   const outputLivePumpDoneRef = useRef(Promise.resolve())
+  /** Evita persist/uscita prima che il canvas sia allineato al banco (race ON→TRANSP). */
+  const syncPushCanvasKeyRef = useRef<string>('')
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null)
   const [srcByPath, setSrcByPath] = useState<Record<string, string>>({})
   const [textFontFamily, setTextFontFamily] = useState(
@@ -834,10 +836,17 @@ export default function ChalkboardPanel({
   ])
 
   useEffect(() => {
-    if (outputMode === 'off' || !resolutionReady || bankPaths.length <= bankIndex)
+    if (outputMode === 'off') {
+      syncPushCanvasKeyRef.current = ''
       return
+    }
+    if (!resolutionReady || bankPaths.length <= bankIndex) return
+    const canvasKey = `${outputMode}:${bankIndex}:${bankPaths.join('|')}`
+    const needsCanvasReload = syncPushCanvasKeyRef.current !== canvasKey
+    if (needsCanvasReload) syncPushCanvasKeyRef.current = canvasKey
     void (async () => {
       await outputLivePumpDoneRef.current
+      if (needsCanvasReload) await loadBankIntoCanvas()
       await persistCurrentBank()
       await renderAndSendChalkboardOutputLayer(outputMode, undefined, null)
       const tl = textLiveRef.current
@@ -864,6 +873,7 @@ export default function ChalkboardPanel({
     persistCurrentBank,
     resolutionReady,
     renderAndSendChalkboardOutputLayer,
+    loadBankIntoCanvas,
   ])
 
   /** Testo in bozza: aggiornamento uscita leggermente throttled. */

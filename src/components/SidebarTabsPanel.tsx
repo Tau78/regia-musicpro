@@ -1,19 +1,45 @@
-import { useCallback, useEffect, useState } from 'react'
-import {
-  readSidebarMainTabFromLs,
-  SIDEBAR_MAIN_TAB_EVENT,
-  type SidebarMainTabPersist,
-} from '../lib/workspaceShell.ts'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRegia } from '../state/RegiaContext.tsx'
-import SavedPlaylistsPanel from './SavedPlaylistsPanel.tsx'
+import SavedPlaylistsPanel, {
+  type SidebarCardKindFilter,
+} from './SavedPlaylistsPanel.tsx'
 import WorkspacePresetsPanel from './WorkspacePresetsPanel.tsx'
 
-const LS_SIDEBAR_MAIN_TAB = 'regia-sidebar-main-tab'
+const LS_SIDEBAR_KIND_FILTERS = 'regia-sidebar-kind-filters'
 
-type MainTab = SidebarMainTabPersist
+function readKindFiltersFromLs(): SidebarCardKindFilter[] {
+  try {
+    const raw = localStorage.getItem(LS_SIDEBAR_KIND_FILTERS)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    const allowed = new Set<SidebarCardKindFilter>([
+      'tracks',
+      'launchpad',
+      'chalkboard',
+    ])
+    const out: SidebarCardKindFilter[] = []
+    for (const x of parsed) {
+      if (x === 'tracks' || x === 'launchpad' || x === 'chalkboard') {
+        if (!out.includes(x)) out.push(x)
+      }
+    }
+    return out.filter((k) => allowed.has(k))
+  } catch {
+    return []
+  }
+}
 
-function readInitialTab(): MainTab {
-  return readSidebarMainTabFromLs()
+function persistKindFilters(filters: SidebarCardKindFilter[]) {
+  try {
+    if (!filters.length) {
+      localStorage.removeItem(LS_SIDEBAR_KIND_FILTERS)
+    } else {
+      localStorage.setItem(LS_SIDEBAR_KIND_FILTERS, JSON.stringify(filters))
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Finestra divisa in quattro (layout plancia / workspace). */
@@ -185,8 +211,35 @@ function IconSidebarLaunchpadSfx() {
   )
 }
 
+const FILTER_CHIPS: {
+  kind: SidebarCardKindFilter
+  label: string
+  title: string
+}[] = [
+  {
+    kind: 'tracks',
+    label: 'PLAYLIST',
+    title:
+      'Filtra le playlist a brani. Nessun filtro attivo = vedi tutti i tipi.',
+  },
+  {
+    kind: 'launchpad',
+    label: 'LAUNCHPAD',
+    title:
+      'Filtra i launchpad. Nessun filtro attivo = vedi tutti i tipi. Puoi combinare più filtri.',
+  },
+  {
+    kind: 'chalkboard',
+    label: 'CHALKBOARD',
+    title:
+      'Filtra le chalkboard. Deseleziona tutti i pulsanti per vedere di nuovo tutto.',
+  },
+]
+
 export default function SidebarTabsPanel() {
-  const [tab, setTab] = useState<MainTab>(() => readInitialTab())
+  const [kindFilters, setKindFilters] = useState<SidebarCardKindFilter[]>(
+    () => readKindFiltersFromLs(),
+  )
   const {
     addFloatingPlaylist,
     addFloatingLaunchPad,
@@ -196,26 +249,20 @@ export default function SidebarTabsPanel() {
   } = useRegia()
 
   useEffect(() => {
-    try {
-      localStorage.setItem(LS_SIDEBAR_MAIN_TAB, tab)
-    } catch {
-      /* ignore */
-    }
-  }, [tab])
+    persistKindFilters(kindFilters)
+  }, [kindFilters])
 
-  useEffect(() => {
-    const onApplied = (e: Event) => {
-      const ce = e as CustomEvent<SidebarMainTabPersist>
-      const d = ce.detail
-      if (d === 'workspace' || d === 'playlist' || d === 'chalkboard') setTab(d)
-    }
-    window.addEventListener(SIDEBAR_MAIN_TAB_EVENT, onApplied)
-    return () => window.removeEventListener(SIDEBAR_MAIN_TAB_EVENT, onApplied)
+  const toggleKind = useCallback((k: SidebarCardKindFilter) => {
+    setKindFilters((prev) => {
+      const has = prev.includes(k)
+      return has ? prev.filter((x) => x !== k) : [...prev, k]
+    })
   }, [])
 
-  const onTabPlaylist = useCallback(() => setTab('playlist'), [])
-  const onTabWorkspace = useCallback(() => setTab('workspace'), [])
-  const onTabChalkboard = useCallback(() => setTab('chalkboard'), [])
+  const kindFiltersForPanel = useMemo(
+    () => (kindFilters.length ? kindFilters : null),
+    [kindFilters],
+  )
 
   const onNewPlaylistPanel = useCallback(() => {
     addFloatingPlaylist()
@@ -244,146 +291,97 @@ export default function SidebarTabsPanel() {
   return (
     <div className="regia-sidebar-tabs">
       <div
-        className="regia-sidebar-tabs-bar"
-        role="tablist"
-        aria-label="Sezioni sidebar"
+        className="regia-sidebar-filter-bar"
+        role="toolbar"
+        aria-label="Filtri per tipo di pannello salvato"
       >
-        <button
-          type="button"
-          role="tab"
-          id="tab-playlist"
-          aria-selected={tab === 'playlist'}
-          aria-controls="panel-playlist"
-          className={`regia-sidebar-tab ${tab === 'playlist' ? 'is-active' : ''}`}
-          onClick={onTabPlaylist}
-        >
-          PLAYLIST
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="tab-workspace"
-          aria-selected={tab === 'workspace'}
-          aria-controls="panel-workspace"
-          className={`regia-sidebar-tab ${tab === 'workspace' ? 'is-active' : ''}`}
-          onClick={onTabWorkspace}
-        >
-          WORKSPACE
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="tab-chalkboard"
-          aria-selected={tab === 'chalkboard'}
-          aria-controls="panel-chalkboard"
-          className={`regia-sidebar-tab ${tab === 'chalkboard' ? 'is-active' : ''}`}
-          onClick={onTabChalkboard}
-        >
-          CHALKBOARD
-        </button>
-      </div>
-      <div
-        id="panel-playlist"
-        role="tabpanel"
-        aria-labelledby="tab-playlist"
-        hidden={tab !== 'playlist'}
-        className="regia-sidebar-tab-panel"
-      >
-        {tab === 'playlist' ? (
-          <>
-            <div
-              className="saved-playlists-new-row regia-sidebar-new-pair-row"
-              role="group"
-              aria-label="Nuova playlist e Launchpad"
+        {FILTER_CHIPS.map(({ kind, label, title }) => {
+          const pressed = kindFilters.includes(kind)
+          return (
+            <button
+              key={kind}
+              type="button"
+              className={`regia-sidebar-filter-chip ${pressed ? 'is-pressed' : ''}`}
+              aria-pressed={pressed}
+              title={title}
+              onClick={() => toggleKind(kind)}
             >
-              <button
-                type="button"
-                className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-playlist"
-                onClick={onNewPlaylistPanel}
-                title="Nuova PlayList Vuota"
-                aria-label="Nuova playlist vuota"
-              >
-                <IconSidebarBulletedList />
-              </button>
-              <button
-                type="button"
-                className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad"
-                onClick={onNewLaunchPad}
-                title="Nuovo LaunchPad Vuoto"
-                aria-label="Nuovo launchpad vuoto"
-              >
-                <IconSidebarLaunchpadColors />
-              </button>
-              <button
-                type="button"
-                className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad-sfx"
-                onClick={onNewLaunchPadSfx}
-                title="Nuovo LaunchPad Preset"
-                aria-label="Nuovo launchpad preset"
-              >
-                <IconSidebarLaunchpadSfx />
-              </button>
-            </div>
-            <SavedPlaylistsPanel listOnly listFilter="exclude-chalkboard" />
-          </>
-        ) : null}
+              {label}
+            </button>
+          )
+        })}
       </div>
       <div
-        id="panel-workspace"
-        role="tabpanel"
-        aria-labelledby="tab-workspace"
-        hidden={tab !== 'workspace'}
-        className="regia-sidebar-tab-panel"
+        className="saved-playlists-new-row regia-sidebar-new-pair-row"
+        role="group"
+        aria-label="Nuovo pannello"
       >
-        {tab === 'workspace' ? (
-          <>
-            <div
-              className="saved-playlists-new-row regia-sidebar-workspace-new-row"
-              role="group"
+        <button
+          type="button"
+          className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-playlist"
+          onClick={onNewPlaylistPanel}
+          title="Nuova PlayList Vuota"
+          aria-label="Nuova playlist vuota"
+        >
+          <IconSidebarBulletedList />
+        </button>
+        <button
+          type="button"
+          className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad"
+          onClick={onNewLaunchPad}
+          title="Nuovo LaunchPad Vuoto"
+          aria-label="Nuovo launchpad vuoto"
+        >
+          <IconSidebarLaunchpadColors />
+        </button>
+        <button
+          type="button"
+          className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad-sfx"
+          onClick={onNewLaunchPadSfx}
+          title="Nuovo LaunchPad Preset"
+          aria-label="Nuovo launchpad preset"
+        >
+          <IconSidebarLaunchpadSfx />
+        </button>
+        <button
+          type="button"
+          className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-chalkboard"
+          onClick={onNewChalkboard}
+          title="Nuova Chalkboard Vuota"
+          aria-label="Nuova Chalkboard Vuota"
+        >
+          <IconSidebarChalkboard />
+        </button>
+      </div>
+      <div className="regia-sidebar-cards-scroll">
+        <SavedPlaylistsPanel listOnly kindFilters={kindFiltersForPanel} />
+      </div>
+      <details className="regia-sidebar-workspace-details">
+        <summary className="regia-sidebar-workspace-summary">
+          <span className="regia-sidebar-workspace-summary-label">WORKSPACE</span>
+          <span className="regia-sidebar-workspace-summary-hint">
+            layout plancia salvati
+          </span>
+        </summary>
+        <div className="regia-sidebar-workspace-body">
+          <div
+            className="saved-playlists-new-row regia-sidebar-workspace-new-row"
+            role="group"
+            aria-label="Nuovo workspace"
+          >
+            <button
+              type="button"
+              className="btn-icon regia-sidebar-new-icon-btn workspace-presets-new-btn"
+              onClick={onNewWorkspace}
+              title="Nuovo workspace con il layout attuale della plancia"
               aria-label="Nuovo workspace"
             >
-              <button
-                type="button"
-                className="btn-icon regia-sidebar-new-icon-btn workspace-presets-new-btn"
-                onClick={onNewWorkspace}
-                title="Nuovo workspace con il layout attuale della plancia"
-                aria-label="Nuovo workspace"
-              >
-                <IconNewWorkspace />
-              </button>
-            </div>
-            <WorkspacePresetsPanel />
-          </>
-        ) : null}
-      </div>
-      <div
-        id="panel-chalkboard"
-        role="tabpanel"
-        aria-labelledby="tab-chalkboard"
-        hidden={tab !== 'chalkboard'}
-        className="regia-sidebar-tab-panel"
-      >
-        {tab === 'chalkboard' ? (
-          <>
-            <div
-              className="saved-playlists-new-row regia-sidebar-new-pair-row regia-sidebar-chalkboard-new-row"
-              role="group"
-              aria-label="Nuova chalkboard"
-            >
-              <button
-                type="button"
-                className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-chalkboard"
-                onClick={onNewChalkboard}
-                title="Nuova Chalkboard Vuota"
-                aria-label="Nuova Chalkboard Vuota"
-              >
-                <IconSidebarChalkboard />
-              </button>
-            </div>
-            <SavedPlaylistsPanel listOnly listFilter="chalkboard-only" />
-          </>
-        ) : null}
-      </div>
+              <IconNewWorkspace />
+            </button>
+          </div>
+          <WorkspacePresetsPanel />
+        </div>
+      </details>
     </div>
   )
 }

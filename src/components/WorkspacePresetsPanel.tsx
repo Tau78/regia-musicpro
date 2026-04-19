@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRegia } from '../state/RegiaContext.tsx'
 
 function IconLoadWorkspace() {
@@ -64,6 +64,27 @@ function IconRenameWorkspace() {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
+      />
+    </svg>
+  )
+}
+
+function IconConfirmRename() {
+  return (
+    <svg
+      className="saved-playlists-icon-svg"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+    >
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2.25}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M5 12l4 4L19 7"
       />
     </svg>
   )
@@ -143,24 +164,56 @@ export default function WorkspacePresetsPanel() {
     duplicateNamedWorkspace,
   } = useRegia()
 
+  const [renameId, setRenameId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const renameInputRef = useRef<HTMLInputElement | null>(null)
+
   useEffect(() => {
     refreshNamedWorkspaces()
   }, [refreshNamedWorkspaces])
 
-  const onRename = useCallback(
-    (id: string, current: string) => {
-      const name = window.prompt('Nuovo nome del workspace:', current)
-      if (name === null) return
-      renameNamedWorkspace(id, name)
+  const cancelRename = useCallback(() => {
+    setRenameId(null)
+    setRenameDraft('')
+  }, [])
+
+  const commitRename = useCallback(() => {
+    if (!renameId) return
+    renameNamedWorkspace(renameId, renameDraft)
+    setRenameId(null)
+    setRenameDraft('')
+  }, [renameId, renameDraft, renameNamedWorkspace])
+
+  const startRename = useCallback((id: string, current: string) => {
+    setRenameId(id)
+    setRenameDraft(current)
+    queueMicrotask(() => {
+      const el = renameInputRef.current
+      if (!el) return
+      el.focus()
+      el.select()
+    })
+  }, [])
+
+  const onRenameButton = useCallback(
+    (id: string, label: string) => {
+      if (renameId === id) {
+        commitRename()
+        return
+      }
+      if (renameId && renameId !== id) cancelRename()
+      startRename(id, label)
     },
-    [renameNamedWorkspace],
+    [renameId, cancelRename, startRename, commitRename],
   )
 
   return (
     <section className="workspace-presets" aria-label="Workspace plancia">
       <p className="workspace-presets-intro">
         Salva il layout su un workspace con «Salva» sulla riga. «Carica»
-        ripristina plancia e pannelli come erano in quel salvataggio.
+        ripristina plancia e pannelli come erano in quel salvataggio. La
+        matita apre il nome in modifica: Invio o spunta confermano, Esc
+        annulla.
       </p>
       {namedWorkspaces.length === 0 ? (
         <p className="saved-playlists-empty workspace-presets-empty">
@@ -171,10 +224,34 @@ export default function WorkspacePresetsPanel() {
           {namedWorkspaces.map((w) => (
             <li key={w.id} className="saved-playlists-item workspace-presets-item">
               <div className="saved-playlists-meta">
-                <span className="saved-playlists-name">{w.label}</span>
-                <span className="saved-playlists-count workspace-presets-date">
-                  {formatSavedAt(w.savedAt)}
-                </span>
+                <div className="saved-playlists-meta-text workspace-presets-meta-text">
+                  {renameId === w.id ? (
+                    <input
+                      ref={renameInputRef}
+                      type="text"
+                      className="workspace-presets-rename-input"
+                      value={renameDraft}
+                      maxLength={80}
+                      aria-label="Nome workspace"
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          commitRename()
+                        }
+                        if (e.key === 'Escape') {
+                          e.preventDefault()
+                          cancelRename()
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span className="saved-playlists-name">{w.label}</span>
+                  )}
+                  <span className="saved-playlists-count workspace-presets-date">
+                    {formatSavedAt(w.savedAt)}
+                  </span>
+                </div>
               </div>
               <div className="saved-playlists-actions workspace-presets-actions">
                 <button
@@ -198,11 +275,26 @@ export default function WorkspacePresetsPanel() {
                 <button
                   type="button"
                   className="btn-icon saved-playlists-icon-btn workspace-presets-rename"
-                  title={`Rinomina «${w.label}»`}
-                  aria-label={`Rinomina workspace ${w.label}`}
-                  onClick={() => onRename(w.id, w.label)}
+                  title={
+                    renameId === w.id
+                      ? 'Conferma nome (Invio)'
+                      : `Rinomina «${w.label}»`
+                  }
+                  aria-label={
+                    renameId === w.id
+                      ? 'Conferma nuovo nome workspace'
+                      : `Rinomina workspace ${w.label}`
+                  }
+                  onPointerDown={(e) => {
+                    if (renameId === w.id) e.preventDefault()
+                  }}
+                  onClick={() => onRenameButton(w.id, w.label)}
                 >
-                  <IconRenameWorkspace />
+                  {renameId === w.id ? (
+                    <IconConfirmRename />
+                  ) : (
+                    <IconRenameWorkspace />
+                  )}
                 </button>
                 <button
                   type="button"
