@@ -1315,7 +1315,13 @@ export default function ChalkboardPanel({
                   ref={textAreaRef}
                   className="floating-playlist-chalkboard-text-editor"
                   value={textDraftValue}
-                  onChange={(ev) => setTextDraftValue(ev.target.value)}
+                  onChange={(ev) => {
+                    const v = ev.target.value
+                    setTextDraftValue(v)
+                    /* Stesso tick del pump: il layout effect non ha ancora aggiornato textLiveRef. */
+                    textLiveRef.current = { ...textLiveRef.current, textDraftValue: v }
+                    scheduleLiveOutputPush()
+                  }}
                   onKeyDown={(ev) => {
                     if (ev.key === 'Escape') {
                       ev.preventDefault()
