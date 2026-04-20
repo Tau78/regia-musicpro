@@ -17,6 +17,7 @@ import SidebarTabsPanel from './components/SidebarTabsPanel.tsx'
 import DraggableAudioOutputBar from './components/DraggableAudioOutputBar.tsx'
 import AppAboutModal from './components/AppAboutModal.tsx'
 import HeaderWorkspaceSelect from './components/HeaderWorkspaceSelect.tsx'
+import RegiaPanelHintHost from './components/RegiaPanelHintHost.tsx'
 import SettingsModal, { IconSettingsGear } from './components/SettingsModal.tsx'
 import { clampSidebarWidth } from './lib/sidebarLayout.ts'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
@@ -147,85 +148,93 @@ function RegiaShell() {
 
   return (
     <div className="regia-app">
-      <header className="regia-header">
-        <div className="regia-brand">
-          <button
-            type="button"
-            className="regia-brand-logo-btn"
-            onClick={() => setAboutOpen(true)}
-            aria-haspopup="dialog"
-            aria-expanded={aboutOpen}
-            aria-controls="app-about-modal"
-            title="Informazioni, versione e crediti"
-            aria-label="Apri informazioni su REGIA MUSICPRO"
-          >
-            <img
-              className="regia-brand-logo"
-              src={`${import.meta.env.BASE_URL}app-icon.png`}
-              alt=""
-              width={28}
-              height={28}
-              decoding="async"
-              draggable={false}
-            />
-          </button>
-          <h1 className="regia-brand-title">
-            <span className="regia-brand-name">REGIA MUSICPRO</span>
-            <span className="regia-brand-meta" aria-label="Versione e data">
-              v{__REGIA_APP_VERSION__}
-              {__REGIA_APP_CREATED__
-                ? ` · ${formatRegiaProgramCreatedIt(__REGIA_APP_CREATED__)}`
-                : null}
-            </span>
-          </h1>
-        </div>
-        <div className="regia-header-right">
-          <div className="regia-header-trailing">
-            <HeaderWorkspaceSelect />
+      <RegiaPanelHintHost
+        className="regia-plancia-hint-root"
+        mainClassName="regia-plancia-hint-main-column"
+        defaultHint="Plancia: intestazione, sidebar, trasporto, anteprima e area centrale. Passa il mouse su pulsanti, elenchi e separatori per i suggerimenti."
+        hintAriaLabel="Suggerimenti plancia"
+      >
+        <header
+          className="regia-header"
+          data-preview-hint="Intestazione: workspace plancia, impostazioni. Logo: informazioni su versione e crediti."
+        >
+          <div className="regia-brand">
             <button
               type="button"
-              className="btn-icon regia-header-settings-btn"
-              onClick={() => setSettingsOpen(true)}
-              title="Impostazioni"
-              aria-label="Apri impostazioni"
+              className="regia-brand-logo-btn"
+              onClick={() => setAboutOpen(true)}
+              aria-haspopup="dialog"
+              aria-expanded={aboutOpen}
+              aria-controls="app-about-modal"
+              title="Informazioni, versione e crediti"
+              aria-label="Apri informazioni su REGIA MUSICPRO"
             >
-              <IconSettingsGear />
+              <img
+                className="regia-brand-logo"
+                src={`${import.meta.env.BASE_URL}app-icon.png`}
+                alt=""
+                width={28}
+                height={28}
+                decoding="async"
+                draggable={false}
+              />
             </button>
+            <h1 className="regia-brand-title">
+              <span className="regia-brand-name">REGIA MUSICPRO</span>
+              <span className="regia-brand-meta" aria-label="Versione e data">
+                v{__REGIA_APP_VERSION__}
+                {__REGIA_APP_CREATED__
+                  ? ` · ${formatRegiaProgramCreatedIt(__REGIA_APP_CREATED__)}`
+                  : null}
+              </span>
+            </h1>
           </div>
-        </div>
-      </header>
+          <div className="regia-header-right">
+            <div className="regia-header-trailing">
+              <div>
+                <HeaderWorkspaceSelect />
+              </div>
+              <button
+                type="button"
+                className="btn-icon regia-header-settings-btn"
+                onClick={() => setSettingsOpen(true)}
+                title="Impostazioni"
+                aria-label="Apri impostazioni"
+              >
+                <IconSettingsGear />
+              </button>
+            </div>
+          </div>
+        </header>
 
-      <SettingsModal
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-      />
-
-      <AppAboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
-
-      <main
-        className={`regia-main ${sidebarOpen ? 'is-sidebar-open' : 'is-sidebar-collapsed'}`}
-      >
+        <main
+          className={`regia-main ${sidebarOpen ? 'is-sidebar-open' : 'is-sidebar-collapsed'}`}
+        >
         <aside
           className="regia-sidebar"
           aria-label="Playlist salvate e cartelle"
           style={sidebarOpen ? { width: sidebarWidthPx } : undefined}
+          data-preview-hint="Colonna sinistra: playlist e pannelli salvati, nuovi pannelli, cloud e workspace. Comprimi con il pulsante a destra per più spazio sull’anteprima."
         >
-          <div className="regia-sidebar-inner">
-            {sidebarOpen ? <SidebarTabsPanel /> : null}
-          </div>
           {sidebarOpen ? (
-            <div
-              className={`regia-sidebar-resize-handle ${sidebarResizeActive ? 'is-active' : ''}`}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Trascina per ridimensionare tra playlist e anteprima"
-              tabIndex={0}
-              onPointerDown={onSidebarResizePointerDown}
-              onPointerMove={onSidebarResizePointerMove}
-              onPointerUp={endSidebarResize}
-              onPointerCancel={endSidebarResize}
-              onKeyDown={onSidebarResizeKeyDown}
-            />
+            <>
+              <div className="regia-sidebar-inner">
+                <SidebarTabsPanel />
+              </div>
+              <div
+                className={`regia-sidebar-resize-handle ${sidebarResizeActive ? 'is-active' : ''}`}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Trascina per ridimensionare tra playlist e anteprima"
+                tabIndex={0}
+                data-preview-hint="Separatore: trascina orizzontalmente per cambiare la larghezza tra colonna sinistra e area anteprima. Con il focus, usa le frecce Sinistra/Destra."
+                onPointerDown={onSidebarResizePointerDown}
+                onPointerMove={onSidebarResizePointerMove}
+                onPointerUp={endSidebarResize}
+                onPointerCancel={endSidebarResize}
+                onKeyDown={onSidebarResizeKeyDown}
+              />
+            </>
           ) : null}
           <button
             type="button"
@@ -237,60 +246,74 @@ function RegiaShell() {
                 ? 'Comprimi pannello sinistro'
                 : 'Espandi playlist salvate'
             }
+            data-preview-hint={
+              sidebarOpen
+                ? 'Comprimi la colonna sinistra (playlist salvate e strumenti) per guadagnare spazio sull’anteprima.'
+                : 'Espandi la colonna sinistra per playlist salvate, nuovi pannelli e filtri.'
+            }
           >
             {sidebarOpen ? '◀' : '▶'}
           </button>
         </aside>
-        <div className="regia-main-work">
-          <div className="regia-main-content">
+        <div
+          className="regia-main-work"
+          data-preview-hint="Area plancia: colonna centrale con trasporto e anteprima programma / coda; a destra eventuali pannelli agganciati. Le playlist flottanti possono stare sopra quest’area."
+        >
+          <div
+            className="regia-main-content"
+            data-preview-hint="Contenuto principale: barra trasporto in alto (sticky), sotto l’anteprima del programma e il riquadro «prossimo»."
+          >
             <div className="regia-main-preview-scroll">
-              <div
-                className="regia-preview-transport-sticky"
-                aria-label="Trasporto e uscita audio (agganciato all’anteprima)"
-              >
-                <DraggableAudioOutputBar />
-              </div>
-              {previewDisplayMode === 'docked' ?
-                <section
-                  className="preview-bus-section"
-                  aria-label="Anteprima program e coda successiva"
+                <div
+                  className="regia-preview-transport-sticky"
+                  aria-label="Trasporto e uscita audio (agganciato all’anteprima)"
+                  data-preview-hint="Barra trasporto e uscita: play/pausa, avanti/indietro, volume e routing audio, visibilità anteprima. Resta in cima mentre scorri l’anteprima."
                 >
-                  <PreviewProgramNextLayout />
-                </section>
-              : previewDisplayMode === 'floating' ?
-                <section
-                  className="preview-panel preview-panel--docked-placeholder"
-                  aria-label="Anteprima staccata"
-                >
-                  <p className="preview-panel-placeholder-text">
-                    L’anteprima è in una finestra flottante sopra questa regia.
-                  </p>
-                  <button
-                    type="button"
-                    className="preview-panel-reattach-btn"
-                    onClick={setPreviewDocked}
+                  <DraggableAudioOutputBar />
+                </div>
+                {previewDisplayMode === 'docked' ?
+                  <section
+                    className="preview-bus-section"
+                    aria-label="Anteprima program e coda successiva"
                   >
-                    Riaggancia nell’area principale
-                  </button>
-                </section>
-              : <section
-                  className="preview-panel preview-panel--docked-placeholder preview-panel--preview-hidden"
-                  aria-label="Anteprima nascosta"
-                >
-                  <p className="preview-panel-placeholder-text">
-                    Anteprima disattivata nel layout: il trasporto e l’uscita restano
-                    attivi. Usa l’icona occhio nella barra trasporto per ripristinare
-                    l’anteprima qui o in finestra flottante.
-                  </p>
-                  <button
-                    type="button"
-                    className="preview-panel-reattach-btn"
-                    onClick={setPreviewDocked}
+                    <PreviewProgramNextLayout />
+                  </section>
+                : previewDisplayMode === 'floating' ?
+                  <section
+                    className="preview-panel preview-panel--docked-placeholder"
+                    aria-label="Anteprima staccata"
+                    data-preview-hint="L’anteprima video è in una finestra separata. Riaggancia per tornare al layout interno."
                   >
-                    Mostra anteprima nel layout
-                  </button>
-                </section>
-              }
+                    <p className="preview-panel-placeholder-text">
+                      L’anteprima è in una finestra flottante sopra questa regia.
+                    </p>
+                    <button
+                      type="button"
+                      className="preview-panel-reattach-btn"
+                      onClick={setPreviewDocked}
+                    >
+                      Riaggancia nell’area principale
+                    </button>
+                  </section>
+                : <section
+                    className="preview-panel preview-panel--docked-placeholder preview-panel--preview-hidden"
+                    aria-label="Anteprima nascosta"
+                    data-preview-hint="Anteprima nascosta nel layout: trasporto e audio restano qui. Usa l’icona occhio nella barra trasporto per mostrare di nuovo l’anteprima."
+                  >
+                    <p className="preview-panel-placeholder-text">
+                      Anteprima disattivata nel layout: il trasporto e l’uscita restano
+                      attivi. Usa l’icona occhio nella barra trasporto per ripristinare
+                      l’anteprima qui o in finestra flottante.
+                    </p>
+                    <button
+                      type="button"
+                      className="preview-panel-reattach-btn"
+                      onClick={setPreviewDocked}
+                    >
+                      Mostra anteprima nel layout
+                    </button>
+                  </section>
+                }
             </div>
           </div>
           {rightPlanciaDockWidthPx > 0 ?
@@ -298,6 +321,7 @@ function RegiaShell() {
               className="regia-plancia-right-dock"
               style={{ width: rightPlanciaDockWidthPx }}
               aria-label="Pannelli agganciati a destra della plancia"
+              data-preview-hint="Dock destro: pannelli agganciati (playlist, launchpad o lavagna). Passa il mouse sul pannello attivo: la barra in basso mostra suggerimenti specifici per quel tipo. Ridimensiona trascinando il bordo tra anteprima e dock."
             >
               {dockedPlanciaSessionIds.map((id) => (
                 <FloatingPlaylist key={id} sessionId={id} />
@@ -305,7 +329,15 @@ function RegiaShell() {
             </aside>
           : null}
         </div>
-      </main>
+        </main>
+      </RegiaPanelHintHost>
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
+
+      <AppAboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
 
       {previewDisplayMode === 'floating' ?
         <FloatingPreview onDock={setPreviewDocked} />

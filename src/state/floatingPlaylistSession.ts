@@ -319,6 +319,10 @@ export type FloatingPlaylistSession = {
    * (Electron). Opzionale: assente = off.
    */
   windowAlwaysOnTopPinned?: boolean
+  /** File JSON in `Regia Video/Playlist` se caricato da cloud (non è un id `saved-playlists`). */
+  regiaVideoCloudSourceFile?: string | null
+  /** Se true, blocca modifiche accidentali (drag, drop, ecc. dove supportato). */
+  panelLocked?: boolean
 }
 
 function newSessionId(): string {
@@ -349,6 +353,8 @@ export function createEmptyFloatingSession(
     savedEditThemeColorBaseline: '',
     savedEditWatermarkBaseline: '',
     savedEditLaunchPadBaseline: null,
+    regiaVideoCloudSourceFile: null,
+    panelLocked: false,
   }
 }
 

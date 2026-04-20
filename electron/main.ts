@@ -17,6 +17,7 @@ import type {
   RemotePlaybackSnapshotV1,
 } from './lan/remoteTypes'
 import { getPrimaryLanIPv4 } from './lan/networkUtils'
+import * as regiaVideoCloud from './regiaVideoCloud'
 
 /* --- Playlist salvate; `dist-electron/package.json` con type commonjs (script post-build) evita ESM sui .js emessi da tsc --- */
 
@@ -744,6 +745,32 @@ let lastPlaylistWatermarkForOutput: Extract<
 > | null = null
 /** Playlist / launchpad in finestra OS separata (puntina). */
 const playlistFloaterWindows = new Map<string, BrowserWindow>()
+/** Evita due `playlistFloater:open` concorrenti per la stessa sessione (doppia finestra / leak). */
+const playlistFloaterOpenLocks = new Set<string>()
+
+function closeAllPlaylistFloaterWindows(): void {
+  for (const w of playlistFloaterWindows.values()) {
+    try {
+      if (!w.isDestroyed()) w.close()
+    } catch {
+      /* ignore */
+    }
+  }
+  playlistFloaterWindows.clear()
+}
+
+/**
+ * Chiudi tutte le finestre playlist OS quando la finestra Regia si chiude (quit / Cmd+W).
+ *
+ * Non usare listener su `will-navigate` / `did-start-navigation`: in dev (Vite) possono
+ * scattare in modo poco controllato e chiudere le floater appena aperte con la puntina,
+ * generando un ciclo open → close → reopen che satura Electron.
+ */
+function wireRegiaPlaylistFloaterHost(win: BrowserWindow): void {
+  win.on('close', () => {
+    closeAllPlaylistFloaterWindows()
+  })
+}
 
 const OUTPUT_WINDOW_BASE_TITLE = 'Uscita — REGIA MUSICPRO'
 
@@ -1756,6 +1783,115 @@ function setupIpc() {
     duplicateSavedPlaylist(id),
   )
 
+  ipcMain.handle('regiaVideoCloud:getStatus', () => regiaVideoCloud.getCloudStatus(app))
+
+  ipcMain.handle(
+    'regiaVideoCloud:setRoot',
+    (_e, rootPath: string | null) => {
+      if (rootPath == null || rootPath.trim() === '') {
+        regiaVideoCloud.writeCloudConfig(app, { rootPath: null })
+        return { ok: true as const }
+      }
+      const n = path.normalize(rootPath.trim())
+      if (!regiaVideoCloud.validateRegiaVideoRoot(n)) {
+        return {
+          ok: false as const,
+          error:
+            'Seleziona la cartella che si chiama esattamente «Regia Video» (sincronizzata con Google Drive).',
+        }
+      }
+      regiaVideoCloud.writeCloudConfig(app, { rootPath: n })
+      try {
+        fs.mkdirSync(regiaVideoCloud.playlistDirFromRoot(n), { recursive: true })
+      } catch {
+        /* ignore */
+      }
+      return { ok: true as const }
+    },
+  )
+
+  ipcMain.handle('regiaVideoCloud:pickRootFolder', async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? regiaWindow
+    const r = win
+      ? await dialog.showOpenDialog(win, {
+          properties: ['openDirectory', 'createDirectory'],
+          title: 'Seleziona la cartella «Regia Video» su Google Drive',
+        })
+      : await dialog.showOpenDialog({
+          properties: ['openDirectory', 'createDirectory'],
+          title: 'Seleziona la cartella «Regia Video» su Google Drive',
+        })
+    if (r.canceled || !r.filePaths[0]) return { ok: false as const, path: null }
+    const picked = r.filePaths[0]!
+    if (!regiaVideoCloud.validateRegiaVideoRoot(picked)) {
+      return {
+        ok: false as const,
+        path: null,
+        error:
+          'La cartella deve chiamarsi «Regia Video». Apri quella cartella, non il genitore.',
+      }
+    }
+    return { ok: true as const, path: picked }
+  })
+
+  ipcMain.handle('regiaVideoCloud:list', () => regiaVideoCloud.listCloudPlaylistFiles(app))
+
+  ipcMain.handle('regiaVideoCloud:loadFile', (_e, fileName: string) =>
+    regiaVideoCloud.loadCloudPlaylistFile(app, fileName),
+  )
+
+  ipcMain.handle(
+    'regiaVideoCloud:saveFile',
+    (
+      _e,
+      opts: { fileBaseName: string; payload: regiaVideoCloud.CloudSavePayload },
+    ) => regiaVideoCloud.saveCloudPlaylist(app, opts.fileBaseName, opts.payload),
+  )
+
+  ipcMain.handle(
+    'regiaVideoCloud:readiness',
+    (_e, manifestJson: string | null | undefined) => {
+      if (typeof manifestJson === 'string' && manifestJson.trim()) {
+        try {
+          const m = JSON.parse(manifestJson) as regiaVideoCloud.CloudPlaylistManifestV1
+          return regiaVideoCloud.readinessForManifest(app, m)
+        } catch {
+          return {
+            ok: false,
+            missingFiles: ['(JSON manifest non valido)'],
+            warnings: [],
+            diskFreeRatio: null,
+          } satisfies regiaVideoCloud.ReadinessResult
+        }
+      }
+      return regiaVideoCloud.readinessCloudRootOnly(app)
+    },
+  )
+
+  ipcMain.handle('regiaVideoCloud:suggestFileName', (_e, label: string) =>
+    regiaVideoCloud.suggestCloudPlaylistFileName(typeof label === 'string' ? label : ''),
+  )
+
+  ipcMain.handle(
+    'regiaVideoCloud:exportZip',
+    async (_e, opts: { fileName: string }) => {
+      const win = BrowserWindow.getFocusedWindow() ?? regiaWindow
+      const r = win
+        ? await dialog.showSaveDialog(win, {
+            title: 'Esporta progetto cloud (ZIP)',
+            defaultPath: `${opts.fileName.replace(/\.json$/i, '')}_export.zip`,
+            filters: [{ name: 'ZIP', extensions: ['zip'] }],
+          })
+        : await dialog.showSaveDialog({
+            title: 'Esporta progetto cloud (ZIP)',
+            defaultPath: `${opts.fileName.replace(/\.json$/i, '')}_export.zip`,
+            filters: [{ name: 'ZIP', extensions: ['zip'] }],
+          })
+      if (r.canceled || !r.filePath) return { ok: false as const, error: 'Annullato' }
+      return regiaVideoCloud.exportCloudZip(app, opts.fileName, r.filePath)
+    },
+  )
+
   ipcMain.handle('output:setPresentationVisible', (_e, visible: boolean) => {
     setOutputPresentationVisible(visible)
   })
@@ -1845,6 +1981,8 @@ function setupIpc() {
           : ''
       if (!sessionId) return { ok: false as const }
       if (playlistFloaterWindows.has(sessionId)) return { ok: true as const }
+      if (playlistFloaterOpenLocks.has(sessionId)) return { ok: true as const }
+      playlistFloaterOpenLocks.add(sessionId)
       const x = Number(opts?.x)
       const y = Number(opts?.y)
       const width = Number(opts?.width)
@@ -1855,10 +1993,13 @@ function setupIpc() {
         !Number.isFinite(width) ||
         !Number.isFinite(height)
       ) {
+        playlistFloaterOpenLocks.delete(sessionId)
         return { ok: false as const }
       }
       const floaterIcon = resolveRegiaIconPath()
-      const w = new BrowserWindow({
+      let w: BrowserWindow
+      try {
+        w = new BrowserWindow({
         x: Math.round(x),
         y: Math.round(y),
         width: Math.max(220, Math.round(width)),
@@ -1876,6 +2017,10 @@ function setupIpc() {
           webSecurity: false,
         },
       })
+      } catch {
+        playlistFloaterOpenLocks.delete(sessionId)
+        return { ok: false as const }
+      }
       w.setMenuBarVisibility(false)
       /** Finestra indipendente dalla main: resta visibile se riduci la regia; sempre davanti alle altre app. */
       if (process.platform === 'darwin') {
@@ -1912,6 +2057,7 @@ function setupIpc() {
         }
       })
       playlistFloaterWindows.set(sessionId, w)
+      playlistFloaterOpenLocks.delete(sessionId)
       return { ok: true as const }
     },
   )
@@ -1938,6 +2084,25 @@ function setupIpc() {
       return { ok: true as const }
     },
   )
+
+  /** Finestra floater appena pronta: chiede alla regia un invio stato (evita race con il broadcast periodico). */
+  ipcMain.handle('playlistFloater:requestState', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || win.isDestroyed()) return { ok: false as const }
+    let sid: string | null = null
+    for (const [k, v] of playlistFloaterWindows) {
+      if (v === win) {
+        sid = k
+        break
+      }
+    }
+    if (!sid || !regiaWindow || regiaWindow.isDestroyed())
+      return { ok: false as const }
+    regiaWindow.webContents.send('playlist-floater-request-state', {
+      sessionId: sid,
+    })
+    return { ok: true as const }
+  })
 
   ipcMain.handle(
     'playlistFloater:setBounds',
@@ -2218,12 +2383,14 @@ app.whenReady().then(() => {
   setupIpc()
   /* Regia prima: `ensureOutputIdleCap` scrive su disco prima che l’uscita faccia il primo pull. */
   regiaWindow = createRegiaWindow()
+  wireRegiaPlaylistFloaterHost(regiaWindow)
   outputWindow = createOutputWindow()
   setupAutoUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       regiaWindow = createRegiaWindow()
+      wireRegiaPlaylistFloaterHost(regiaWindow)
       outputWindow = createOutputWindow()
     }
   })

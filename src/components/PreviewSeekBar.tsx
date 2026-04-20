@@ -8,6 +8,9 @@ import {
   type RefObject,
 } from 'react'
 
+/** Ultimi secondi di brano: avviso visivo in anteprima durante il play. */
+const PREVIEW_END_WARN_SEC = 5
+
 type Props = {
   videoRef: RefObject<HTMLVideoElement | null>
   /** Cambia quando si carica un altro file (stessa ref, nuovo elemento). */
@@ -33,6 +36,7 @@ export default function PreviewSeekBar({
   const trackRef = useRef<HTMLDivElement>(null)
   const [duration, setDuration] = useState(0)
   const [displayTime, setDisplayTime] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
   const draggingRef = useRef(false)
   const displayTimeRef = useRef(0)
   const durationRef = useRef(0)
@@ -70,18 +74,25 @@ export default function PreviewSeekBar({
         setDisplayTime(t)
       }
     }
+    const onPlay = () => setIsPlaying(true)
+    const onPause = () => setIsPlaying(false)
     el.addEventListener('timeupdate', onTime)
     el.addEventListener('durationchange', onDur)
     el.addEventListener('loadedmetadata', onDur)
     el.addEventListener('seeked', onSeeked)
+    el.addEventListener('play', onPlay)
+    el.addEventListener('pause', onPause)
     syncFromVideo()
     displayTimeRef.current = el.currentTime
     setDisplayTime(el.currentTime)
+    setIsPlaying(!el.paused)
     return () => {
       el.removeEventListener('timeupdate', onTime)
       el.removeEventListener('durationchange', onDur)
       el.removeEventListener('loadedmetadata', onDur)
       el.removeEventListener('seeked', onSeeked)
+      el.removeEventListener('play', onPlay)
+      el.removeEventListener('pause', onPause)
     }
   }, [videoRef, videoSyncKey])
 
@@ -190,10 +201,27 @@ export default function PreviewSeekBar({
 
   const seekable = duration > 0 && Number.isFinite(duration)
   const pct = seekable ? Math.min(100, (displayTime / duration) * 100) : 0
+  const inEndWarningZone =
+    isPlaying &&
+    seekable &&
+    displayTime >= duration - PREVIEW_END_WARN_SEC - 1e-3 &&
+    displayTime <= duration + 0.15
+  const tailLeftPct = seekable
+    ? Math.max(0, ((duration - PREVIEW_END_WARN_SEC) / duration) * 100)
+    : 0
+  const tailWidthPct = seekable
+    ? Math.min(100, (PREVIEW_END_WARN_SEC / duration) * 100)
+    : 0
 
   return (
     <div
-      className={`preview-seek ${seekable ? '' : 'is-disabled'}`}
+      className={[
+        'preview-seek',
+        seekable ? '' : 'is-disabled',
+        inEndWarningZone ? 'preview-seek--end-warn' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
       aria-label="Posizione nel brano (anteprima)"
     >
       <span className="preview-seek-time preview-seek-time--left">
@@ -219,13 +247,23 @@ export default function PreviewSeekBar({
         onPointerCancel={seekable ? endDrag : undefined}
       >
         <div className="preview-seek-track" role="presentation">
+          {inEndWarningZone && seekable ? (
+            <div
+              className="preview-seek-tailwarn"
+              style={{
+                left: `${tailLeftPct}%`,
+                width: `${tailWidthPct}%`,
+              }}
+              aria-hidden
+            />
+          ) : null}
           <div
             className="preview-seek-fill"
             style={{ width: `${pct}%` }}
             aria-hidden
           />
           <div
-            className="preview-seek-thumb"
+            className={`preview-seek-thumb${inEndWarningZone ? ' preview-seek-thumb--end-warn' : ''}`}
             style={{ left: `${pct}%` }}
             aria-hidden
           />

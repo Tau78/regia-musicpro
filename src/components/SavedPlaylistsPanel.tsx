@@ -1,95 +1,60 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type DragEvent,
+  type MouseEvent,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
+import {
+  previewHintNewChalkboard,
+  previewHintNewEmptyLaunchpad,
+  previewHintNewEmptyPlaylist,
+  previewHintNewLaunchpadSfx,
+  previewHintSavedListRow,
+} from '../lib/panelPreviewHints.ts'
 import { sumMediaDurationsSec } from '../lib/sumMediaDurationsSec.ts'
-import type { SavedPlaylistKind } from '../playlistTypes.ts'
+import type { SavedPlaylistKind, SavedPlaylistMeta } from '../playlistTypes.ts'
+import type { FloatingPlaylistSession } from '../state/floatingPlaylistSession.ts'
 import { useRegia } from '../state/RegiaContext.tsx'
 
-function IconOpenPlaylist() {
-  return (
-    <svg
-      className="saved-playlists-icon-svg"
-      viewBox="0 0 24 24"
-      width={16}
-      height={16}
-      aria-hidden="true"
-    >
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M15 3h6v6M10 14 21 3"
-      />
-    </svg>
-  )
+/** Ultima sessione in-app che modifica quel salvataggio (stesso id `editingSavedPlaylistId`). */
+function pickOpenFloatingSessionForSavedId(
+  sessions: FloatingPlaylistSession[],
+  osSessionIds: readonly string[],
+  savedId: string,
+): string | null {
+  const os = new Set(osSessionIds)
+  let last: string | null = null
+  for (const s of sessions) {
+    if (os.has(s.id)) continue
+    if (s.editingSavedPlaylistId === savedId) last = s.id
+  }
+  return last
 }
 
-function IconDuplicate() {
-  return (
-    <svg
-      className="saved-playlists-icon-svg"
-      viewBox="0 0 24 24"
-      width={16}
-      height={16}
-      aria-hidden="true"
-    >
-      <rect
-        x={8}
-        y={8}
-        width={13}
-        height={13}
-        rx={2}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2"
-      />
-    </svg>
-  )
-}
+const CTX_MENU_W = 210
+const CTX_MENU_H = 88
 
-function IconDelete() {
-  return (
-    <svg
-      className="saved-playlists-icon-svg"
-      viewBox="0 0 24 24"
-      width={16}
-      height={16}
-      aria-hidden="true"
-    >
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14zM10 11v6M14 11v6"
-      />
-    </svg>
-  )
+function savedPlaylistsContextMenuPosition(
+  clientX: number,
+  clientY: number,
+): { left: number; top: number } {
+  const pad = 8
+  let left = clientX
+  let top = clientY
+  if (left + CTX_MENU_W > window.innerWidth - pad) {
+    left = window.innerWidth - CTX_MENU_W - pad
+  }
+  if (top + CTX_MENU_H > window.innerHeight - pad) {
+    top = clientY - CTX_MENU_H
+  }
+  return { left: Math.max(pad, left), top: Math.max(pad, top) }
 }
 
 /** Icona griglia colorata per voci launchpad nella lista salvati. */
@@ -289,13 +254,6 @@ function reorderSavedIds(ids: string[], from: number, to: number): string[] {
   return next
 }
 
-function setTransparentDragImage(ev: DragEvent) {
-  const c = document.createElement('canvas')
-  c.width = 1
-  c.height = 1
-  ev.dataTransfer.setDragImage(c, 0, 0)
-}
-
 function playlistMatchesKindFilters(
   playlistMode: SavedPlaylistKind | undefined,
   filters: ReadonlySet<SidebarCardKindFilter>,
@@ -321,6 +279,9 @@ export default function SavedPlaylistsPanel({
     addFloatingLaunchPad,
     addFloatingChalkboard,
     openFloatingPlaylist,
+    floatingPlaylistSessions,
+    playlistFloaterOsSessionIds,
+    setActiveFloatingSession,
   } = useRegia()
 
   useEffect(() => {
@@ -395,7 +356,6 @@ export default function SavedPlaylistsPanel({
 
   const handleDragStart = useCallback(
     (index: number) => (e: DragEvent) => {
-      setTransparentDragImage(e)
       e.dataTransfer.setData('text/plain', String(index))
       e.dataTransfer.effectAllowed = 'move'
       setDraggingIndex(index)
@@ -440,6 +400,36 @@ export default function SavedPlaylistsPanel({
     ],
   )
 
+  const [savedCtxMenu, setSavedCtxMenu] = useState<{
+    left: number
+    top: number
+    pl: SavedPlaylistMeta
+  } | null>(null)
+  const savedCtxMenuRef = useRef<HTMLDivElement>(null)
+  const savedCtxMenuFirstBtnRef = useRef<HTMLButtonElement>(null)
+
+  useLayoutEffect(() => {
+    if (!savedCtxMenu) return
+    queueMicrotask(() => savedCtxMenuFirstBtnRef.current?.focus())
+  }, [savedCtxMenu])
+
+  useEffect(() => {
+    if (!savedCtxMenu) return
+    const onDown = (ev: PointerEvent) => {
+      if (savedCtxMenuRef.current?.contains(ev.target as Node)) return
+      setSavedCtxMenu(null)
+    }
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setSavedCtxMenu(null)
+    }
+    window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [savedCtxMenu])
+
   const listAriaLabel = (() => {
     if (!filterSet) return 'Playlist, launchpad e chalkboard salvati'
     const bits: string[] = []
@@ -466,6 +456,7 @@ export default function SavedPlaylistsPanel({
             }}
             title="Nuova PlayList Vuota"
             aria-label="Nuova playlist vuota"
+            data-preview-hint={previewHintNewEmptyPlaylist}
           >
             <IconNewPlaylistPanel />
           </button>
@@ -480,6 +471,7 @@ export default function SavedPlaylistsPanel({
             }}
             title="Nuovo LaunchPad Vuoto"
             aria-label="Nuovo launchpad vuoto"
+            data-preview-hint={previewHintNewEmptyLaunchpad}
           >
             <IconLaunchPadGrid />
           </button>
@@ -494,6 +486,7 @@ export default function SavedPlaylistsPanel({
             }}
             title="Nuovo LaunchPad Preset"
             aria-label="Nuovo launchpad preset"
+            data-preview-hint={previewHintNewLaunchpadSfx}
           >
             <IconLaunchPadSfx />
           </button>
@@ -508,6 +501,7 @@ export default function SavedPlaylistsPanel({
             }}
             title="Nuova Chalkboard Vuota"
             aria-label="Nuova Chalkboard Vuota"
+            data-preview-hint={previewHintNewChalkboard}
           >
             <IconSavedCardChalkboard />
           </button>
@@ -525,7 +519,8 @@ export default function SavedPlaylistsPanel({
             <li
               key={pl.id}
               draggable={displayedPlaylists.length > 1}
-              title="Doppio clic per aprire. Trascina per riordinare."
+              title="Clic: in primo piano se già aperto. Doppio clic: apre in un nuovo pannello senza interrompere play/uscita attuali. Tasto destro: duplica o elimina. Trascina per riordinare."
+              data-preview-hint={previewHintSavedListRow(pl.playlistMode)}
               className={[
                 'saved-playlists-item',
                 pl.themeColor ? 'saved-playlists-item--themed' : '',
@@ -541,10 +536,37 @@ export default function SavedPlaylistsPanel({
                   ? ({ ['--pl-theme' as string]: pl.themeColor } as CSSProperties)
                   : undefined
               }
-              onDoubleClick={(e) => {
-                if ((e.target as HTMLElement).closest('.saved-playlists-actions'))
-                  return
-                void loadSavedPlaylist(pl.id)
+              onClick={() => {
+                const sid = pickOpenFloatingSessionForSavedId(
+                  floatingPlaylistSessions,
+                  playlistFloaterOsSessionIds,
+                  pl.id,
+                )
+                if (!sid) return
+                setActiveFloatingSession(sid)
+                openFloatingPlaylist()
+              }}
+              onDoubleClick={() => {
+                const sid = pickOpenFloatingSessionForSavedId(
+                  floatingPlaylistSessions,
+                  playlistFloaterOsSessionIds,
+                  pl.id,
+                )
+                if (sid) {
+                  setActiveFloatingSession(sid)
+                  openFloatingPlaylist()
+                } else {
+                  void loadSavedPlaylist(pl.id, { preservePlayback: true })
+                }
+              }}
+              onContextMenu={(e: MouseEvent<HTMLLIElement>) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const pos = savedPlaylistsContextMenuPosition(
+                  e.clientX,
+                  e.clientY,
+                )
+                setSavedCtxMenu({ left: pos.left, top: pos.top, pl })
               }}
               onDragStart={handleDragStart(index)}
               onDragEnd={handleDragEnd}
@@ -592,81 +614,60 @@ export default function SavedPlaylistsPanel({
                   </span>
                 </div>
               </div>
-              <div className="saved-playlists-actions" draggable={false}>
-                <button
-                  type="button"
-                  className="btn-icon saved-playlists-icon-btn saved-playlists-open"
-                  title={
-                    pl.playlistMode === 'launchpad'
-                      ? `Apri «${pl.label}» come pannello Launchpad`
-                      : pl.playlistMode === 'chalkboard'
-                        ? `Apri «${pl.label}» come Chalkboard`
-                        : `Apri «${pl.label}» nella playlist mobile`
-                  }
-                  aria-label={
-                    pl.playlistMode === 'launchpad'
-                      ? `Apri launchpad salvato ${pl.label}`
-                      : pl.playlistMode === 'chalkboard'
-                        ? `Apri chalkboard salvata ${pl.label}`
-                        : `Apri playlist ${pl.label} nella playlist mobile`
-                  }
-                  onClick={() => void loadSavedPlaylist(pl.id)}
-                >
-                  <IconOpenPlaylist />
-                </button>
-                <button
-                  type="button"
-                  className="btn-icon saved-playlists-icon-btn saved-playlists-duplicate"
-                  title={
-                    pl.playlistMode === 'launchpad'
-                      ? `Duplica «${pl.label}» come nuovo launchpad salvato`
-                      : pl.playlistMode === 'chalkboard'
-                        ? `Duplica «${pl.label}» come nuova chalkboard salvata`
-                        : `Duplica «${pl.label}» come nuova playlist salvata`
-                  }
-                  aria-label={
-                    pl.playlistMode === 'launchpad'
-                      ? `Duplica launchpad ${pl.label}`
-                      : pl.playlistMode === 'chalkboard'
-                        ? `Duplica chalkboard ${pl.label}`
-                        : `Duplica playlist ${pl.label}`
-                  }
-                  onClick={() => void duplicateSavedPlaylist(pl.id)}
-                >
-                  <IconDuplicate />
-                </button>
-                <button
-                  type="button"
-                  className="btn-icon saved-playlists-icon-btn saved-playlists-delete"
-                  title={`Elimina «${pl.label}» dal disco`}
-                  aria-label={
-                    pl.playlistMode === 'launchpad'
-                      ? `Elimina launchpad ${pl.label}`
-                      : pl.playlistMode === 'chalkboard'
-                        ? `Elimina chalkboard ${pl.label}`
-                        : `Elimina playlist ${pl.label}`
-                  }
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        pl.playlistMode === 'launchpad'
-                          ? `Eliminare il launchpad «${pl.label}» dal disco?`
-                          : pl.playlistMode === 'chalkboard'
-                            ? `Eliminare la chalkboard «${pl.label}» dal disco?`
-                            : `Eliminare la playlist «${pl.label}» dal disco?`,
-                      )
-                    ) {
-                      void deleteSavedPlaylist(pl.id)
-                    }
-                  }}
-                >
-                  <IconDelete />
-                </button>
-              </div>
             </li>
           ))}
         </ul>
       )}
+      {savedCtxMenu
+        ? createPortal(
+            <div
+              ref={savedCtxMenuRef}
+              className="saved-playlists-ctx-menu"
+              style={{
+                left: savedCtxMenu.left,
+                top: savedCtxMenu.top,
+              }}
+              role="menu"
+              aria-label={`Azioni su ${savedCtxMenu.pl.label}`}
+            >
+              <button
+                ref={savedCtxMenuFirstBtnRef}
+                type="button"
+                role="menuitem"
+                className="saved-playlists-ctx-menu-item"
+                onClick={() => {
+                  void duplicateSavedPlaylist(savedCtxMenu.pl.id)
+                  setSavedCtxMenu(null)
+                }}
+              >
+                Duplica
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="saved-playlists-ctx-menu-item saved-playlists-ctx-menu-item--danger"
+                onClick={() => {
+                  const row = savedCtxMenu.pl
+                  setSavedCtxMenu(null)
+                  if (
+                    window.confirm(
+                      row.playlistMode === 'launchpad'
+                        ? `Eliminare il launchpad «${row.label}» dal disco?`
+                        : row.playlistMode === 'chalkboard'
+                          ? `Eliminare la chalkboard «${row.label}» dal disco?`
+                          : `Eliminare la playlist «${row.label}» dal disco?`,
+                    )
+                  ) {
+                    void deleteSavedPlaylist(row.id)
+                  }
+                }}
+              >
+                Elimina…
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
     </section>
   )
 }

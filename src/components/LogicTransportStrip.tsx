@@ -69,7 +69,10 @@ export default function LogicTransportStrip() {
     (currentIndex < paths.length - 1 || outputTrackLoopMode === 'all')
 
   return (
-    <div className="logic-transport">
+    <div
+      className="logic-transport"
+      data-preview-hint="Trasporto: passa al brano precedente o successivo nella playlist attiva, play/pausa e stop (ferma anche i sample Launchpad in uscita)."
+    >
       <div
         className="logic-transport-well"
         role="group"
@@ -82,6 +85,7 @@ export default function LogicTransportStrip() {
           onClick={() => void goPrev()}
           aria-label="Brano precedente"
           title="Brano precedente (PageUp, freccia sinistra o P)"
+          data-preview-hint="Brano precedente nella playlist che comanda l’uscita video (PageUp, freccia sinistra o P)."
         >
           <IconPrev />
         </button>
@@ -91,6 +95,11 @@ export default function LogicTransportStrip() {
           onClick={() => void togglePlay()}
           aria-label={playing ? 'Pausa' : 'Play'}
           title={playing ? 'Pausa' : 'Play (barra spaziatrice)'}
+          data-preview-hint={
+            playing
+              ? 'Pausa: mette in pausa il programma in anteprima e in uscita (barra spaziatrice).'
+              : 'Play: avvia o riprende il programma dalla posizione corrente (barra spaziatrice).'
+          }
         >
           {playing ? <IconPause /> : <IconPlay />}
         </button>
@@ -100,6 +109,7 @@ export default function LogicTransportStrip() {
           onClick={() => void stopPlayback()}
           aria-label="Stop"
           title="Stop: pausa in uscita e ferma l’audio Launchpad"
+          data-preview-hint="Stop: interrompe riproduzione e campioni Launchpad collegati all’uscita programma."
         >
           <IconStop />
         </button>
@@ -110,12 +120,18 @@ export default function LogicTransportStrip() {
           onClick={() => void goNext()}
           aria-label="Brano successivo"
           title="Brano successivo (PageDown, freccia destra o N)"
+          data-preview-hint="Brano successivo nella playlist attiva (PageDown, freccia destra o N)."
         >
           <IconNext />
         </button>
       </div>
       {stillPreview ? (
-        <span className="logic-transport-still" aria-live="polite" title="Slide fissa">
+        <span
+          className="logic-transport-still"
+          aria-live="polite"
+          title="Slide fissa"
+          data-preview-hint="Indicatore IMG: il brano in anteprima è un’immagine fissa (durata slide dalle impostazioni)."
+        >
           IMG
         </span>
       ) : null}

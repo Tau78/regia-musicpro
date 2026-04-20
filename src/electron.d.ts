@@ -159,6 +159,9 @@ declare global {
         payload: unknown,
       ) => Promise<{ ok: boolean }>
 
+      /** Chiede alla finestra Regia di inviare subito uno snapshot IPC (finestra floater). */
+      playlistFloaterRequestState: () => Promise<{ ok: boolean }>
+
       playlistFloaterSendAction: (method: string, args: unknown[]) => void
 
       playlistFloaterSetBounds: (partial: {
@@ -169,6 +172,10 @@ declare global {
       }) => Promise<{ ok: boolean }>
 
       onPlaylistFloaterState: (handler: (payload: unknown) => void) => () => void
+
+      onPlaylistFloaterRequestStateFromMain: (
+        handler: (msg: { sessionId: string }) => void,
+      ) => () => void
 
       onPlaylistFloaterActionFromMain: (
         handler: (msg: {
@@ -243,6 +250,115 @@ declare global {
       checkForUpdatesNow: () => Promise<
         { ok: true } | { ok: false; reason: string }
       >
+
+      regiaVideoCloudGetStatus: () => Promise<{
+        configured: boolean
+        rootPath: string | null
+        rootValid: boolean
+        playlistDir: string | null
+        playlistDirWritable: boolean
+        diskFreeRatio: number | null
+      }>
+      regiaVideoCloudSetRoot: (
+        rootPath: string | null,
+      ) => Promise<{ ok: true } | { ok: false; error: string }>
+      regiaVideoCloudPickRootFolder: () => Promise<
+        | { ok: true; path: string }
+        | { ok: false; path: null; error?: string }
+      >
+      regiaVideoCloudList: () => Promise<
+        Array<{
+          fileName: string
+          label: string
+          playlistMode: 'tracks' | 'launchpad' | 'chalkboard'
+          savedAt: string
+        }>
+      >
+      regiaVideoCloudLoadFile: (
+        fileName: string,
+      ) => Promise<
+        | {
+            ok: true
+            data: {
+              label: string
+              paths: string[]
+              crossfade: boolean
+              loopMode: 'off' | 'one' | 'all'
+              themeColor: string
+              playlistMode: 'tracks' | 'launchpad' | 'chalkboard'
+              launchPadCells: Array<{
+                samplePath: string | null
+                padColor: string
+                padGain: number
+                padDisplayName?: string | null
+                padKeyCode?: string | null
+                padKeyMode?: 'play' | 'toggle'
+              }>
+              chalkboardBankPaths: string[]
+              chalkboardBackgroundColor: string
+              chalkboardPlacementsByBank: Array<
+                Array<{
+                  id: string
+                  path: string
+                  x: number
+                  y: number
+                  w: number
+                  h: number
+                }>
+              >
+              watermarkPngPath: string
+            }
+          }
+        | { ok: false; error: string }
+      >
+      regiaVideoCloudSaveFile: (opts: {
+        fileBaseName: string
+        payload: {
+          label: string
+          paths: string[]
+          crossfade?: boolean
+          loopMode?: 'off' | 'one' | 'all'
+          themeColor?: string | null
+          playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'
+          launchPadCells?: Array<{
+            samplePath: string | null
+            padColor: string
+            padGain: number
+            padDisplayName?: string | null
+            padKeyCode?: string | null
+            padKeyMode?: 'play' | 'toggle'
+          }>
+          chalkboardBankPaths?: string[]
+          chalkboardBackgroundColor?: string
+          chalkboardPlacementsByBank?: Array<
+            Array<{
+              id: string
+              path: string
+              x: number
+              y: number
+              w: number
+              h: number
+            }>
+          >
+          watermarkPngPath?: string | null
+          totalDurationSec?: number
+        }
+      }) => Promise<
+        | { ok: true; fileName: string }
+        | { ok: false; error: string; pathsOutsideRoot?: string[] }
+      >
+      regiaVideoCloudReadiness: (
+        manifestJson?: string | null,
+      ) => Promise<{
+        ok: boolean
+        missingFiles: string[]
+        warnings: string[]
+        diskFreeRatio: number | null
+      }>
+      regiaVideoCloudSuggestFileName: (label: string) => Promise<string>
+      regiaVideoCloudExportZip: (
+        fileName: string,
+      ) => Promise<{ ok: true } | { ok: false; error: string }>
     }
   }
 }

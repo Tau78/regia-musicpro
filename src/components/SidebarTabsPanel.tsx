@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  previewHintFilterChalkboard,
+  previewHintFilterLaunchpad,
+  previewHintFilterTracks,
+  previewHintNewChalkboard,
+  previewHintNewEmptyLaunchpad,
+  previewHintNewEmptyPlaylist,
+  previewHintNewLaunchpadSfx,
+} from '../lib/panelPreviewHints.ts'
 import { useRegia } from '../state/RegiaContext.tsx'
 import SavedPlaylistsPanel, {
   type SidebarCardKindFilter,
 } from './SavedPlaylistsPanel.tsx'
+import SidebarFloatingOpenPanels from './SidebarFloatingOpenPanels.tsx'
+import SidebarDisclosureSection from './SidebarDisclosureSection.tsx'
 import WorkspacePresetsPanel from './WorkspacePresetsPanel.tsx'
+import RegiaVideoCloudDrawer from './RegiaVideoCloudDrawer.tsx'
 
 const LS_SIDEBAR_KIND_FILTERS = 'regia-sidebar-kind-filters'
 
@@ -175,6 +187,7 @@ const FILTER_CHIPS: {
   label: string
   title: string
   ariaLabel: string
+  previewHint: string
 }[] = [
   {
     kind: 'tracks',
@@ -182,6 +195,7 @@ const FILTER_CHIPS: {
     title:
       'Filtra le playlist a brani. Nessun filtro attivo = vedi tutti i tipi.',
     ariaLabel: 'Filtro playlist a brani',
+    previewHint: previewHintFilterTracks,
   },
   {
     kind: 'launchpad',
@@ -189,6 +203,7 @@ const FILTER_CHIPS: {
     title:
       'Filtra i launchpad. Nessun filtro attivo = vedi tutti i tipi. Puoi combinare più filtri.',
     ariaLabel: 'Filtro Launchpad',
+    previewHint: previewHintFilterLaunchpad,
   },
   {
     kind: 'chalkboard',
@@ -196,6 +211,7 @@ const FILTER_CHIPS: {
     title:
       'Filtra le chalkboard. Deseleziona tutti i pulsanti per vedere di nuovo tutto.',
     ariaLabel: 'Filtro Chalkboard',
+    previewHint: previewHintFilterChalkboard,
   },
 ]
 
@@ -247,77 +263,108 @@ export default function SidebarTabsPanel() {
   }, [addFloatingChalkboard, openFloatingPlaylist])
 
   return (
-    <div className="regia-sidebar-tabs">
-      <div
-        className="regia-sidebar-filter-bar"
-        role="toolbar"
-        aria-label="Filtri per tipo di pannello salvato"
-      >
-        {FILTER_CHIPS.map(({ kind, label, title, ariaLabel }) => {
-          const pressed = kindFilters.includes(kind)
-          return (
+    <div
+      className="regia-sidebar-tabs regia-sidebar-tabs--finder"
+      data-preview-hint="Colonna sinistra: pannelli aperti, preset salvati (filtri e nuovi pannelli), cloud e workspace. Scorri per vedere tutte le sezioni."
+    >
+      <div className="regia-sidebar-cards-scroll regia-sidebar-cards-scroll--finder">
+        <SidebarDisclosureSection sectionKey="openPanels" title="Pannelli aperti">
+          <SidebarFloatingOpenPanels />
+        </SidebarDisclosureSection>
+
+        <SidebarDisclosureSection
+          sectionKey="presets"
+          title="Preset"
+          className="regia-sidebar-disclosure--presets"
+        >
+          <div
+            className="regia-sidebar-filter-bar"
+            role="toolbar"
+            aria-label="Filtri per tipo di pannello salvato"
+          >
+            {FILTER_CHIPS.map(
+              ({ kind, label, title: chipTitle, ariaLabel, previewHint }) => {
+              const pressed = kindFilters.includes(kind)
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  className={`regia-sidebar-filter-chip ${pressed ? 'is-pressed' : ''}`}
+                  aria-pressed={pressed}
+                  aria-label={ariaLabel}
+                  title={chipTitle}
+                  data-preview-hint={previewHint}
+                  onClick={() => toggleKind(kind)}
+                >
+                  <span className="regia-sidebar-filter-chip-text">{label}</span>
+                </button>
+              )
+            })}
+          </div>
+          <div
+            className="saved-playlists-new-row regia-sidebar-new-pair-row"
+            role="group"
+            aria-label="Nuovo pannello"
+          >
             <button
-              key={kind}
               type="button"
-              className={`regia-sidebar-filter-chip ${pressed ? 'is-pressed' : ''}`}
-              aria-pressed={pressed}
-              aria-label={ariaLabel}
-              title={title}
-              onClick={() => toggleKind(kind)}
+              className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-playlist"
+              onClick={onNewPlaylistPanel}
+              title="Nuova PlayList Vuota"
+              aria-label="Nuova playlist vuota"
+              data-preview-hint={previewHintNewEmptyPlaylist}
             >
-              <span className="regia-sidebar-filter-chip-text">{label}</span>
+              <IconSidebarBulletedList />
             </button>
-          )
-        })}
-      </div>
-      <div
-        className="saved-playlists-new-row regia-sidebar-new-pair-row"
-        role="group"
-        aria-label="Nuovo pannello"
-      >
-        <button
-          type="button"
-          className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-playlist"
-          onClick={onNewPlaylistPanel}
-          title="Nuova PlayList Vuota"
-          aria-label="Nuova playlist vuota"
+            <button
+              type="button"
+              className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad"
+              onClick={onNewLaunchPad}
+              title="Nuovo LaunchPad Vuoto"
+              aria-label="Nuovo launchpad vuoto"
+              data-preview-hint={previewHintNewEmptyLaunchpad}
+            >
+              <IconSidebarLaunchpadColors />
+            </button>
+            <button
+              type="button"
+              className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad-sfx"
+              onClick={onNewLaunchPadSfx}
+              title="Nuovo LaunchPad Preset"
+              aria-label="Nuovo launchpad preset"
+              data-preview-hint={previewHintNewLaunchpadSfx}
+            >
+              <IconSidebarLaunchpadSfx />
+            </button>
+            <button
+              type="button"
+              className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-chalkboard"
+              onClick={onNewChalkboard}
+              title="Nuova Chalkboard Vuota"
+              aria-label="Nuova Chalkboard Vuota"
+              data-preview-hint={previewHintNewChalkboard}
+            >
+              <IconSidebarChalkboard />
+            </button>
+          </div>
+          <SavedPlaylistsPanel listOnly kindFilters={kindFiltersForPanel} />
+        </SidebarDisclosureSection>
+
+        <SidebarDisclosureSection
+          sectionKey="cloud"
+          title="Cloud"
+          className="regia-sidebar-disclosure--cloud"
         >
-          <IconSidebarBulletedList />
-        </button>
-        <button
-          type="button"
-          className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad"
-          onClick={onNewLaunchPad}
-          title="Nuovo LaunchPad Vuoto"
-          aria-label="Nuovo launchpad vuoto"
+          <RegiaVideoCloudDrawer />
+        </SidebarDisclosureSection>
+
+        <SidebarDisclosureSection
+          sectionKey="workspace"
+          title="Workspace"
+          className="regia-sidebar-disclosure--workspace"
         >
-          <IconSidebarLaunchpadColors />
-        </button>
-        <button
-          type="button"
-          className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-launchpad-sfx"
-          onClick={onNewLaunchPadSfx}
-          title="Nuovo LaunchPad Preset"
-          aria-label="Nuovo launchpad preset"
-        >
-          <IconSidebarLaunchpadSfx />
-        </button>
-        <button
-          type="button"
-          className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-chalkboard"
-          onClick={onNewChalkboard}
-          title="Nuova Chalkboard Vuota"
-          aria-label="Nuova Chalkboard Vuota"
-        >
-          <IconSidebarChalkboard />
-        </button>
-      </div>
-      <div className="regia-sidebar-cards-scroll">
-        <SavedPlaylistsPanel listOnly kindFilters={kindFiltersForPanel} />
-      </div>
-      <div className="regia-sidebar-workspace-panel">
-        <p className="regia-sidebar-workspace-panel-title">Layout workspace</p>
-        <WorkspacePresetsPanel />
+          <WorkspacePresetsPanel />
+        </SidebarDisclosureSection>
       </div>
     </div>
   )

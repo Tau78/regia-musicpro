@@ -171,6 +171,15 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     loadSavedPlaylist: call(
       'loadSavedPlaylist',
     ) as RegiaContextValue['loadSavedPlaylist'],
+    loadPlaylistFromRegiaVideoCloudFile: call(
+      'loadPlaylistFromRegiaVideoCloudFile',
+    ) as RegiaContextValue['loadPlaylistFromRegiaVideoCloudFile'],
+    saveFloatingPlaylistCopyToRegiaVideoCloud: call(
+      'saveFloatingPlaylistCopyToRegiaVideoCloud',
+    ) as RegiaContextValue['saveFloatingPlaylistCopyToRegiaVideoCloud'],
+    setFloatingPlaylistPanelLocked: call(
+      'setFloatingPlaylistPanelLocked',
+    ) as RegiaContextValue['setFloatingPlaylistPanelLocked'],
     deleteSavedPlaylist: call(
       'deleteSavedPlaylist',
     ) as RegiaContextValue['deleteSavedPlaylist'],

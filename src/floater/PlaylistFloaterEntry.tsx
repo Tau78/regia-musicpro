@@ -36,7 +36,7 @@ export default function PlaylistFloaterEntry({
   useEffect(() => {
     const api = window.electronAPI
     if (!api?.onPlaylistFloaterState) return
-    return api.onPlaylistFloaterState((payload) => {
+    const off = api.onPlaylistFloaterState((payload) => {
       const p = payload as PlaylistFloaterSyncPayload
       setSync(p)
       previewMediaTimesRef.current = {
@@ -44,6 +44,9 @@ export default function PlaylistFloaterEntry({
         duration: p.previewMediaTimes.duration,
       }
     })
+    /** Evita “Caricamento…” infinito: i broadcast dalla regia possono essere partiti prima che questo listener esistesse (StrictMode / load). */
+    void api.playlistFloaterRequestState?.()
+    return off
   }, [])
 
   if (!mirrorValue) {

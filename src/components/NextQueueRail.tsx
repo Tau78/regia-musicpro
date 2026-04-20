@@ -355,8 +355,12 @@ export default function NextQueueRail() {
       <aside
         className="preview-next-rail preview-next-rail--idle"
         aria-label="Anteprima del prossimo elemento (solo regia)"
+        data-preview-hint="Colonna «prossimo»: serve una playlist a elenco o un launchpad con sessione attiva per vedere qui il brano o la cella successiva."
       >
-        <span className="preview-bus-chip preview-bus-chip--next">
+        <span
+          className="preview-bus-chip preview-bus-chip--next"
+          data-preview-hint="Anteprima del prossimo elemento: solo regia, non è l’uscita pubblico."
+        >
           Anteprima pross.
         </span>
         <p className="preview-next-rail-hint">
@@ -380,8 +384,17 @@ export default function NextQueueRail() {
           ? 'Anteprima cella launchpad selezionata (solo regia)'
           : 'Anteprima brano successivo in coda (solo regia)'
       }
+      data-preview-hint="Colonna solo regia: anteprima del prossimo brano in coda o della cella launchpad selezionata; non va al pubblico finché non usi play o avanti."
     >
-      <span className={nextChipClass} title="Non inviato al pubblico finché non usi play / avanti">
+      <span
+        className={nextChipClass}
+        title="Non inviato al pubblico finché non usi play / avanti"
+        data-preview-hint={
+          launchSess
+            ? 'Launchpad: mostra la cella pad selezionata come «prossimo»; il trigger è manuale da pad o tasto.'
+            : 'Playlist: mostra il prossimo brano lineare in coda rispetto a quello in onda sul programma.'
+        }
+      >
         {nextChipLabel}
       </span>
       <button
@@ -389,6 +402,7 @@ export default function NextQueueRail() {
         className="preview-next-rail-hit"
         disabled={Boolean(disabled)}
         onClick={onRailClick}
+        data-preview-hint="Clic: apre il pannello floating e seleziona questo brano o slot (non manda in onda da solo)."
         title={
           disabled
             ? undefined
@@ -428,7 +442,11 @@ export default function NextQueueRail() {
         </div>
       </button>
       {countdownLabel ? (
-        <p className="preview-next-rail-countdown" aria-live="polite">
+        <p
+          className="preview-next-rail-countdown"
+          aria-live="polite"
+          data-preview-hint="Stato di avanzamento: tempo stimato prima del passaggio al prossimo elemento, o messaggio se in pausa / loop brano."
+        >
           {countdownLabel}
         </p>
       ) : null}

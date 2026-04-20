@@ -131,6 +131,126 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ): Promise<{ id: string } | null> =>
     ipcRenderer.invoke('playlists:duplicate', id),
 
+  regiaVideoCloudGetStatus: (): Promise<{
+    configured: boolean
+    rootPath: string | null
+    rootValid: boolean
+    playlistDir: string | null
+    playlistDirWritable: boolean
+    diskFreeRatio: number | null
+  }> => ipcRenderer.invoke('regiaVideoCloud:getStatus'),
+
+  regiaVideoCloudSetRoot: (
+    rootPath: string | null,
+  ): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke('regiaVideoCloud:setRoot', rootPath),
+
+  regiaVideoCloudPickRootFolder: (): Promise<
+    | { ok: true; path: string }
+    | { ok: false; path: null; error?: string }
+  > => ipcRenderer.invoke('regiaVideoCloud:pickRootFolder'),
+
+  regiaVideoCloudList: (): Promise<
+    Array<{
+      fileName: string
+      label: string
+      playlistMode: 'tracks' | 'launchpad' | 'chalkboard'
+      savedAt: string
+    }>
+  > => ipcRenderer.invoke('regiaVideoCloud:list'),
+
+  regiaVideoCloudLoadFile: (
+    fileName: string,
+  ): Promise<
+    | {
+        ok: true
+        data: {
+          label: string
+          paths: string[]
+          crossfade: boolean
+          loopMode: 'off' | 'one' | 'all'
+          themeColor: string
+          playlistMode: 'tracks' | 'launchpad' | 'chalkboard'
+          launchPadCells: Array<{
+            samplePath: string | null
+            padColor: string
+            padGain: number
+            padDisplayName?: string | null
+            padKeyCode?: string | null
+            padKeyMode?: 'play' | 'toggle'
+          }>
+          chalkboardBankPaths: string[]
+          chalkboardBackgroundColor: string
+          chalkboardPlacementsByBank: Array<
+            Array<{
+              id: string
+              path: string
+              x: number
+              y: number
+              w: number
+              h: number
+            }>
+          >
+          watermarkPngPath: string
+        }
+      }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke('regiaVideoCloud:loadFile', fileName),
+
+  regiaVideoCloudSaveFile: (opts: {
+    fileBaseName: string
+    payload: {
+      label: string
+      paths: string[]
+      crossfade?: boolean
+      loopMode?: 'off' | 'one' | 'all'
+      themeColor?: string | null
+      playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'
+      launchPadCells?: Array<{
+        samplePath: string | null
+        padColor: string
+        padGain: number
+        padDisplayName?: string | null
+        padKeyCode?: string | null
+        padKeyMode?: 'play' | 'toggle'
+      }>
+      chalkboardBankPaths?: string[]
+      chalkboardBackgroundColor?: string
+      chalkboardPlacementsByBank?: Array<
+        Array<{
+          id: string
+          path: string
+          x: number
+          y: number
+          w: number
+          h: number
+        }>
+      >
+      watermarkPngPath?: string | null
+      totalDurationSec?: number
+    }
+  }): Promise<
+    | { ok: true; fileName: string }
+    | { ok: false; error: string; pathsOutsideRoot?: string[] }
+  > => ipcRenderer.invoke('regiaVideoCloud:saveFile', opts),
+
+  regiaVideoCloudReadiness: (
+    manifestJson?: string | null,
+  ): Promise<{
+    ok: boolean
+    missingFiles: string[]
+    warnings: string[]
+    diskFreeRatio: number | null
+  }> => ipcRenderer.invoke('regiaVideoCloud:readiness', manifestJson ?? null),
+
+  regiaVideoCloudSuggestFileName: (label: string) =>
+    ipcRenderer.invoke('regiaVideoCloud:suggestFileName', label),
+
+  regiaVideoCloudExportZip: (
+    fileName: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> =>
+    ipcRenderer.invoke('regiaVideoCloud:exportZip', { fileName }),
+
   setOutputPresentationVisible: (visible: boolean): Promise<void> =>
     ipcRenderer.invoke('output:setPresentationVisible', visible),
 
@@ -206,6 +326,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('playlistFloater:broadcastState', sessionId, payload),
 
+  playlistFloaterRequestState: (): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('playlistFloater:requestState'),
+
   playlistFloaterSendAction: (method: string, args: unknown[]): void => {
     ipcRenderer.send('playlistFloater:sendAction', { method, args })
   },
@@ -225,6 +348,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       handler(payload)
     ipcRenderer.on('playlist-floater-state', fn)
     return () => ipcRenderer.removeListener('playlist-floater-state', fn)
+  },
+
+  onPlaylistFloaterRequestStateFromMain: (
+    handler: (msg: { sessionId: string }) => void,
+  ): (() => void) => {
+    const fn = (_: Electron.IpcRendererEvent, msg: unknown) =>
+      handler(msg as { sessionId: string })
+    ipcRenderer.on('playlist-floater-request-state', fn)
+    return () =>
+      ipcRenderer.removeListener('playlist-floater-request-state', fn)
   },
 
   onPlaylistFloaterActionFromMain: (

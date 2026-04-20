@@ -23,6 +23,16 @@ export type PreviewLayoutPersist = {
   height: number
 }
 
+/** Layout finestra anteprima flottante di default (nuovo workspace pulito). */
+export function defaultPreviewLayoutPersist(): PreviewLayoutPersist {
+  return {
+    x: DEFAULT_LAYOUT.pos.x,
+    y: DEFAULT_LAYOUT.pos.y,
+    width: DEFAULT_LAYOUT.size.width,
+    height: DEFAULT_LAYOUT.size.height,
+  }
+}
+
 /** Dopo restore da workspace: FloatingPreview rilegge layout da LS. */
 export const PREVIEW_LAYOUT_APPLIED_EVENT = 'regia-preview-layout-applied'
 
@@ -30,12 +40,7 @@ export function readPreviewLayoutFromLs(): PreviewLayoutPersist {
   try {
     const raw = localStorage.getItem(LS_PREVIEW_LAYOUT)
     if (!raw) {
-      return {
-        x: DEFAULT_LAYOUT.pos.x,
-        y: DEFAULT_LAYOUT.pos.y,
-        width: DEFAULT_LAYOUT.size.width,
-        height: DEFAULT_LAYOUT.size.height,
-      }
+      return defaultPreviewLayoutPersist()
     }
     const p = JSON.parse(raw) as LayoutLs
     const pos: PanelPos = {
@@ -55,12 +60,7 @@ export function readPreviewLayoutFromLs(): PreviewLayoutPersist {
     const { pos: np, size: ns } = clampPanelInViewport(pos, size, MIN_W, MIN_H)
     return { x: np.x, y: np.y, width: ns.width, height: ns.height }
   } catch {
-    return {
-      x: DEFAULT_LAYOUT.pos.x,
-      y: DEFAULT_LAYOUT.pos.y,
-      width: DEFAULT_LAYOUT.size.width,
-      height: DEFAULT_LAYOUT.size.height,
-    }
+    return defaultPreviewLayoutPersist()
   }
 }
 

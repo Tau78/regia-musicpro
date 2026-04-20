@@ -74,8 +74,8 @@ export default function HeaderWorkspaceSelect() {
           type="button"
           className="btn-icon header-workspace-new-btn"
           onClick={() => createNewNamedWorkspace()}
-          title="Nuovo workspace con il layout attuale della plancia"
-          aria-label="Nuovo workspace"
+          title="Nuovo workspace pulito: nessun pannello playlist, sidebar chiusa, anteprima agganciata nel layout"
+          aria-label="Nuovo workspace pulito"
         >
           <IconNewWorkspace />
         </button>

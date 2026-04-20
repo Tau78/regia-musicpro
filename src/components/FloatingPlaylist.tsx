@@ -64,13 +64,16 @@ import {
   normalizePlaylistThemeColor,
   PLAYLIST_THEME_COLOR_INPUT_DEFAULT,
 } from '../lib/playlistThemeColor.ts'
+import { normalizePlaylistWatermarkAbsPath } from '../lib/playlistWatermarkPath.ts'
 import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
+import { sessionIsLiveOnRegiaOutput } from '../lib/sessionLiveOutput.ts'
 import {
   formatPlaylistDurationLabel,
   usePlaylistMediaDurations,
 } from '../hooks/usePlaylistMediaDurations.ts'
 import { useRegia, type LoopMode } from '../state/RegiaContext.tsx'
 import MediaDurationRing from './MediaDurationRing.tsx'
+import RegiaPanelHintHost from './RegiaPanelHintHost.tsx'
 import ChalkboardPanel from './ChalkboardPanel.tsx'
 import {
   cloneChalkboardPlacementsByBank,
@@ -175,6 +178,65 @@ function IconSaveDisk() {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M17 21v-8H7v8M7 3v5h8"
+      />
+    </svg>
+  )
+}
+
+function IconRegiaCloudCopy() {
+  return (
+    <svg
+      className="floating-playlist-header-icon"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+    >
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M7 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7v14"
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 21h7a2 2 0 0 0 2-2v-7h-9v9z"
+      />
+    </svg>
+  )
+}
+
+function IconPanelLock({ locked }: { locked: boolean }) {
+  return (
+    <svg
+      className={`floating-playlist-header-icon${locked ? ' is-lock-on' : ''}`}
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+    >
+      <rect
+        x="5"
+        y="11"
+        width="14"
+        height="10"
+        rx="2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        d="M8 11V8a4 4 0 0 1 8 0v3"
       />
     </svg>
   )
@@ -359,6 +421,37 @@ function IconColorWheel() {
         fill="#f1f5f9"
         stroke="rgba(0,0,0,0.2)"
         strokeWidth={0.45}
+      />
+    </svg>
+  )
+}
+
+function IconWatermark() {
+  return (
+    <svg
+      className="floating-playlist-header-icon"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+    >
+      <rect
+        x="4"
+        y="5"
+        width="16"
+        height="14"
+        rx="2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        d="M8 9h5M8 12h8M8 15h6"
+        opacity={0.85}
       />
     </svg>
   )
@@ -870,12 +963,15 @@ export default function FloatingPlaylist({
     floatingCloseWouldInterruptPlay,
     setPlaylistTitle,
     setPlaylistThemeColor,
+    setPlaylistWatermarkPngPath,
     setPlaylistCrossfade,
     setPlaylistOutputMuted,
     setPlaylistOutputVolume,
     recordUndoPoint,
     savedPlaylistDirty,
     saveLoadedPlaylistOverwrite,
+    saveFloatingPlaylistCopyToRegiaVideoCloud,
+    setFloatingPlaylistPanelLocked,
     persistSavedPlaylistAfterFloatingTitleBlur,
     addPathsToPlaylistFromPaths,
     applyFloatingInternalDrop,
@@ -890,6 +986,8 @@ export default function FloatingPlaylist({
     undo,
     redo,
     playbackLoadedTrack,
+    videoOutputSessionId,
+    videoPlaying,
     loopMode,
     setPlaylistLoopMode,
     launchpadAudioPlaying,
@@ -936,8 +1034,41 @@ export default function FloatingPlaylist({
   }, [floatingPlaylistSessions, previewDetached, sessionId])
 
   const session = floatingPlaylistSessions.find((s) => s.id === sessionId)
+  const isLiveOnRegiaOutput = useMemo(() => {
+    if (!session) return false
+    return sessionIsLiveOnRegiaOutput(session, {
+      videoOutputSessionId,
+      videoPlaying,
+      launchpadAudioPlaying,
+      playbackLoadedTrack,
+    })
+  }, [
+    session,
+    videoOutputSessionId,
+    videoPlaying,
+    launchpadAudioPlaying,
+    playbackLoadedTrack,
+  ])
   const isLaunchpad = session?.playlistMode === 'launchpad'
   const isChalkboard = session?.playlistMode === 'chalkboard'
+  const panelDefaultHint = useMemo(() => {
+    if (isLaunchpad) {
+      return 'Launchpad: passa il mouse su intestazione, pagine, griglia pad e menu contestuale per le descrizioni. Il pulsante «?» mostra i tasti rapidi.'
+    }
+    if (isChalkboard) {
+      return 'Lavagna: passa il mouse su intestazione, strumenti e area disegno per le descrizioni. Tab per i banchi; tasto angoli per tutto schermo.'
+    }
+    return 'Playlist: passa il mouse su intestazione, barra controlli, loop ed elenco brani per le descrizioni.'
+  }, [isLaunchpad, isChalkboard])
+  const panelHeaderStripHint = useMemo(() => {
+    if (isLaunchpad) {
+      return 'Intestazione launchpad: nome modificabile, aiuto «?», puntina finestra separata, riduci e chiudi. Sotto: pagine e griglia 4×4.'
+    }
+    if (isChalkboard) {
+      return 'Intestazione lavagna: nome, tutto schermo (angoli), aiuto «?», puntina finestra separata, riduci e chiudi.'
+    }
+    return 'Intestazione playlist: nome, tema colore, file/cartella, carica e salva, loop (se visibile), aiuto «?», puntina, riduci e chiudi.'
+  }, [isLaunchpad, isChalkboard])
   const paths = session?.paths ?? EMPTY_PLAYLIST_PATHS
   const trackDurations = usePlaylistMediaDurations(paths)
   const launchPadCells =
@@ -970,6 +1101,7 @@ export default function FloatingPlaylist({
   const panelSize =
     session?.panelSize ?? DEFAULT_FLOATING_PANEL_SIZE
   const chalkboardFullscreen = session?.chalkboardFullscreen === true
+  const panelLocked = session?.panelLocked === true
 
   const chalkboardPreFullscreenRef = useRef<{
     pos: { x: number; y: number }
@@ -1834,7 +1966,7 @@ export default function FloatingPlaylist({
 
   const onPlaylistRowDragStart = useCallback(
     (index: number, e: DragEvent<HTMLLIElement>) => {
-      if (!session || isLaunchpad) return
+      if (!session || isLaunchpad || panelLocked) return
       const t = e.target as HTMLElement
       if (t.closest('.playlist-remove-btn')) {
         e.preventDefault()
@@ -1855,7 +1987,7 @@ export default function FloatingPlaylist({
       e.dataTransfer.setData(REGIA_FLOATING_DND_MIME, raw)
       e.dataTransfer.setData('text/plain', raw)
     },
-    [isLaunchpad, paths, session, sessionId],
+    [isLaunchpad, panelLocked, paths, session, sessionId],
   )
 
   const onPlaylistRowContextMenu = useCallback(
@@ -1877,7 +2009,7 @@ export default function FloatingPlaylist({
 
   const onLaunchPadCellDragStart = useCallback(
     (slotIndex: number, e: DragEvent<HTMLButtonElement>) => {
-      if (!session || !isLaunchpad) return
+      if (!session || !isLaunchpad || panelLocked) return
       const cell = launchPadCells?.[slotIndex]
       if (!cell?.samplePath) return
       e.dataTransfer.effectAllowed = 'move'
@@ -1899,11 +2031,12 @@ export default function FloatingPlaylist({
       const label = launchPadCellShownLabel(cell)
       setRegiaDnDDragImage(e, label, { maxWidthPx: 240 })
     },
-    [isLaunchpad, launchPadBankIndex, launchPadCells, session, sessionId],
+    [isLaunchpad, launchPadBankIndex, launchPadCells, panelLocked, session, sessionId],
   )
 
   const commitFloatingPlaylistTitle = useCallback(
     async (raw: string) => {
+      if (panelLocked) return
       const t = raw.trim().slice(0, 120)
       if (t !== playlistTitle.trim()) {
         recordUndoPoint()
@@ -1912,6 +2045,7 @@ export default function FloatingPlaylist({
       await persistSavedPlaylistAfterFloatingTitleBlur(t, sessionId)
     },
     [
+      panelLocked,
       persistSavedPlaylistAfterFloatingTitleBlur,
       playlistTitle,
       recordUndoPoint,
@@ -2250,6 +2384,7 @@ export default function FloatingPlaylist({
 
   const onPlaylistDragEnter = useCallback(
     (e: DragEvent<HTMLUListElement>) => {
+      if (panelLocked) return
       if (!playlistListDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       playlistDndDepth.current += 1
@@ -2276,11 +2411,12 @@ export default function FloatingPlaylist({
         setInternalDropInsertBefore(null)
       }
     },
-    [paths.length, playlistListDragAllowed],
+    [panelLocked, paths.length, playlistListDragAllowed],
   )
 
   const onPlaylistDragLeave = useCallback(
     (e: DragEvent<HTMLUListElement>) => {
+      if (panelLocked) return
       if (!playlistListDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       playlistDndDepth.current = Math.max(0, playlistDndDepth.current - 1)
@@ -2289,11 +2425,12 @@ export default function FloatingPlaylist({
         setInternalDropInsertBefore(null)
       }
     },
-    [playlistListDragAllowed],
+    [panelLocked, playlistListDragAllowed],
   )
 
   const onPlaylistDragOver = useCallback(
     (e: DragEvent<HTMLUListElement>) => {
+      if (panelLocked) return
       if (!playlistListDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       const dt = e.dataTransfer
@@ -2322,11 +2459,12 @@ export default function FloatingPlaylist({
         setInternalDropInsertBefore(null)
       }
     },
-    [paths.length, playlistListDragAllowed],
+    [panelLocked, paths.length, playlistListDragAllowed],
   )
 
   const onPlaylistDrop = useCallback(
     async (e: DragEvent<HTMLUListElement>) => {
+      if (panelLocked) return
       if (!playlistListDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       playlistDndDepth.current = 0
@@ -2366,6 +2504,7 @@ export default function FloatingPlaylist({
     [
       addPathsToPlaylistFromPaths,
       applyFloatingInternalDrop,
+      panelLocked,
       paths.length,
       playlistListDragAllowed,
       sessionId,
@@ -2379,26 +2518,29 @@ export default function FloatingPlaylist({
 
   const onLaunchpadDragEnter = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
+      if (panelLocked) return
       if (!launchpadDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       launchpadDndDepth.current += 1
       setLaunchpadDropHover(true)
     },
-    [launchpadDragAllowed],
+    [launchpadDragAllowed, panelLocked],
   )
 
   const onLaunchpadDragLeave = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
+      if (panelLocked) return
       if (!launchpadDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       launchpadDndDepth.current = Math.max(0, launchpadDndDepth.current - 1)
       if (launchpadDndDepth.current === 0) setLaunchpadDropHover(false)
     },
-    [launchpadDragAllowed],
+    [launchpadDragAllowed, panelLocked],
   )
 
   const onLaunchpadDragOver = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
+      if (panelLocked) return
       if (!launchpadDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       e.dataTransfer.dropEffect = dataTransferHasFloatingInternal(
@@ -2407,11 +2549,12 @@ export default function FloatingPlaylist({
         ? 'move'
         : 'copy'
     },
-    [launchpadDragAllowed],
+    [launchpadDragAllowed, panelLocked],
   )
 
   const onLaunchPadCellDrop = useCallback(
     async (slotIndex: number, e: DragEvent<HTMLDivElement>) => {
+      if (panelLocked) return
       if (!launchpadDragAllowed(e.dataTransfer)) return
       e.preventDefault()
       e.stopPropagation()
@@ -2436,6 +2579,7 @@ export default function FloatingPlaylist({
       applyFloatingInternalDrop,
       applyLaunchPadDropFromPaths,
       launchpadDragAllowed,
+      panelLocked,
       sessionId,
       setActiveFloatingSession,
     ],
@@ -2443,6 +2587,7 @@ export default function FloatingPlaylist({
 
   const onLaunchPadGridBackgroundDrop = useCallback(
     async (e: DragEvent<HTMLDivElement>) => {
+      if (panelLocked) return
       if (e.target !== e.currentTarget) return
       if (!launchpadDragAllowed(e.dataTransfer)) return
       e.preventDefault()
@@ -2472,6 +2617,7 @@ export default function FloatingPlaylist({
       applyLaunchPadDropFromPaths,
       launchPadCells,
       launchpadDragAllowed,
+      panelLocked,
       sessionId,
       setActiveFloatingSession,
     ],
@@ -2615,7 +2761,41 @@ export default function FloatingPlaylist({
     updateFloatingPlaylistChrome,
   ])
 
-  if (!session) return null
+  if (!session) {
+    if (isPlaylistOsFloaterWindow) {
+      return (
+        <div
+          className="floating-playlist floating-playlist--floater-missing-session"
+          style={{
+            boxSizing: 'border-box',
+            width: '100%',
+            minHeight: '100vh',
+            padding: '1.25rem',
+            background: '#13151a',
+            color: '#a1a7b3',
+            fontSize: 14,
+            lineHeight: 1.5,
+          }}
+        >
+          <p style={{ margin: '0 0 0.75rem' }}>
+            Sessione playlist non trovata nello stato sincronizzato. Chiudi la
+            finestra e riprova dalla regia, oppure usa il pulsante puntina per
+            disattivare.
+          </p>
+          <button
+            type="button"
+            className="floating-playlist-icon-btn"
+            onClick={() => {
+              void removeFloatingPlaylist(sessionId)
+            }}
+          >
+            Chiudi finestra
+          </button>
+        </div>
+      )
+    }
+    return null
+  }
 
   const themeHex = normalizePlaylistThemeColor(session.playlistThemeColor)
   const colorPickerValue =
@@ -2653,7 +2833,7 @@ export default function FloatingPlaylist({
     <Fragment>
     <div
       ref={panelRef}
-      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${isChalkboard ? 'is-chalkboard' : ''} ${chalkboardFullscreen ? 'is-chalkboard-fullscreen' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}${planciaDockRight ? ' floating-playlist--plancia-dock-right' : ''}`}
+      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${isChalkboard ? 'is-chalkboard' : ''} ${chalkboardFullscreen ? 'is-chalkboard-fullscreen' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}${isLiveOnRegiaOutput ? ' is-live-output' : ''}${planciaDockRight ? ' floating-playlist--plancia-dock-right' : ''}`}
       style={{
         ...(chalkboardFullscreen
           ? {
@@ -2686,6 +2866,12 @@ export default function FloatingPlaylist({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
+      <RegiaPanelHintHost
+        className="floating-playlist-hint-column"
+        mainClassName="floating-playlist-hint-main"
+        defaultHint={panelDefaultHint}
+        hintAriaLabel="Suggerimenti pannello"
+      >
       <input
         ref={playlistColorInputRef}
         type="color"
@@ -2720,7 +2906,10 @@ export default function FloatingPlaylist({
           onBlur={() => setPadColorPickIndex(null)}
         />
       ) : null}
-      <div className="floating-playlist-top">
+      <div
+        className="floating-playlist-top"
+        data-preview-hint={panelHeaderStripHint}
+      >
         <div className="floating-playlist-title-strip">
           <div className="floating-playlist-title-strip-main">
             <span
@@ -2742,6 +2931,8 @@ export default function FloatingPlaylist({
               type="text"
               className="floating-playlist-title-input"
               value={playlistTitle}
+              readOnly={panelLocked}
+              aria-readonly={panelLocked || undefined}
               onChange={(ev) => setPlaylistTitle(ev.target.value, sessionId)}
               onKeyDown={onTitleKeyDown}
               onBlur={(e) => {
@@ -3037,6 +3228,7 @@ export default function FloatingPlaylist({
                   <button
                     type="button"
                     className="floating-playlist-icon-btn"
+                    disabled={panelLocked}
                     onClick={() => void openFolder(sessionId)}
                     title="Apri cartella"
                     aria-label="Apri cartella"
@@ -3046,6 +3238,7 @@ export default function FloatingPlaylist({
                   <button
                     type="button"
                     className="floating-playlist-icon-btn"
+                    disabled={panelLocked}
                     onClick={() => void addMediaToPlaylist(sessionId)}
                     title="Aggiungi file alla playlist"
                     aria-label="Aggiungi file alla playlist"
@@ -3083,12 +3276,70 @@ export default function FloatingPlaylist({
                 </button>
                 <button
                   type="button"
+                  className={`floating-playlist-icon-btn${
+                    normalizePlaylistWatermarkAbsPath(
+                      session.playlistWatermarkPngPath,
+                    )
+                      ? ' is-watermark-on'
+                      : ''
+                  }`}
+                  onClick={async (ev) => {
+                    if (ev.altKey) {
+                      ev.preventDefault()
+                      setPlaylistWatermarkPngPath(sessionId, null)
+                      return
+                    }
+                    const api = window.electronAPI
+                    if (!api?.selectPlaylistWatermarkPng) return
+                    const p = await api.selectPlaylistWatermarkPng()
+                    if (p) setPlaylistWatermarkPngPath(sessionId, p)
+                  }}
+                  title="Watermark PNG in uscita (Alt+clic: rimuovi)"
+                  aria-label="Scegli watermark PNG. Alt e clic per rimuovere."
+                >
+                  <IconWatermark />
+                </button>
+                <button
+                  type="button"
+                  className={`floating-playlist-icon-btn${panelLocked ? ' is-active' : ''}`}
+                  aria-pressed={panelLocked}
+                  title={
+                    panelLocked
+                      ? 'Sblocca modifiche (drag, titolo, ecc.)'
+                      : 'Blocca modifiche accidentali'
+                  }
+                  aria-label={
+                    panelLocked ? 'Sblocca pannello' : 'Blocca pannello'
+                  }
+                  onClick={() =>
+                    setFloatingPlaylistPanelLocked(sessionId, !panelLocked)
+                  }
+                >
+                  <IconPanelLock locked={panelLocked} />
+                </button>
+                <button
+                  type="button"
+                  className="floating-playlist-icon-btn"
+                  disabled={panelLocked}
+                  onClick={() =>
+                    void saveFloatingPlaylistCopyToRegiaVideoCloud(sessionId)
+                  }
+                  title="Salva una copia come nuovo file JSON in Regia Video/Playlist (app desktop)"
+                  aria-label="Salva copia cloud Regia Video"
+                >
+                  <IconRegiaCloudCopy />
+                </button>
+                <button
+                  type="button"
                   className="floating-playlist-icon-btn floating-playlist-save-disk"
-                  disabled={!savedPlaylistDirty(sessionId)}
+                  disabled={!savedPlaylistDirty(sessionId) || panelLocked}
                   onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
                   title={
                     savedPlaylistDirty(sessionId)
-                      ? 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
+                      ? typeof session.regiaVideoCloudSourceFile === 'string' &&
+                        session.regiaVideoCloudSourceFile.trim() !== ''
+                        ? 'Sovrascrive il file JSON cloud collegato'
+                        : 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
                       : 'Nessuna modifica da salvare sul file collegato'
                   }
                   aria-label="Salva sovrascrivendo la voce caricata da PLAYLIST"
@@ -3154,6 +3405,7 @@ export default function FloatingPlaylist({
                   <button
                     type="button"
                     className="floating-playlist-icon-btn"
+                    disabled={panelLocked}
                     onClick={() => void openFolder(sessionId)}
                     title="Apri cartella"
                     aria-label="Apri cartella"
@@ -3163,6 +3415,7 @@ export default function FloatingPlaylist({
                   <button
                     type="button"
                     className="floating-playlist-icon-btn"
+                    disabled={panelLocked}
                     onClick={() => void addMediaToPlaylist(sessionId)}
                     title="Aggiungi file alla playlist"
                     aria-label="Aggiungi file alla playlist"
@@ -3197,12 +3450,70 @@ export default function FloatingPlaylist({
                 </button>
                 <button
                   type="button"
+                  className={`floating-playlist-icon-btn${
+                    normalizePlaylistWatermarkAbsPath(
+                      session.playlistWatermarkPngPath,
+                    )
+                      ? ' is-watermark-on'
+                      : ''
+                  }`}
+                  onClick={async (ev) => {
+                    if (ev.altKey) {
+                      ev.preventDefault()
+                      setPlaylistWatermarkPngPath(sessionId, null)
+                      return
+                    }
+                    const api = window.electronAPI
+                    if (!api?.selectPlaylistWatermarkPng) return
+                    const p = await api.selectPlaylistWatermarkPng()
+                    if (p) setPlaylistWatermarkPngPath(sessionId, p)
+                  }}
+                  title="Watermark PNG in uscita (Alt+clic: rimuovi)"
+                  aria-label="Scegli watermark PNG. Alt e clic per rimuovere."
+                >
+                  <IconWatermark />
+                </button>
+                <button
+                  type="button"
+                  className={`floating-playlist-icon-btn${panelLocked ? ' is-active' : ''}`}
+                  aria-pressed={panelLocked}
+                  title={
+                    panelLocked
+                      ? 'Sblocca modifiche (drag, titolo, ecc.)'
+                      : 'Blocca modifiche accidentali'
+                  }
+                  aria-label={
+                    panelLocked ? 'Sblocca pannello' : 'Blocca pannello'
+                  }
+                  onClick={() =>
+                    setFloatingPlaylistPanelLocked(sessionId, !panelLocked)
+                  }
+                >
+                  <IconPanelLock locked={panelLocked} />
+                </button>
+                <button
+                  type="button"
+                  className="floating-playlist-icon-btn"
+                  disabled={panelLocked}
+                  onClick={() =>
+                    void saveFloatingPlaylistCopyToRegiaVideoCloud(sessionId)
+                  }
+                  title="Salva una copia come nuovo file JSON in Regia Video/Playlist (app desktop)"
+                  aria-label="Salva copia cloud Regia Video"
+                >
+                  <IconRegiaCloudCopy />
+                </button>
+                <button
+                  type="button"
                   className="floating-playlist-icon-btn floating-playlist-save-disk"
-                  disabled={!savedPlaylistDirty(sessionId)}
+                  disabled={!savedPlaylistDirty(sessionId) || panelLocked}
                   onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
                   title={
                     savedPlaylistDirty(sessionId)
-                      ? 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
+                      ? typeof session.regiaVideoCloudSourceFile === 'string' &&
+                        session.regiaVideoCloudSourceFile.trim() !== ''
+                        ? 'Sovrascrive il file JSON cloud collegato'
+                        : 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
                       : 'Nessuna modifica da salvare sul file collegato'
                   }
                   aria-label="Salva sovrascrivendo la voce caricata da PLAYLIST"
@@ -3254,6 +3565,7 @@ export default function FloatingPlaylist({
                     <button
                       type="button"
                       className={`floating-playlist-icon-btn floating-playlist-crossfade-toggle ${playlistCrossfade ? 'is-active' : ''}`}
+                      disabled={panelLocked}
                       title="Crossfade tra brani: dissolvenza incrociata in uscita tra due brani dello stesso tipo."
                       aria-label="Crossfade tra brani. Solo tra video/video o immagine/immagine."
                       aria-pressed={playlistCrossfade}
@@ -3379,6 +3691,7 @@ export default function FloatingPlaylist({
           className={`floating-playlist-launchpad ${launchpadDropHover ? 'is-file-drop-hover' : ''}`}
           role="group"
           aria-label="Launchpad 4 per 4"
+          data-preview-hint="Launchpad: griglia 4×4 con pagine; trascina campioni sui pad o sulla griglia. Tap / tasti come da help «?». Tasto destro su un pad per gain, tasto e svuota."
           onDragEnter={onLaunchpadDragEnter}
           onDragLeave={onLaunchpadDragLeave}
           onDragOver={onLaunchpadDragOver}
@@ -3752,6 +4065,9 @@ export default function FloatingPlaylist({
             </div>
           </div>
         ) : isChalkboard ? (
+          <div
+            data-preview-hint="Lavagna: pennello, testo e immagini su più banchi; invio in uscita sul programma quando abilitato. Tab per cambiare banco; tasto angoli per tutto schermo."
+          >
           <ChalkboardPanel
             sessionId={sessionId}
             bankPaths={
@@ -3801,11 +4117,15 @@ export default function FloatingPlaylist({
               })
             }}
           />
+          </div>
         ) : null}
         </div>
       )}
       {!collapsed && !isLaunchpad && !isChalkboard && (
-        <div className="floating-playlist-list-scroll">
+        <div
+          className="floating-playlist-list-scroll"
+          data-preview-hint="Elenco brani: clic per caricare in anteprima/uscita, trascina per riordinare, tasto destro per opzioni. Trascina file dall’esplora risorse per aggiungerli."
+        >
           <ul
             ref={listRef}
             className={`floating-playlist-list ${playlistRowDragSourceIndex != null ? 'is-reordering' : ''} ${playlistDropHover ? 'is-file-drop-hover' : ''} ${internalDropInsertBefore != null ? 'has-internal-drop-cue' : ''}`}
@@ -3900,6 +4220,7 @@ export default function FloatingPlaylist({
                   type="button"
                   draggable={false}
                   className="playlist-remove-btn"
+                  disabled={panelLocked}
                   title="Rimuovi dalla playlist"
                   aria-label={`Rimuovi ${name} dalla playlist`}
                   onClick={(ev) => {
@@ -3968,6 +4289,7 @@ export default function FloatingPlaylist({
           ) : null}
         </div>
       )}
+      </RegiaPanelHintHost>
     </div>
     {closePlayConfirmOpen ? (
       <div

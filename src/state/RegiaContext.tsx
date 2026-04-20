@@ -64,6 +64,7 @@ import {
   persistSidebarWidthPx,
 } from '../lib/sidebarLayout.ts'
 import {
+  buildBlankWorkspaceShellPersist,
   dispatchShellLayoutEvents,
   dispatchSidebarMainTab,
   clampStillImageDurationSec,
@@ -123,6 +124,24 @@ function sessionHasSavedEditLink(
       s.savedEditLaunchPadBaseline != null ||
       s.savedEditChalkboardPathsBaseline != null)
   )
+}
+
+/** Sessione collegata a un file JSON in `Regia Video/Playlist` (manifest cloud). */
+function sessionHasCloudEditLink(s: FloatingPlaylistSession): boolean {
+  const f =
+    typeof s.regiaVideoCloudSourceFile === 'string'
+      ? s.regiaVideoCloudSourceFile.trim()
+      : ''
+  if (f === '') return false
+  return (
+    s.savedEditPathsBaseline != null ||
+    s.savedEditLaunchPadBaseline != null ||
+    s.savedEditChalkboardPathsBaseline != null
+  )
+}
+
+function sessionHasLinkedPersistTarget(s: FloatingPlaylistSession): boolean {
+  return sessionHasSavedEditLink(s) || sessionHasCloudEditLink(s)
 }
 
 function watermarkPathForDiskSave(s: FloatingPlaylistSession): string | null {
@@ -252,7 +271,22 @@ export type RegiaContextValue = {
   removePathAt: (index: number, sessionId: string) => Promise<void>
   refreshSavedPlaylists: () => Promise<void>
   saveCurrentPlaylist: (label: string) => Promise<void>
-  loadSavedPlaylist: (id: string) => Promise<string | null>
+  loadSavedPlaylist: (
+    id: string,
+    opts?: { preservePlayback?: boolean },
+  ) => Promise<string | null>
+  /** Carica un manifest JSON da `Regia Video/Playlist` (Drive desktop). */
+  loadPlaylistFromRegiaVideoCloudFile: (
+    fileName: string,
+  ) => Promise<string | null>
+  /** Salva una copia del pannello corrente come nuovo file JSON cloud (chiede il nome). */
+  saveFloatingPlaylistCopyToRegiaVideoCloud: (
+    sessionId: string,
+  ) => Promise<boolean>
+  setFloatingPlaylistPanelLocked: (
+    sessionId: string,
+    locked: boolean,
+  ) => void
   deleteSavedPlaylist: (id: string) => Promise<void>
   /** Persiste l’ordine delle playlist/launchpad salvati (id nell’ordine desiderato). */
   reorderSavedPlaylists: (orderedIds: string[]) => Promise<void>
@@ -509,6 +543,19 @@ type FloatingWorkspacePersistV2 = {
   playbackSessionId: string | null
   sessions: FloatingPlaylistSession[]
   shell: WorkspaceShellPersist
+}
+
+function buildBlankNamedWorkspaceSnapshot(
+  outputResolution: { width: number; height: number },
+): FloatingWorkspacePersistV2 {
+  return {
+    v: 2,
+    open: false,
+    activeFloatingSessionId: '',
+    playbackSessionId: null,
+    sessions: [],
+    shell: buildBlankWorkspaceShellPersist(outputResolution),
+  }
 }
 
 type NormalizedFloatingWorkspace = {
@@ -865,6 +912,15 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
     ...(normalizePlanciaDockMode(r.planciaDock) === 'right'
       ? { planciaDock: 'right' as const }
       : {}),
+    ...(() => {
+      const rawCf = (r as Record<string, unknown>).regiaVideoCloudSourceFile
+      const cf =
+        typeof rawCf === 'string' && rawCf.trim() !== ''
+          ? rawCf.trim()
+          : null
+      return cf != null ? { regiaVideoCloudSourceFile: cf } : {}
+    })(),
+    ...(r.panelLocked === true ? { panelLocked: true as const } : {}),
   }
 }
 
@@ -1046,6 +1102,70 @@ function folderBasenameFromPaths(paths: string[]): string {
 function pathsEqual(a: string[], b: string[] | null): boolean {
   if (!b || a.length !== b.length) return false
   return a.every((p, i) => p === b[i])
+}
+
+function floatingPlaylistSessionDirty(
+  s: FloatingPlaylistSession,
+  shellLoopMode: LoopMode,
+): boolean {
+  if (s.playlistMode === 'launchpad') {
+    if (
+      !launchPadCellsEqual(
+        s.launchPadCells,
+        s.savedEditLaunchPadBaseline ?? undefined,
+      )
+    )
+      return true
+  } else if (s.playlistMode === 'chalkboard') {
+    if (
+      (s.chalkboardContentRev ?? 0) !==
+      (s.savedEditChalkboardContentRevBaseline ?? 0)
+    )
+      return true
+    if (
+      !chalkboardPathsEqual(
+        s.chalkboardBankPaths,
+        s.savedEditChalkboardPathsBaseline ?? undefined,
+      )
+    )
+      return true
+    if (
+      !chalkboardPlacementsEqual(
+        s.chalkboardPlacementsByBank,
+        s.savedEditChalkboardPlacementsBaseline ?? undefined,
+      )
+    )
+      return true
+    if (
+      normalizeChalkboardBackgroundHex(s.chalkboardBackgroundColor) !==
+      normalizeChalkboardBackgroundHex(
+        s.savedEditChalkboardBackgroundBaseline ?? CHALKBOARD_DEFAULT_BG,
+      )
+    )
+      return true
+  } else if (!pathsEqual(s.paths, s.savedEditPathsBaseline!)) {
+    return true
+  }
+  if (s.playlistTitle.trim() !== s.savedEditTitleBaseline.trim()) return true
+  if (
+    isTracksPlaylistMode(s.playlistMode) &&
+    s.playlistCrossfade !== s.savedEditCrossfadeBaseline
+  )
+    return true
+  if (isTracksPlaylistMode(s.playlistMode)) {
+    const curLoop = s.playlistLoopMode ?? shellLoopMode
+    const baseLoop = s.savedEditPlaylistLoopBaseline ?? shellLoopMode
+    if (curLoop !== baseLoop) return true
+  }
+  if (
+    normalizePlaylistWatermarkAbsPath(s.playlistWatermarkPngPath) !==
+    normalizePlaylistWatermarkAbsPath(s.savedEditWatermarkBaseline)
+  )
+    return true
+  return (
+    normalizePlaylistThemeColor(s.playlistThemeColor ?? '') !==
+    normalizePlaylistThemeColor(s.savedEditThemeColorBaseline ?? '')
+  )
 }
 
 const MAX_UNDO = 50
@@ -1794,7 +1914,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (!opts?.skipHistory) {
         recordUndoPoint()
       }
-      const preserveSavedEdit = s0 != null && sessionHasSavedEditLink(s0)
+      const preserveSavedEdit = s0 != null && sessionHasLinkedPersistTarget(s0)
       if (preserveSavedEdit) {
         patchFloatingSession(sessionId, {
           paths: list,
@@ -1805,6 +1925,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           paths: list,
           currentIndex: 0,
           editingSavedPlaylistId: null,
+          regiaVideoCloudSourceFile: null,
           savedEditPathsBaseline: null,
           savedEditLaunchPadBaseline: null,
           savedEditTitleBaseline: '',
@@ -1972,23 +2093,6 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     setNamedWorkspaces(readNamedWorkspaceMetas())
   }, [])
 
-  const createNewNamedWorkspace = useCallback(() => {
-    const label = nextUniqueWorkspaceLabel('Nuovo workspace')
-    const snapshot = buildNamedWorkspaceSnapshot()
-    const id = `nw_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
-    const root = readNamedWorkspacesRoot()
-    root.items.push({
-      id,
-      label,
-      savedAt: Date.now(),
-      snapshot,
-    })
-    writeNamedWorkspacesRoot(root)
-    setNamedWorkspaces(readNamedWorkspaceMetas())
-    setActiveNamedWorkspaceId(id)
-    setActiveNamedWorkspaceLabel(label)
-  }, [buildNamedWorkspaceSnapshot])
-
   const saveNamedWorkspace = useCallback(
     (label: string) => {
       const trimmed = nextUniqueWorkspaceLabel(
@@ -2055,6 +2159,39 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     },
     [applyWorkspaceShell, recordUndoPoint, send],
   )
+
+  const createNewNamedWorkspace = useCallback(() => {
+    const label = nextUniqueWorkspaceLabel('Nuovo workspace')
+    const id = `nw_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+    void (async () => {
+      let outputResolution = lastOutputResolutionRef.current
+      try {
+        const r = await window.electronAPI.getOutputResolution()
+        if (
+          r &&
+          Number.isFinite(r.width) &&
+          Number.isFinite(r.height) &&
+          r.width > 0 &&
+          r.height > 0
+        ) {
+          outputResolution = { width: r.width, height: r.height }
+        }
+      } catch {
+        /* ignore */
+      }
+      const snapshot = buildBlankNamedWorkspaceSnapshot(outputResolution)
+      const root = readNamedWorkspacesRoot()
+      root.items.push({
+        id,
+        label,
+        savedAt: Date.now(),
+        snapshot,
+      })
+      writeNamedWorkspacesRoot(root)
+      setNamedWorkspaces(readNamedWorkspaceMetas())
+      await loadNamedWorkspace(id)
+    })()
+  }, [loadNamedWorkspace])
 
   const deleteNamedWorkspace = useCallback(
     (id: string) => {
@@ -2268,6 +2405,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
 
   const setPlaylistCrossfade = useCallback(
     (enabled: boolean, sessionId: string) => {
+      const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
+      if (s0?.panelLocked === true) return
       recordUndoPoint()
       patchFloatingSession(sessionId, { playlistCrossfade: enabled })
     },
@@ -2345,73 +2484,158 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const savedPlaylistDirty = useCallback(
     (sessionId: string) => {
       const s = floatingSessions.find((x) => x.id === sessionId)
-      if (!s || !sessionHasSavedEditLink(s)) return false
-      if (s.playlistMode === 'launchpad') {
-        if (
-          !launchPadCellsEqual(
-            s.launchPadCells,
-            s.savedEditLaunchPadBaseline ?? undefined,
-          )
-        )
-          return true
-      } else if (s.playlistMode === 'chalkboard') {
-        if (
-          (s.chalkboardContentRev ?? 0) !==
-          (s.savedEditChalkboardContentRevBaseline ?? 0)
-        )
-          return true
-        if (
-          !chalkboardPathsEqual(
-            s.chalkboardBankPaths,
-            s.savedEditChalkboardPathsBaseline ?? undefined,
-          )
-        )
-          return true
-        if (
-          !chalkboardPlacementsEqual(
-            s.chalkboardPlacementsByBank,
-            s.savedEditChalkboardPlacementsBaseline ?? undefined,
-          )
-        )
-          return true
-        if (
-          normalizeChalkboardBackgroundHex(s.chalkboardBackgroundColor) !==
-          normalizeChalkboardBackgroundHex(
-            s.savedEditChalkboardBackgroundBaseline ?? CHALKBOARD_DEFAULT_BG,
-          )
-        )
-          return true
-      } else if (!pathsEqual(s.paths, s.savedEditPathsBaseline!)) {
-        return true
-      }
-      if (s.playlistTitle.trim() !== s.savedEditTitleBaseline.trim()) return true
-      if (
-        isTracksPlaylistMode(s.playlistMode) &&
-        s.playlistCrossfade !== s.savedEditCrossfadeBaseline
-      )
-        return true
-      if (isTracksPlaylistMode(s.playlistMode)) {
-        const curLoop = s.playlistLoopMode ?? loopMode
-        const baseLoop = s.savedEditPlaylistLoopBaseline ?? loopMode
-        if (curLoop !== baseLoop) return true
-      }
-      if (
-        normalizePlaylistWatermarkAbsPath(s.playlistWatermarkPngPath) !==
-        normalizePlaylistWatermarkAbsPath(s.savedEditWatermarkBaseline)
-      )
-        return true
-      return (
-        normalizePlaylistThemeColor(s.playlistThemeColor ?? '') !==
-        normalizePlaylistThemeColor(s.savedEditThemeColorBaseline ?? '')
-      )
+      if (!s || !sessionHasLinkedPersistTarget(s)) return false
+      return floatingPlaylistSessionDirty(s, loopMode)
     },
     [floatingSessions, loopMode],
+  )
+
+  const writeFloatingSessionToRegiaVideoCloud = useCallback(
+    async (
+      sessionId: string,
+      fileBaseName: string,
+    ): Promise<
+      | { ok: true; fileName: string }
+      | { ok: false; error: string; pathsOutsideRoot?: string[] }
+    > => {
+      const s = floatingSessionsRef.current.find((x) => x.id === sessionId)
+      if (!s) return { ok: false, error: 'Sessione non trovata' }
+      const bn = fileBaseName.trim()
+      if (!bn.endsWith('.json') || bn !== bn.replace(/[/\\]/g, '')) {
+        return { ok: false, error: 'Nome file non valido' }
+      }
+      const label = s.playlistTitle.trim() || 'Senza titolo'
+      const themeCur = normalizePlaylistThemeColor(s.playlistThemeColor ?? '')
+      const wm = watermarkPathForDiskSave(s)
+      const api = window.electronAPI
+      if (s.playlistMode === 'launchpad') {
+        const cells = s.launchPadCells ?? defaultLaunchPadCells()
+        const totalDurationSec = await totalDurationSecForPlaylistSave({
+          playlistMode: 'launchpad',
+          paths: [],
+          launchPadCells: cloneLaunchPadCellsSnapshot(cells),
+        })
+        const r = await api.regiaVideoCloudSaveFile({
+          fileBaseName: bn,
+          payload: {
+            label,
+            paths: [],
+            crossfade: false,
+            loopMode: 'off',
+            themeColor: themeCur === '' ? null : themeCur,
+            playlistMode: 'launchpad',
+            launchPadCells: cloneLaunchPadCellsSnapshot(cells),
+            watermarkPngPath: wm,
+            totalDurationSec,
+          },
+        })
+        if (!r.ok) return r
+        const wmCur = normalizePlaylistWatermarkAbsPath(s.playlistWatermarkPngPath)
+        patchFloatingSession(sessionId, {
+          savedEditPathsBaseline: [],
+          savedEditLaunchPadBaseline: cloneLaunchPadCellsSnapshot(cells),
+          savedEditTitleBaseline: label.trim(),
+          savedEditThemeColorBaseline: themeCur,
+          savedEditWatermarkBaseline: wmCur,
+          regiaVideoCloudSourceFile: r.fileName,
+        })
+        return r
+      }
+      if (s.playlistMode === 'chalkboard') {
+        const pathsCb = s.chalkboardBankPaths ?? []
+        if (pathsCb.length < 4) {
+          return { ok: false, error: 'Chalkboard incompleta (servono 4 banchi)' }
+        }
+        const bgCur = normalizeChalkboardBackgroundHex(s.chalkboardBackgroundColor)
+        const pl = cloneChalkboardPlacementsByBank(s.chalkboardPlacementsByBank)
+        const totalDurationSec = await totalDurationSecForPlaylistSave({
+          playlistMode: 'chalkboard',
+          paths: [],
+        })
+        const r = await api.regiaVideoCloudSaveFile({
+          fileBaseName: bn,
+          payload: {
+            label,
+            paths: [],
+            playlistMode: 'chalkboard',
+            chalkboardBankPaths: [...pathsCb],
+            chalkboardBackgroundColor: bgCur,
+            chalkboardPlacementsByBank: pl,
+            watermarkPngPath: wm,
+            totalDurationSec,
+          },
+        })
+        if (!r.ok) return r
+        const wmCur = normalizePlaylistWatermarkAbsPath(s.playlistWatermarkPngPath)
+        patchFloatingSession(sessionId, {
+          savedEditChalkboardPathsBaseline: [...pathsCb],
+          savedEditChalkboardContentRevBaseline: s.chalkboardContentRev ?? 0,
+          savedEditChalkboardPlacementsBaseline:
+            cloneChalkboardPlacementsByBank(pl),
+          savedEditChalkboardBackgroundBaseline: bgCur,
+          savedEditTitleBaseline: label.trim(),
+          savedEditThemeColorBaseline: themeCur,
+          savedEditWatermarkBaseline: wmCur,
+          regiaVideoCloudSourceFile: r.fileName,
+        })
+        return r
+      }
+      const list = s.paths
+      const trackLoop = s.playlistLoopMode ?? loopMode
+      const totalDurationSec = await totalDurationSecForPlaylistSave({
+        playlistMode: 'tracks',
+        paths: list,
+      })
+      const r = await api.regiaVideoCloudSaveFile({
+        fileBaseName: bn,
+        payload: {
+          label,
+          paths: list,
+          crossfade: s.playlistCrossfade,
+          loopMode: trackLoop,
+          themeColor: themeCur === '' ? null : themeCur,
+          playlistMode: 'tracks',
+          watermarkPngPath: wm,
+          totalDurationSec,
+        },
+      })
+      if (!r.ok) return r
+      const wmCur = normalizePlaylistWatermarkAbsPath(s.playlistWatermarkPngPath)
+      patchFloatingSession(sessionId, {
+        savedEditPathsBaseline: [...list],
+        savedEditTitleBaseline: label.trim(),
+        savedEditCrossfadeBaseline: s.playlistCrossfade,
+        savedEditPlaylistLoopBaseline: trackLoop,
+        savedEditThemeColorBaseline: themeCur,
+        savedEditWatermarkBaseline: wmCur,
+        regiaVideoCloudSourceFile: r.fileName,
+      })
+      return r
+    },
+    [patchFloatingSession, loopMode],
   )
 
   const saveLoadedPlaylistOverwrite = useCallback(
     async (sessionId: string) => {
       const s = floatingSessionsRef.current.find((x) => x.id === sessionId)
-      if (!s || !sessionHasSavedEditLink(s)) return
+      if (!s) return
+      if (sessionHasCloudEditLink(s)) {
+        if (!floatingPlaylistSessionDirty(s, loopMode)) return
+        recordUndoPoint()
+        const cloudName = s.regiaVideoCloudSourceFile!.trim()
+        const r = await writeFloatingSessionToRegiaVideoCloud(
+          sessionId,
+          cloudName,
+        )
+        if (!r.ok) {
+          const extra =
+            r.pathsOutsideRoot?.length &&
+            ` File fuori cartella: ${r.pathsOutsideRoot.slice(0, 3).join(', ')}${r.pathsOutsideRoot.length > 3 ? '…' : ''}.`
+          window.alert(`${r.error}${extra ?? ''}`)
+        }
+        return
+      }
+      if (!sessionHasSavedEditLink(s)) return
       const id = s.editingSavedPlaylistId
       const label = s.playlistTitle.trim() || 'Senza titolo'
       const themeCur = normalizePlaylistThemeColor(s.playlistThemeColor ?? '')
@@ -2549,7 +2773,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         savedEditWatermarkBaseline: wmCur,
       })
     },
-    [patchFloatingSession, recordUndoPoint, refreshSavedPlaylists, loopMode],
+    [
+      patchFloatingSession,
+      recordUndoPoint,
+      refreshSavedPlaylists,
+      loopMode,
+      writeFloatingSessionToRegiaVideoCloud,
+    ],
   )
 
   const persistSavedPlaylistAfterFloatingTitleBlur = useCallback(
@@ -2561,6 +2791,23 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (!s) return
       const label = trimmedTitle.trim().slice(0, 120) || 'Senza titolo'
       const themeCur = normalizePlaylistThemeColor(s.playlistThemeColor ?? '')
+
+      if (sessionHasCloudEditLink(s)) {
+        const shellLoop = shellLoopModeRef.current
+        if (!floatingPlaylistSessionDirty(s, shellLoop)) return
+        recordUndoPoint()
+        const r = await writeFloatingSessionToRegiaVideoCloud(
+          sessionId,
+          s.regiaVideoCloudSourceFile!.trim(),
+        )
+        if (!r.ok) {
+          const extra =
+            r.pathsOutsideRoot?.length &&
+            ` File fuori cartella: ${r.pathsOutsideRoot.slice(0, 3).join(', ')}${r.pathsOutsideRoot.length > 3 ? '…' : ''}.`
+          window.alert(`${r.error}${extra ?? ''}`)
+        }
+        return
+      }
 
       /** Pannello non ancora collegato a una voce su disco (playlist o launchpad). */
       if (!sessionHasSavedEditLink(s)) {
@@ -2828,13 +3075,18 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       chainMap.set(sessionId, next)
       await next
     },
-    [patchFloatingSession, refreshSavedPlaylists],
+    [
+      patchFloatingSession,
+      refreshSavedPlaylists,
+      recordUndoPoint,
+      writeFloatingSessionToRegiaVideoCloud,
+    ],
   )
 
   const removeFloatingPlaylist = useCallback(
     async (id: string) => {
       const s = floatingSessionsRef.current.find((x) => x.id === id)
-      if (s && sessionHasSavedEditLink(s)) {
+      if (s && sessionHasLinkedPersistTarget(s)) {
         await persistSavedPlaylistAfterFloatingTitleBlur(s.playlistTitle, id)
       }
       recordUndoPoint()
@@ -2952,7 +3204,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   )
 
   const loadSavedPlaylist = useCallback(
-    async (id: string): Promise<string | null> => {
+    async (
+      id: string,
+      opts?: { preservePlayback?: boolean },
+    ): Promise<string | null> => {
       const data = await window.electronAPI.playlistsLoad(id)
       if (!data) return null
       const isLaunchpad = data.playlistMode === 'launchpad'
@@ -2990,6 +3245,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           playlistThemeColor: loadedTheme,
           playlistCrossfade: false,
           editingSavedPlaylistId: id,
+          regiaVideoCloudSourceFile: null,
           savedEditPathsBaseline: [],
           savedEditLaunchPadBaseline: cloneLaunchPadCellsSnapshot(cells),
           savedEditTitleBaseline: label.trim(),
@@ -3018,6 +3274,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           playlistThemeColor: loadedTheme,
           playlistCrossfade: false,
           editingSavedPlaylistId: id,
+          regiaVideoCloudSourceFile: null,
           savedEditPathsBaseline: null,
           savedEditLaunchPadBaseline: null,
           savedEditChalkboardPathsBaseline: [...cbPaths],
@@ -3039,6 +3296,146 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           currentIndex: 0,
           playlistTitle: label,
           editingSavedPlaylistId: id,
+          regiaVideoCloudSourceFile: null,
+          savedEditPathsBaseline: [...data.paths],
+          savedEditLaunchPadBaseline: null,
+          savedEditTitleBaseline: label.trim(),
+          savedEditCrossfadeBaseline: data.crossfade,
+          savedEditPlaylistLoopBaseline: loadedLoop,
+          savedEditThemeColorBaseline: loadedTheme,
+          playlistCrossfade: data.crossfade,
+          playlistLoopMode: loadedLoop,
+          playlistThemeColor: loadedTheme,
+          playlistWatermarkPngPath: loadedWm,
+          savedEditWatermarkBaseline: loadedWm,
+        }
+      }
+      const nextFloating = [...floatingSessionsRef.current, newS]
+      floatingSessionsRef.current = nextFloating
+      setFloatingSessions(nextFloating)
+      setActiveFloatingSessionId(newS.id)
+      activeFloatingSessionIdRef.current = newS.id
+      const preservePlayback = opts?.preservePlayback === true
+      if (!preservePlayback) {
+        setPlaybackSessionId(newS.id)
+        playbackSessionIdStateRef.current = newS.id
+        const firstTracks = [...prev, newS].find(
+          (x) => isTracksPlaylistMode(x.playlistMode),
+        )
+        setVideoOutputSessionId(
+          newS.playlistMode === 'launchpad' || newS.playlistMode === 'chalkboard'
+            ? (firstTracks?.id ?? null)
+            : newS.id,
+        )
+        setPreviewSrc(null)
+        setPreviewSyncKey(0)
+        setVideoPlaying(false)
+        setLaunchpadAudioPlaying(false)
+        loadedIndexRef.current = null
+        setPlaybackLoadedTrack(null)
+        await send({ type: 'programVacant' })
+      }
+      openFloatingPlaylist()
+      return newS.id
+    },
+    [recordUndoPoint, send, openFloatingPlaylist],
+  )
+
+  const loadPlaylistFromRegiaVideoCloudFile = useCallback(
+    async (fileName: string): Promise<string | null> => {
+      const res = await window.electronAPI.regiaVideoCloudLoadFile(fileName)
+      if (!res.ok) {
+        window.alert(res.error)
+        return null
+      }
+      const data = res.data
+      const isLaunchpad = data.playlistMode === 'launchpad'
+      const isChalkboard = data.playlistMode === 'chalkboard'
+      if (!isLaunchpad && !isChalkboard && !data.paths.length) return null
+      if (
+        isLaunchpad &&
+        (!data.launchPadCells || data.launchPadCells.length < LAUNCHPAD_CELL_COUNT)
+      )
+        return null
+      if (
+        isChalkboard &&
+        (!data.chalkboardBankPaths || data.chalkboardBankPaths.length < 4)
+      )
+        return null
+      recordUndoPoint()
+      const prev = floatingSessionsRef.current
+      const last = prev[prev.length - 1]
+      const pos = last
+        ? { x: last.pos.x + 28, y: last.pos.y + 28 }
+        : { x: 24, y: 96 }
+      const label = data.label.trim() || 'Senza titolo'
+      const loadedTheme = normalizePlaylistThemeColor(data.themeColor)
+      const loadedWm = normalizePlaylistWatermarkAbsPath(data.watermarkPngPath)
+      const safeName = fileName.trim().replace(/[/\\]/g, '')
+      let newS: FloatingPlaylistSession
+      if (isLaunchpad) {
+        const cells = cloneLaunchPadCellsSnapshot(
+          data.launchPadCells as LaunchPadCell[],
+        )
+        newS = {
+          ...createLaunchPadFloatingSession(pos),
+          playlistTitle: label,
+          launchPadCells: cells,
+          playlistThemeColor: loadedTheme,
+          playlistCrossfade: false,
+          editingSavedPlaylistId: null,
+          regiaVideoCloudSourceFile: safeName,
+          savedEditPathsBaseline: [],
+          savedEditLaunchPadBaseline: cloneLaunchPadCellsSnapshot(cells),
+          savedEditTitleBaseline: label.trim(),
+          savedEditCrossfadeBaseline: false,
+          savedEditThemeColorBaseline: loadedTheme,
+          playlistWatermarkPngPath: loadedWm,
+          savedEditWatermarkBaseline: loadedWm,
+        }
+      } else if (isChalkboard) {
+        const cbPaths = [...data.chalkboardBankPaths]
+        const plLoaded = normalizeChalkboardPlacementsFromDisk(
+          data.chalkboardPlacementsByBank,
+        )
+        const bgLoaded = normalizeChalkboardBackgroundHex(
+          data.chalkboardBackgroundColor,
+        )
+        newS = {
+          ...createChalkboardFloatingSession(pos),
+          playlistTitle: label,
+          chalkboardBankPaths: cbPaths,
+          chalkboardBankIndex: 0,
+          chalkboardContentRev: 0,
+          chalkboardOutputMode: 'off',
+          chalkboardBackgroundColor: bgLoaded,
+          chalkboardPlacementsByBank: plLoaded,
+          playlistThemeColor: loadedTheme,
+          playlistCrossfade: false,
+          editingSavedPlaylistId: null,
+          regiaVideoCloudSourceFile: safeName,
+          savedEditPathsBaseline: null,
+          savedEditLaunchPadBaseline: null,
+          savedEditChalkboardPathsBaseline: [...cbPaths],
+          savedEditChalkboardContentRevBaseline: 0,
+          savedEditChalkboardPlacementsBaseline:
+            cloneChalkboardPlacementsByBank(plLoaded),
+          savedEditChalkboardBackgroundBaseline: bgLoaded,
+          savedEditTitleBaseline: label.trim(),
+          savedEditCrossfadeBaseline: false,
+          savedEditThemeColorBaseline: loadedTheme,
+          playlistWatermarkPngPath: loadedWm,
+          savedEditWatermarkBaseline: loadedWm,
+        }
+      } else {
+        const loadedLoop = parsePersistedPlaylistLoopMode(data.loopMode) ?? 'off'
+        newS = {
+          ...createEmptyFloatingSession(pos),
+          paths: data.paths,
+          currentIndex: 0,
+          playlistTitle: label,
+          editingSavedPlaylistId: null,
+          regiaVideoCloudSourceFile: safeName,
           savedEditPathsBaseline: [...data.paths],
           savedEditLaunchPadBaseline: null,
           savedEditTitleBaseline: label.trim(),
@@ -3080,6 +3477,73 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     [recordUndoPoint, send, openFloatingPlaylist],
   )
 
+  const saveFloatingPlaylistCopyToRegiaVideoCloud = useCallback(
+    async (sessionId: string): Promise<boolean> => {
+      const s = floatingSessionsRef.current.find((x) => x.id === sessionId)
+      if (!s) return false
+      const api = window.electronAPI
+      if (
+        !api ||
+        !('regiaVideoCloudSaveFile' in api) ||
+        typeof (api as { regiaVideoCloudSaveFile?: unknown }).regiaVideoCloudSaveFile !==
+          'function'
+      ) {
+        window.alert(
+          'Salvataggio cloud Regia Video è disponibile solo nell’app desktop Electron.',
+        )
+        return false
+      }
+      let suggested: string
+      try {
+        suggested = await api.regiaVideoCloudSuggestFileName(
+          s.playlistTitle.trim() || 'playlist',
+        )
+      } catch {
+        suggested = 'playlist.json'
+      }
+      const raw = window.prompt(
+        'Nome file JSON in Regia Video/Playlist (solo nome file, es. mia_playlist.json)',
+        suggested,
+      )
+      if (raw == null) return false
+      let name = raw.trim().replace(/[/\\]/g, '')
+      if (!name) return false
+      if (!name.toLowerCase().endsWith('.json')) {
+        name = `${name}.json`
+      }
+      let existing: { fileName: string }[] = []
+      try {
+        existing = await api.regiaVideoCloudList()
+      } catch {
+        existing = []
+      }
+      if (existing.some((x) => x.fileName === name)) {
+        const ok = window.confirm(
+          `Esiste già «${name}». Vuoi sovrascriverlo con il contenuto di questo pannello?`,
+        )
+        if (!ok) return false
+      }
+      recordUndoPoint()
+      const r = await writeFloatingSessionToRegiaVideoCloud(sessionId, name)
+      if (!r.ok) {
+        const extra =
+          r.pathsOutsideRoot?.length &&
+          ` File fuori cartella: ${r.pathsOutsideRoot.slice(0, 3).join(', ')}${r.pathsOutsideRoot.length > 3 ? '…' : ''}.`
+        window.alert(`${r.error}${extra ?? ''}`)
+        return false
+      }
+      return true
+    },
+    [recordUndoPoint, writeFloatingSessionToRegiaVideoCloud],
+  )
+
+  const setFloatingPlaylistPanelLocked = useCallback(
+    (sessionId: string, locked: boolean) => {
+      patchFloatingSession(sessionId, { panelLocked: locked })
+    },
+    [patchFloatingSession],
+  )
+
   const deleteSavedPlaylist = useCallback(
     async (id: string) => {
       await window.electronAPI.playlistsDelete(id)
@@ -3090,6 +3554,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             ? {
                 ...s,
                 editingSavedPlaylistId: null,
+                regiaVideoCloudSourceFile: null,
                 savedEditPathsBaseline: null,
                 savedEditLaunchPadBaseline: null,
                 savedEditChalkboardPathsBaseline: null,
@@ -3609,6 +4074,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         !s0.launchPadCells
       )
         return
+      if (s0.panelLocked === true) return
       const hasPatch =
         ('samplePath' in patch && patch.samplePath !== undefined) ||
         ('padColor' in patch && patch.padColor !== undefined) ||
@@ -4061,7 +4527,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const list = await window.electronAPI.selectFolder()
       if (!list?.length) return
       recordUndoPoint()
-      const preserveTitle = s0 != null && sessionHasSavedEditLink(s0)
+      const preserveTitle = s0 != null && sessionHasLinkedPersistTarget(s0)
       await applyPathsList(list, sessionId, { skipHistory: true })
       if (!preserveTitle) {
         patchFloatingSession(sessionId, {
@@ -4116,6 +4582,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (!picked.length) return
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
       if (!s0 || s0.playlistMode === 'launchpad') return
+      if (s0.panelLocked === true) return
       recordUndoPoint()
       const prev = s0.paths
       const insertAt =
@@ -4182,6 +4649,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         !s0.launchPadCells
       )
         return
+      if (s0.panelLocked === true) return
       if (
         startSlotIndex < 0 ||
         startSlotIndex >= LAUNCHPAD_CELL_COUNT
@@ -4212,6 +4680,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const s = floatingSessionsRef.current.find((x) => x.id === sessionId)
       if (!s || s.playlistMode === 'launchpad' || s.playlistMode === 'chalkboard')
         return
+      if (s.panelLocked === true) return
       const prev = s.paths
       if (index < 0 || index >= prev.length) return
       recordUndoPoint()
@@ -4290,6 +4759,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     ) => {
       if (fromIndex === toIndex) return
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
+      if (s0?.panelLocked === true) return
       if (s0?.playlistMode === 'launchpad') return
       const prev0 = s0?.paths ?? []
       if (
@@ -4346,6 +4816,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     }) => {
       const { target, payload } = args
       if (payload.v !== 1) return
+      const tgtLocked = floatingSessionsRef.current.find(
+        (x) => x.id === target.sessionId,
+      )?.panelLocked
+      if (tgtLocked === true) return
 
       const clampBank = (b: number) =>
         Math.max(0, Math.min(LAUNCHPAD_BANK_COUNT - 1, Math.floor(b)))
@@ -5301,6 +5775,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       refreshSavedPlaylists,
       saveCurrentPlaylist,
       loadSavedPlaylist,
+      loadPlaylistFromRegiaVideoCloudFile,
+      saveFloatingPlaylistCopyToRegiaVideoCloud,
+      setFloatingPlaylistPanelLocked,
       deleteSavedPlaylist,
       reorderSavedPlaylists,
       duplicateSavedPlaylist,
@@ -5421,6 +5898,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       refreshSavedPlaylists,
       saveCurrentPlaylist,
       loadSavedPlaylist,
+      loadPlaylistFromRegiaVideoCloudFile,
+      saveFloatingPlaylistCopyToRegiaVideoCloud,
+      setFloatingPlaylistPanelLocked,
       deleteSavedPlaylist,
       reorderSavedPlaylists,
       duplicateSavedPlaylist,
@@ -5511,6 +5991,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       {children}
       <FloaterOsPlaylistBridge
         setPlaylistFloaterOsSessionIds={setPlaylistFloaterOsSessionIds}
+        floatingSessionsRef={floatingSessionsRef}
       />
     </RegiaContext.Provider>
   )
@@ -5571,6 +6052,9 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
   'refreshSavedPlaylists',
   'saveCurrentPlaylist',
   'loadSavedPlaylist',
+  'loadPlaylistFromRegiaVideoCloudFile',
+  'saveFloatingPlaylistCopyToRegiaVideoCloud',
+  'setFloatingPlaylistPanelLocked',
   'deleteSavedPlaylist',
   'reorderSavedPlaylists',
   'duplicateSavedPlaylist',
@@ -5601,14 +6085,25 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
 
 function FloaterOsPlaylistBridge({
   setPlaylistFloaterOsSessionIds,
+  floatingSessionsRef,
 }: {
   setPlaylistFloaterOsSessionIds: Dispatch<SetStateAction<string[]>>
+  floatingSessionsRef: MutableRefObject<FloatingPlaylistSession[]>
 }) {
   const regia = useRegia()
   const regiaRef = useRef(regia)
   useLayoutEffect(() => {
     regiaRef.current = regia
   }, [regia])
+
+  const buildFloaterPayload = useCallback((floaterSessionId: string) => {
+    const r = regiaRef.current
+    const sessions = floatingSessionsRef.current
+    return buildPlaylistFloaterSyncPayload(
+      { ...r, floatingPlaylistSessions: sessions },
+      floaterSessionId,
+    )
+  }, [floatingSessionsRef])
 
   useEffect(() => {
     const api = window.electronAPI
@@ -5625,6 +6120,23 @@ function FloaterOsPlaylistBridge({
     )
     return off
   }, [])
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (
+      !api?.onPlaylistFloaterRequestStateFromMain ||
+      !api.playlistFloaterBroadcastState
+    )
+      return
+    return api.onPlaylistFloaterRequestStateFromMain((msg) => {
+      const id =
+        typeof msg?.sessionId === 'string' && msg.sessionId.trim()
+          ? msg.sessionId.trim()
+          : ''
+      if (!id) return
+      void api.playlistFloaterBroadcastState(id, buildFloaterPayload(id))
+    })
+  }, [buildFloaterPayload])
 
   useEffect(() => {
     const api = window.electronAPI
@@ -5676,13 +6188,14 @@ function FloaterOsPlaylistBridge({
         const bounds = await api.getRegiaContentBounds()
         if (!bounds) return
         const h = s.collapsed ? 84 : s.panelSize.height
-        await api.openPlaylistFloaterWindow({
+        const opened = await api.openPlaylistFloaterWindow({
           sessionId: s.id,
           x: Math.round(bounds.x + s.pos.x),
           y: Math.round(bounds.y + s.pos.y),
           width: Math.round(s.panelSize.width),
           height: Math.round(h),
         })
+        if (!opened?.ok) return
         regiaRef.current.updateFloatingPlaylistChrome(s.id, { pos: { x: 0, y: 0 } })
         setPlaylistFloaterOsSessionIds((prev) =>
           prev.includes(s.id) ? prev : [...prev, s.id],
@@ -5719,18 +6232,14 @@ function FloaterOsPlaylistBridge({
     if (pushTimerRef.current != null) clearTimeout(pushTimerRef.current)
     pushTimerRef.current = setTimeout(() => {
       pushTimerRef.current = null
-      const r = regiaRef.current
       for (const id of playlistFloaterOsSessionIds) {
-        void api.playlistFloaterBroadcastState(
-          id,
-          buildPlaylistFloaterSyncPayload(r, id),
-        )
+        void api.playlistFloaterBroadcastState(id, buildFloaterPayload(id))
       }
     }, 48)
     return () => {
       if (pushTimerRef.current != null) clearTimeout(pushTimerRef.current)
     }
-  }, [regia, playlistFloaterOsSessionIds])
+  }, [regia, playlistFloaterOsSessionIds, buildFloaterPayload])
 
   return null
 }

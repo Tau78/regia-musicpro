@@ -4,6 +4,7 @@ import {
   type PreviewDisplayMode,
 } from './previewDetachedStorage.ts'
 import {
+  defaultPreviewLayoutPersist,
   dispatchPreviewLayoutApplied,
   readPreviewLayoutFromLs,
   writePreviewLayoutToLs,
@@ -132,6 +133,30 @@ export function readStandaloneWorkspaceShell(): WorkspaceShellPersist {
     cueSinkId: readCueSinkLs(),
     secondScreenOn: false,
     sidebarMainTab: readSidebarMainTabFromLs(),
+  }
+}
+
+/**
+ * Shell “minima” per un nuovo workspace: anteprima agganciata, sidebar chiusa,
+ * nessun secondo schermo forzato; mantiene dispositivi audio/volume da preferenze utente.
+ */
+export function buildBlankWorkspaceShellPersist(
+  outputResolution: { width: number; height: number },
+): WorkspaceShellPersist {
+  return {
+    previewDisplayMode: 'docked',
+    previewLayout: defaultPreviewLayoutPersist(),
+    sidebarOpen: false,
+    sidebarWidthPx: clampSidebarWidth(readSidebarWidthPx()),
+    outputResolution,
+    loopMode: 'off',
+    stillImageDurationSec: DEFAULT_STILL_IMAGE_DURATION_SEC,
+    muted: false,
+    outputVolume: readOutputVolumeLs(),
+    outputSinkId: readOutputSinkLs(),
+    cueSinkId: readCueSinkLs(),
+    secondScreenOn: false,
+    sidebarMainTab: 'playlist',
   }
 }
 

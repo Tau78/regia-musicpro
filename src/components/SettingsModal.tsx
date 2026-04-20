@@ -13,6 +13,10 @@ import {
   type LaunchPadKeyModePref,
 } from '../lib/launchPadSettings.ts'
 import {
+  readPanelTooltipHintsEnabled,
+  writePanelTooltipHintsEnabled,
+} from '../lib/panelTooltipHintsSettings.ts'
+import {
   readPlanciaSnapEnabled,
   writePlanciaSnapEnabled,
 } from '../lib/planciaSnapSettings.ts'
@@ -84,6 +88,8 @@ export default function SettingsModal({
   })
   const [busy, setBusy] = useState(false)
   const [snapEnabled, setSnapEnabled] = useState(true)
+  const [panelTooltipHintsEnabled, setPanelTooltipHintsEnabled] =
+    useState(true)
   const [launchPadDefaultKeyMode, setLaunchPadDefaultKeyMode] =
     useState<LaunchPadKeyModePref>('toggle')
   const [launchPadCueEnabled, setLaunchPadCueEnabled] = useState(true)
@@ -131,6 +137,7 @@ export default function SettingsModal({
   useEffect(() => {
     if (!open) return
     setSnapEnabled(readPlanciaSnapEnabled())
+    setPanelTooltipHintsEnabled(readPanelTooltipHintsEnabled())
     setOnAirOnAtStartup(readOnAirOnAtStartup())
     setLaunchPadDefaultKeyMode(readLaunchPadDefaultKeyMode())
     setLaunchPadCueEnabled(readLaunchPadCueEnabled())
@@ -216,6 +223,15 @@ export default function SettingsModal({
     writePlanciaSnapEnabled(v)
     setSnapEnabled(v)
   }, [])
+
+  const onPanelTooltipHintsChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const v = e.target.checked
+      writePanelTooltipHintsEnabled(v)
+      setPanelTooltipHintsEnabled(v)
+    },
+    [],
+  )
 
   const onOnAirStartupChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const v = e.target.checked
@@ -387,6 +403,19 @@ export default function SettingsModal({
   const [lanQr, setLanQr] = useState<string | null>(null)
   const [lanBusy, setLanBusy] = useState(false)
 
+  const [cloudStatus, setCloudStatus] = useState<{
+    configured: boolean
+    rootPath: string | null
+    rootValid: boolean
+    playlistDir: string | null
+    playlistDirWritable: boolean
+    diskFreeRatio: number | null
+  } | null>(null)
+  const [cloudReadinessText, setCloudReadinessText] = useState<string | null>(
+    null,
+  )
+  const [cloudBusy, setCloudBusy] = useState(false)
+
   const refreshLan = useCallback(async () => {
     try {
       const s = await window.electronAPI.lanServerStatus()
@@ -403,6 +432,26 @@ export default function SettingsModal({
     }, 0)
     return () => window.clearTimeout(t)
   }, [open, refreshLan])
+
+  const refreshCloudStatus = useCallback(async () => {
+    const api = window.electronAPI
+    if (!api?.regiaVideoCloudGetStatus) {
+      setCloudStatus(null)
+      return
+    }
+    try {
+      const s = await api.regiaVideoCloudGetStatus()
+      setCloudStatus(s)
+    } catch {
+      setCloudStatus(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    setCloudReadinessText(null)
+    void refreshCloudStatus()
+  }, [open, refreshCloudStatus])
 
   useEffect(() => {
     if (!open) return
@@ -765,6 +814,166 @@ export default function SettingsModal({
 
             <section
               className="settings-panel"
+              aria-labelledby="settings-panel-regia-video-cloud-title"
+            >
+              <h3
+                id="settings-panel-regia-video-cloud-title"
+                className="settings-panel-title"
+              >
+                Regia Video (Drive / cloud)
+              </h3>
+              <div className="settings-panel-block">
+                <p className="settings-modal-hint">
+                  Cartella sincronizzata che si deve chiamare esattamente{' '}
+                  <strong>Regia Video</strong>, con sottocartelle <code>Playlist</code>,{' '}
+                  <code>Musica</code>, <code>Suoni</code>, ecc. La configurazione è salvata
+                  nel profilo utente di questa postazione (non nel progetto).
+                </p>
+                {cloudStatus ? (
+                  <p className="settings-modal-value-line" aria-live="polite">
+                    Stato:{' '}
+                    <strong>
+                      {cloudStatus.rootValid && cloudStatus.playlistDirWritable
+                        ? 'OK'
+                        : 'Da completare'}
+                    </strong>
+                    {cloudStatus.rootPath ? (
+                      <>
+                        <span className="settings-modal-value-sep">·</span>
+                        <code className="settings-modal-code">
+                          {cloudStatus.rootPath}
+                        </code>
+                      </>
+                    ) : null}
+                  </p>
+                ) : (
+                  <p className="settings-modal-hint">
+                    Controlli cloud disponibili solo nell’app desktop Electron.
+                  </p>
+                )}
+                <div className="settings-modal-numeric-row">
+                  <button
+                    type="button"
+                    className="settings-modal-save-still-btn"
+                    disabled={cloudBusy || !window.electronAPI?.regiaVideoCloudPickRootFolder}
+                    onClick={async () => {
+                      const api = window.electronAPI
+                      if (!api?.regiaVideoCloudPickRootFolder) return
+                      setCloudBusy(true)
+                      try {
+                        const r = await api.regiaVideoCloudPickRootFolder()
+                        if (r.ok) {
+                          await api.regiaVideoCloudSetRoot(r.path)
+                          await refreshCloudStatus()
+                        } else if (r.error) {
+                          window.alert(r.error)
+                        }
+                      } finally {
+                        setCloudBusy(false)
+                      }
+                    }}
+                  >
+                    Scegli cartella…
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-modal-save-still-btn"
+                    disabled={cloudBusy || !cloudStatus?.configured}
+                    onClick={async () => {
+                      const api = window.electronAPI
+                      if (!api?.regiaVideoCloudSetRoot) return
+                      setCloudBusy(true)
+                      try {
+                        await api.regiaVideoCloudSetRoot(null)
+                        await refreshCloudStatus()
+                      } finally {
+                        setCloudBusy(false)
+                      }
+                    }}
+                  >
+                    Disconnetti
+                  </button>
+                </div>
+                <div className="settings-modal-numeric-row">
+                  <button
+                    type="button"
+                    className="settings-modal-save-still-btn"
+                    disabled={
+                      cloudBusy || !window.electronAPI?.regiaVideoCloudReadiness
+                    }
+                    onClick={async () => {
+                      const api = window.electronAPI
+                      if (!api?.regiaVideoCloudReadiness) return
+                      setCloudBusy(true)
+                      try {
+                        const rd = await api.regiaVideoCloudReadiness(null)
+                        const lines = [
+                          rd.ok ? 'Cartella: file critici OK.' : 'Cartella: problemi.',
+                          ...(rd.missingFiles.length
+                            ? [`Mancanti: ${rd.missingFiles.join(', ')}`]
+                            : []),
+                          ...(rd.warnings.length ? rd.warnings : []),
+                          rd.diskFreeRatio != null
+                            ? `Spazio libero sul volume (stima): ${(rd.diskFreeRatio * 100).toFixed(1)}%.`
+                            : '',
+                        ].filter(Boolean)
+                        setCloudReadinessText(lines.join('\n'))
+                      } catch (e) {
+                        setCloudReadinessText(
+                          e instanceof Error ? e.message : String(e),
+                        )
+                      } finally {
+                        setCloudBusy(false)
+                      }
+                    }}
+                  >
+                    Verifica cartella
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-modal-save-still-btn"
+                    disabled={
+                      cloudBusy || !window.electronAPI?.regiaVideoCloudExportZip
+                    }
+                    onClick={async () => {
+                      const api = window.electronAPI
+                      if (!api?.regiaVideoCloudExportZip || !api.regiaVideoCloudList)
+                        return
+                      setCloudBusy(true)
+                      try {
+                        const files = await api.regiaVideoCloudList()
+                        const def = files[0]?.fileName ?? 'playlist.json'
+                        const name = window.prompt(
+                          'Nome file manifest (.json) da esportare in zip',
+                          def,
+                        )
+                        if (name == null) return
+                        const safe = name.trim().replace(/[/\\]/g, '')
+                        if (!safe.endsWith('.json')) {
+                          window.alert('Il nome deve terminare con .json')
+                          return
+                        }
+                        const r = await api.regiaVideoCloudExportZip(safe)
+                        if (!r.ok) window.alert(r.error)
+                        else window.alert('Zip creato nel percorso scelto.')
+                      } catch (e) {
+                        window.alert(e instanceof Error ? e.message : String(e))
+                      } finally {
+                        setCloudBusy(false)
+                      }
+                    }}
+                  >
+                    Esporta zip…
+                  </button>
+                </div>
+                {cloudReadinessText ? (
+                  <pre className="settings-modal-code-block">{cloudReadinessText}</pre>
+                ) : null}
+              </div>
+            </section>
+
+            <section
+              className="settings-panel"
               aria-labelledby="settings-panel-playlist-title"
             >
               <h3 id="settings-panel-playlist-title" className="settings-panel-title">
@@ -831,6 +1040,31 @@ export default function SettingsModal({
                 <label className="settings-modal-checkbox-row">
                   <input type="checkbox" checked={snapEnabled} onChange={onSnapChange} />
                   <span>SNAP attivo</span>
+                </label>
+              </div>
+
+              <div className="settings-panel-block">
+                <h4
+                  id="settings-panel-tooltip-hints-label"
+                  className="settings-subsection-title"
+                >
+                  Suggerimenti (tooltip barra)
+                </h4>
+                <p className="settings-modal-hint">
+                  Una barra fissa in basso per tutta la plancia (intestazione, sidebar,
+                  trasporto, anteprima e dock): al passaggio del mouse su aree con
+                  descrizione il testo si aggiorna, con messaggi distinti per playlist,
+                  launchpad e lavagna dove serve. I pannelli flottanti hanno una barra
+                  propria. Disattiva se preferisci più spazio verticale.
+                </p>
+                <label className="settings-modal-checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={panelTooltipHintsEnabled}
+                    onChange={onPanelTooltipHintsChange}
+                    aria-labelledby="settings-panel-tooltip-hints-label"
+                  />
+                  <span>Mostra barra suggerimenti al passaggio del mouse</span>
                 </label>
               </div>
 
