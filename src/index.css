@@ -159,6 +159,33 @@ button {
   border-color: rgba(255, 255, 255, 0.14);
 }
 
+.regia-header-hints-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--muted);
+}
+
+.regia-header-hints-btn:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.regia-header-hints-btn.is-active {
+  color: var(--text);
+  border-color: rgba(61, 139, 253, 0.45);
+  background: rgba(61, 139, 253, 0.12);
+}
+
+.regia-header-hints-icon {
+  display: block;
+}
+
 .regia-settings-icon {
   display: block;
 }
@@ -379,6 +406,80 @@ button {
   color: var(--text);
   letter-spacing: 0.01em;
   line-height: 1.25;
+}
+
+.settings-panel-title--collapsible {
+  margin: 0 0 0.7rem;
+  padding: 0;
+  border: none;
+}
+
+.settings-panel.is-collapsed .settings-panel-title--collapsible {
+  margin-bottom: 0;
+}
+
+.settings-panel-collapse-trigger {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0 0 0.55rem;
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-panel-collapse-trigger:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.settings-panel-collapse-trigger:focus-visible {
+  outline: 2px solid rgba(61, 139, 253, 0.55);
+  outline-offset: 2px;
+}
+
+.settings-panel.is-collapsed .settings-panel-collapse-trigger {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.settings-panel-chevron {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: var(--muted);
+  transition:
+    transform 0.15s ease,
+    color 0.12s ease;
+}
+
+.settings-panel-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.settings-panel-collapse-trigger:hover .settings-panel-chevron {
+  color: var(--text);
+}
+
+.settings-panel-collapse-label {
+  min-width: 0;
+}
+
+.settings-panel-collapse-body {
+  padding-top: 0.15rem;
+}
+
+.settings-panel-collapse-body[hidden] {
+  display: none;
 }
 
 .settings-panel-block + .settings-panel-block {
@@ -1706,23 +1807,8 @@ button {
   overflow: hidden;
 }
 
-/* Colonna anteprima: barra trasporto sticky in cima + scroll con snap verso l’anteprima. */
-.regia-main-preview-scroll {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  min-width: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scroll-snap-type: y proximity;
-}
-
-.regia-preview-transport-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 30;
+/* Barra trasporto: fuori dallo scroll anteprima, subito sotto l’header (stessa colonna). */
+.regia-main-transport-bar {
   flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
@@ -1739,8 +1825,19 @@ button {
     color-mix(in srgb, var(--bg) 82%, transparent) 100%
   );
   border-bottom: 1px solid var(--border);
-  scroll-snap-align: start;
-  scroll-snap-stop: normal;
+}
+
+/* Colonna anteprima: solo contenuto anteprima in scroll + snap. */
+.regia-main-preview-scroll {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-snap-type: y proximity;
 }
 
 .regia-main-preview-scroll .preview-bus-section,
@@ -1750,7 +1847,7 @@ button {
 }
 
 .preview-bus-section > .preview-program-next-layout {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   min-width: 0;
 }
@@ -2662,24 +2759,27 @@ button {
 }
 
 .preview-bus-section {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  /* Evita che main + barra hint superino l’altezza e facciano comparire scroll su .regia-main-preview-scroll */
+  overflow: hidden;
 }
 
 .preview-program-next-layout {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .preview-program-next-layout-main {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
@@ -2696,7 +2796,7 @@ button {
 .preview-hint-bar {
   flex-shrink: 0;
   flex-grow: 0;
-  margin-top: 0.15rem;
+  margin-top: 0;
   height: 3.2rem;
   min-height: 3.2rem;
   max-height: 3.2rem;

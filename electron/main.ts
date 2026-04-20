@@ -757,6 +757,7 @@ function closeAllPlaylistFloaterWindows(): void {
     }
   }
   playlistFloaterWindows.clear()
+  playlistFloaterOpenLocks.clear()
 }
 
 /**
@@ -1983,82 +1984,82 @@ function setupIpc() {
       if (playlistFloaterWindows.has(sessionId)) return { ok: true as const }
       if (playlistFloaterOpenLocks.has(sessionId)) return { ok: true as const }
       playlistFloaterOpenLocks.add(sessionId)
-      const x = Number(opts?.x)
-      const y = Number(opts?.y)
-      const width = Number(opts?.width)
-      const height = Number(opts?.height)
-      if (
-        !Number.isFinite(x) ||
-        !Number.isFinite(y) ||
-        !Number.isFinite(width) ||
-        !Number.isFinite(height)
-      ) {
-        playlistFloaterOpenLocks.delete(sessionId)
-        return { ok: false as const }
-      }
-      const floaterIcon = resolveRegiaIconPath()
-      let w: BrowserWindow
       try {
-        w = new BrowserWindow({
-        x: Math.round(x),
-        y: Math.round(y),
-        width: Math.max(220, Math.round(width)),
-        height: Math.max(180, Math.round(height)),
-        title: 'Pannello playlist — Regia',
-        frame: false,
-        show: false,
-        backgroundColor: '#13151a',
-        ...(floaterIcon ? { icon: floaterIcon } : {}),
-        webPreferences: {
-          preload: path.join(__dirname, 'preload.cjs'),
-          contextIsolation: true,
-          nodeIntegration: false,
-          sandbox: true,
-          webSecurity: false,
-        },
-      })
-      } catch {
-        playlistFloaterOpenLocks.delete(sessionId)
-        return { ok: false as const }
-      }
-      w.setMenuBarVisibility(false)
-      /** Finestra indipendente dalla main: resta visibile se riduci la regia; sempre davanti alle altre app. */
-      if (process.platform === 'darwin') {
-        w.setAlwaysOnTop(true, 'floating')
-      } else {
-        w.setAlwaysOnTop(true)
-      }
-      if (isDev) {
-        void w.loadURL(
-          `${getDevServerUrl()}/?playlistOsFloater=1&session=${encodeURIComponent(sessionId)}`,
-        )
-      } else {
-        void w.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), {
-          search: `playlistOsFloater=1&session=${encodeURIComponent(sessionId)}`,
-        })
-      }
-      w.once('ready-to-show', () => {
-        if (!w.isDestroyed()) w.show()
-      })
-      w.on('close', () => {
-        let b: { x: number; y: number; width: number; height: number } | null =
-          null
-        try {
-          if (!w.isDestroyed()) b = w.getBounds()
-        } catch {
-          /* ignore */
+        const x = Number(opts?.x)
+        const y = Number(opts?.y)
+        const width = Number(opts?.width)
+        const height = Number(opts?.height)
+        if (
+          !Number.isFinite(x) ||
+          !Number.isFinite(y) ||
+          !Number.isFinite(width) ||
+          !Number.isFinite(height)
+        ) {
+          return { ok: false as const }
         }
-        playlistFloaterWindows.delete(sessionId)
-        if (regiaWindow && !regiaWindow.isDestroyed()) {
-          regiaWindow.webContents.send('playlist-floater-os-closed', {
-            sessionId,
-            bounds: b,
+        const floaterIcon = resolveRegiaIconPath()
+        const w = new BrowserWindow({
+          x: Math.round(x),
+          y: Math.round(y),
+          width: Math.max(220, Math.round(width)),
+          height: Math.max(180, Math.round(height)),
+          title: 'Pannello playlist — Regia',
+          frame: false,
+          show: false,
+          backgroundColor: '#13151a',
+          ...(floaterIcon ? { icon: floaterIcon } : {}),
+          webPreferences: {
+            preload: path.join(__dirname, 'preload.cjs'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+            webSecurity: false,
+          },
+        })
+        w.setMenuBarVisibility(false)
+        /** Finestra indipendente dalla main: resta visibile se riduci la regia; sempre davanti alle altre app. */
+        if (process.platform === 'darwin') {
+          w.setAlwaysOnTop(true, 'floating')
+        } else {
+          w.setAlwaysOnTop(true)
+        }
+        if (isDev) {
+          void w.loadURL(
+            `${getDevServerUrl()}/?playlistOsFloater=1&session=${encodeURIComponent(sessionId)}`,
+          )
+        } else {
+          void w.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), {
+            search: `playlistOsFloater=1&session=${encodeURIComponent(sessionId)}`,
           })
         }
-      })
-      playlistFloaterWindows.set(sessionId, w)
-      playlistFloaterOpenLocks.delete(sessionId)
-      return { ok: true as const }
+        w.once('ready-to-show', () => {
+          if (!w.isDestroyed()) w.show()
+        })
+        w.on('close', () => {
+          let b: { x: number; y: number; width: number; height: number } | null =
+            null
+          try {
+            if (!w.isDestroyed()) b = w.getBounds()
+          } catch {
+            /* ignore */
+          }
+          playlistFloaterWindows.delete(sessionId)
+          if (regiaWindow && !regiaWindow.isDestroyed()) {
+            try {
+              regiaWindow.webContents.send('playlist-floater-os-closed', {
+                sessionId,
+                bounds: b,
+              })
+            } catch {
+              /* regia in chiusura */
+            }
+          }
+        })
+        playlistFloaterWindows.set(sessionId, w)
+        return { ok: true as const }
+      } finally {
+        playlistFloaterOpenLocks.delete(sessionId)
+      }
     },
   )
 
@@ -2066,7 +2067,10 @@ function setupIpc() {
     const id = typeof sessionId === 'string' ? sessionId : ''
     const w = id ? playlistFloaterWindows.get(id) : undefined
     if (w && !w.isDestroyed()) w.close()
-    if (id) playlistFloaterWindows.delete(id)
+    if (id) {
+      playlistFloaterWindows.delete(id)
+      playlistFloaterOpenLocks.delete(id)
+    }
     return { ok: true as const }
   })
 

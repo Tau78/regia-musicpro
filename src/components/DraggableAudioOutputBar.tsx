@@ -102,20 +102,44 @@ function isInteractiveDragBlocker(target: EventTarget | null): boolean {
   )
 }
 
-/** Aggancia nell’header (quando la barra è flottante). */
-function IconPinDock() {
+/** Freccia nel vassoio (come “Download” / Lucide): standard per “porta qui in basso” — aggancia. */
+function IconDockIntoBar() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden fill="currentColor">
-      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5S10.62 6.5 12 6.5s2.5 1.12 2.5 2.5S13.38 11.5 12 11.5z" />
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M12 15V3" />
     </svg>
   )
 }
 
-/** Stacca (quando la barra è nell’header). */
-function IconPinFloat() {
+/** Finestra + freccia in alto a destra (Lucide “External link”): standard per stacca / apri separato. */
+function IconDetachExternalLink() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden fill="currentColor">
-      <path d="M19 19H5V5h7V3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42L17.59 5H14V3z" />
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      aria-hidden
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
     </svg>
   )
 }
@@ -369,12 +393,18 @@ export default function DraggableAudioOutputBar() {
               if (docked) undock()
               else setDocked(true)
             }}
-            title={docked ? 'Stacca barra (trascina da zone vuote)' : 'Aggancia nell’header'}
+            title={
+              docked
+                ? 'Stacca in finestra libera (poi trascina dalle zone vuote)'
+                : 'Aggancia sotto l’intestazione (barra fissa nella plancia)'
+            }
             aria-label={
-              docked ? 'Stacca barra dalla barra superiore' : 'Aggancia barra nell’header'
+              docked
+                ? 'Stacca la barra in una finestra libera sul desktop'
+                : 'Aggancia la barra sotto l’intestazione nella plancia'
             }
           >
-            {docked ? <IconPinFloat /> : <IconPinDock />}
+            {docked ? <IconDetachExternalLink /> : <IconDockIntoBar />}
           </button>
         </div>
       </div>

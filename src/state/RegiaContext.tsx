@@ -77,6 +77,7 @@ import {
   type WorkspaceShellPersist,
 } from '../lib/workspaceShell.ts'
 import { readOnAirOnAtStartup } from '../lib/onAirStartupSettings.ts'
+import { useRegiaFloatingFloaterExperimental } from '../lib/regiaFloatingFloaterSettings.ts'
 import {
   outputIdleCapToPlaybackCommand,
   readOutputIdleCapFromLs,
@@ -6091,6 +6092,8 @@ function FloaterOsPlaylistBridge({
   floatingSessionsRef: MutableRefObject<FloatingPlaylistSession[]>
 }) {
   const regia = useRegia()
+  const { floatingPlaylistSessions, playlistFloaterOsSessionIds } = regia
+  const floatingFloaterExperimental = useRegiaFloatingFloaterExperimental()
   const regiaRef = useRef(regia)
   useLayoutEffect(() => {
     regiaRef.current = regia
@@ -6176,10 +6179,37 @@ function FloaterOsPlaylistBridge({
     )
   }, [setPlaylistFloaterOsSessionIds])
 
-  const { floatingPlaylistSessions, playlistFloaterOsSessionIds } = regia
+  useEffect(() => {
+    if (floatingFloaterExperimental) return
+    const api = window.electronAPI
+    const hasOs = playlistFloaterOsSessionIds.length > 0
+    const hasPinned = floatingPlaylistSessions.some(
+      (s) => s.windowAlwaysOnTopPinned === true,
+    )
+    if (!hasOs && !hasPinned) return
+
+    for (const id of [...playlistFloaterOsSessionIds]) {
+      void api.closePlaylistFloaterWindow?.(id)
+    }
+    setPlaylistFloaterOsSessionIds([])
+
+    for (const s of floatingPlaylistSessions) {
+      if (s.windowAlwaysOnTopPinned === true) {
+        void regiaRef.current.updateFloatingPlaylistChrome(s.id, {
+          windowAlwaysOnTopPinned: false,
+        })
+      }
+    }
+  }, [
+    floatingFloaterExperimental,
+    floatingPlaylistSessions,
+    playlistFloaterOsSessionIds,
+    setPlaylistFloaterOsSessionIds,
+  ])
 
   useEffect(() => {
     const api = window.electronAPI
+    if (!floatingFloaterExperimental) return
     if (!api?.openPlaylistFloaterWindow || !api.getRegiaContentBounds) return
     for (const s of floatingPlaylistSessions) {
       if (!s.windowAlwaysOnTopPinned) continue
@@ -6203,6 +6233,7 @@ function FloaterOsPlaylistBridge({
       })()
     }
   }, [
+    floatingFloaterExperimental,
     floatingPlaylistSessions,
     playlistFloaterOsSessionIds,
     setPlaylistFloaterOsSessionIds,

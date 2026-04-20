@@ -4,6 +4,7 @@ import {
   useState,
   type ChangeEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from 'react'
 import {
   readLaunchPadCueEnabled,
@@ -13,6 +14,7 @@ import {
   type LaunchPadKeyModePref,
 } from '../lib/launchPadSettings.ts'
 import {
+  PANEL_TOOLTIP_HINTS_CHANGED_EVENT,
   readPanelTooltipHintsEnabled,
   writePanelTooltipHintsEnabled,
 } from '../lib/panelTooltipHintsSettings.ts'
@@ -41,6 +43,10 @@ import {
   writeRegiaSafeMode,
 } from '../lib/regiaSafeModeSettings.ts'
 import {
+  readRegiaFloatingFloaterExperimental,
+  writeRegiaFloatingFloaterExperimental,
+} from '../lib/regiaFloatingFloaterSettings.ts'
+import {
   readOnAirOnAtStartup,
   writeOnAirOnAtStartup,
 } from '../lib/onAirStartupSettings.ts'
@@ -66,6 +72,80 @@ const UPDATE_CHECK_OPTIONS: {
 function basenamePath(p: string): string {
   const n = p.replace(/\\/g, '/').split('/').pop()
   return n && n.length > 0 ? n : p
+}
+
+type SettingsSectionId =
+  | 'output'
+  | 'audio'
+  | 'lan'
+  | 'cloud'
+  | 'playlist'
+  | 'ui'
+  | 'debug'
+
+function SettingsCollapsibleSection({
+  sectionId,
+  titleId,
+  title,
+  expanded,
+  onToggle,
+  panelClassName,
+  children,
+}: {
+  sectionId: SettingsSectionId
+  titleId: string
+  title: string
+  expanded: boolean
+  onToggle: () => void
+  panelClassName?: string
+  children: ReactNode
+}) {
+  const bodyId = `settings-section-${sectionId}-body`
+  const panelClass = ['settings-panel', expanded ? '' : 'is-collapsed', panelClassName]
+    .filter(Boolean)
+    .join(' ')
+  return (
+    <section className={panelClass} aria-labelledby={titleId}>
+      <h3
+        id={titleId}
+        className="settings-panel-title settings-panel-title--collapsible"
+      >
+        <button
+          type="button"
+          className="settings-panel-collapse-trigger"
+          aria-expanded={expanded}
+          aria-controls={bodyId}
+          onClick={onToggle}
+        >
+          <span
+            className={`settings-panel-chevron${expanded ? ' is-open' : ''}`}
+            aria-hidden="true"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width={14}
+              height={14}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </span>
+          <span className="settings-panel-collapse-label">{title}</span>
+        </button>
+      </h3>
+      <div
+        id={bodyId}
+        className="settings-panel-collapse-body"
+        hidden={!expanded}
+      >
+        {children}
+      </div>
+    </section>
+  )
 }
 
 type OutputResolution = { width: number; height: number }
@@ -100,6 +180,17 @@ export default function SettingsModal({
     readOutputIdleCapFromLs(),
   )
   const [debugAccordionOpen, setDebugAccordionOpen] = useState(false)
+  const [settingsSectionOpen, setSettingsSectionOpen] = useState<
+    Record<SettingsSectionId, boolean>
+  >(() => ({
+    output: true,
+    audio: true,
+    lan: true,
+    cloud: true,
+    playlist: true,
+    ui: true,
+    debug: true,
+  }))
   const [updateCheckSchedule, setUpdateCheckSchedule] =
     useState<UpdateCheckSchedulePref>('on_startup')
   const [buildInfo, setBuildInfo] = useState<{
@@ -114,6 +205,8 @@ export default function SettingsModal({
     text: string
   } | null>(null)
   const [safeModeEnabled, setSafeModeEnabled] = useState(false)
+  const [floatingFloaterExperimental, setFloatingFloaterExperimental] =
+    useState(false)
   const [onAirOnAtStartup, setOnAirOnAtStartup] = useState(false)
   const [outputProgramLogoVisible, setOutputProgramLogoVisible] =
     useState(true)
@@ -132,6 +225,15 @@ export default function SettingsModal({
     return () => {
       cancelled = true
     }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const sync = () =>
+      setPanelTooltipHintsEnabled(readPanelTooltipHintsEnabled())
+    window.addEventListener(PANEL_TOOLTIP_HINTS_CHANGED_EVENT, sync)
+    return () =>
+      window.removeEventListener(PANEL_TOOLTIP_HINTS_CHANGED_EVENT, sync)
   }, [open])
 
   useEffect(() => {
@@ -205,6 +307,7 @@ export default function SettingsModal({
   useEffect(() => {
     if (!open) return
     setSafeModeEnabled(readRegiaSafeMode())
+    setFloatingFloaterExperimental(readRegiaFloatingFloaterExperimental())
   }, [open])
 
   useEffect(() => {
@@ -320,6 +423,15 @@ export default function SettingsModal({
     document.documentElement.classList.toggle('regia-safe-mode', v)
     setSafeModeEnabled(v)
   }, [])
+
+  const onFloatingFloaterExperimentalChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const v = e.target.checked
+      writeRegiaFloatingFloaterExperimental(v)
+      setFloatingFloaterExperimental(v)
+    },
+    [],
+  )
 
   const applyIdleCap = useCallback((nextRaw: Partial<OutputIdleCapPersist>) => {
     setIdleCapDraft((prev) => {
@@ -513,6 +625,10 @@ export default function SettingsModal({
     }
   }, [lan])
 
+  const toggleSettingsSection = useCallback((id: SettingsSectionId) => {
+    setSettingsSectionOpen((prev) => ({ ...prev, [id]: !prev[id] }))
+  }, [])
+
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -558,14 +674,13 @@ export default function SettingsModal({
           </p>
 
           <div className="settings-panels">
-            <section
-              className="settings-panel"
-              aria-labelledby="settings-panel-output-title"
+            <SettingsCollapsibleSection
+              sectionId="output"
+              titleId="settings-panel-output-title"
+              title="Uscita programma"
+              expanded={settingsSectionOpen.output}
+              onToggle={() => toggleSettingsSection('output')}
             >
-              <h3 id="settings-panel-output-title" className="settings-panel-title">
-                Uscita programma
-              </h3>
-
               <div className="settings-panel-block">
                 <h4
                   id="settings-screen2-label"
@@ -718,25 +833,25 @@ export default function SettingsModal({
                   ) : null}
                 </fieldset>
               </div>
-            </section>
+            </SettingsCollapsibleSection>
 
-            <section
-              className="settings-panel"
-              aria-labelledby="settings-panel-audio-title"
+            <SettingsCollapsibleSection
+              sectionId="audio"
+              titleId="settings-panel-audio-title"
+              title="Audio"
+              expanded={settingsSectionOpen.audio}
+              onToggle={() => toggleSettingsSection('audio')}
             >
-              <h3 id="settings-panel-audio-title" className="settings-panel-title">
-                Audio
-              </h3>
               <SettingsCueSinkSection />
-            </section>
+            </SettingsCollapsibleSection>
 
-            <section
-              className="settings-panel"
-              aria-labelledby="settings-lan-remote-label"
+            <SettingsCollapsibleSection
+              sectionId="lan"
+              titleId="settings-lan-remote-label"
+              title="Telecomando (rete LAN)"
+              expanded={settingsSectionOpen.lan}
+              onToggle={() => toggleSettingsSection('lan')}
             >
-              <h3 id="settings-lan-remote-label" className="settings-panel-title">
-                Telecomando (rete LAN)
-              </h3>
               <p className="settings-modal-hint">
                 Avvia il server sulla stessa Wi‑Fi del telefono. Il QR non va mostrato
                 sulla finestra uscita pubblico.
@@ -810,18 +925,15 @@ export default function SettingsModal({
                   Server spento: attivalo per generare il QR e il link.
                 </p>
               )}
-            </section>
+            </SettingsCollapsibleSection>
 
-            <section
-              className="settings-panel"
-              aria-labelledby="settings-panel-regia-video-cloud-title"
+            <SettingsCollapsibleSection
+              sectionId="cloud"
+              titleId="settings-panel-regia-video-cloud-title"
+              title="Regia Video (Drive / cloud)"
+              expanded={settingsSectionOpen.cloud}
+              onToggle={() => toggleSettingsSection('cloud')}
             >
-              <h3
-                id="settings-panel-regia-video-cloud-title"
-                className="settings-panel-title"
-              >
-                Regia Video (Drive / cloud)
-              </h3>
               <div className="settings-panel-block">
                 <p className="settings-modal-hint">
                   Cartella sincronizzata che si deve chiamare esattamente{' '}
@@ -970,15 +1082,15 @@ export default function SettingsModal({
                   <pre className="settings-modal-code-block">{cloudReadinessText}</pre>
                 ) : null}
               </div>
-            </section>
+            </SettingsCollapsibleSection>
 
-            <section
-              className="settings-panel"
-              aria-labelledby="settings-panel-playlist-title"
+            <SettingsCollapsibleSection
+              sectionId="playlist"
+              titleId="settings-panel-playlist-title"
+              title="Playlist"
+              expanded={settingsSectionOpen.playlist}
+              onToggle={() => toggleSettingsSection('playlist')}
             >
-              <h3 id="settings-panel-playlist-title" className="settings-panel-title">
-                Playlist
-              </h3>
               <div className="settings-panel-block">
                 <h4
                   id="settings-still-image-label"
@@ -1016,16 +1128,15 @@ export default function SettingsModal({
                   </button>
                 </div>
               </div>
-            </section>
+            </SettingsCollapsibleSection>
 
-            <section
-              className="settings-panel"
-              aria-labelledby="settings-panel-ui-title"
+            <SettingsCollapsibleSection
+              sectionId="ui"
+              titleId="settings-panel-ui-title"
+              title="Interfaccia"
+              expanded={settingsSectionOpen.ui}
+              onToggle={() => toggleSettingsSection('ui')}
             >
-              <h3 id="settings-panel-ui-title" className="settings-panel-title">
-                Interfaccia
-              </h3>
-
               <div className="settings-panel-block">
                 <h4
                   id="settings-plancia-snap-label"
@@ -1130,11 +1241,15 @@ export default function SettingsModal({
                   <span>CUE — tieni premuto per ascolto fino al rilascio</span>
                 </label>
               </div>
-            </section>
+            </SettingsCollapsibleSection>
 
-            <section
-              className="settings-panel settings-panel--debug"
-              aria-labelledby="settings-panel-debug-title"
+            <SettingsCollapsibleSection
+              sectionId="debug"
+              titleId="settings-panel-debug-section-title"
+              title="DEBUG"
+              expanded={settingsSectionOpen.debug}
+              onToggle={() => toggleSettingsSection('debug')}
+              panelClassName="settings-panel--debug"
             >
               <div className="settings-debug-accordion-head">
                 <label className="settings-modal-checkbox-row settings-debug-accordion-toggle">
@@ -1146,7 +1261,7 @@ export default function SettingsModal({
                     aria-expanded={debugAccordionOpen}
                   />
                   <span id="settings-panel-debug-title" className="settings-debug-heading">
-                    DEBUG
+                    Opzioni avanzate
                   </span>
                 </label>
               </div>
@@ -1289,8 +1404,32 @@ export default function SettingsModal({
                     <span>Modalità sicura attiva</span>
                   </label>
                 </div>
+
+                <div className="settings-panel-block">
+                  <h4
+                    id="settings-debug-floating-floater-label"
+                    className="settings-subsection-title"
+                  >
+                    Finestre floating (sperimentale)
+                  </h4>
+                  <p className="settings-modal-hint">
+                    Mostra la puntina sui pannelli playlist / launchpad / lavagna per
+                    aprirli in una finestra Electron separata sul desktop. Disattivo
+                    di default: se avevi sessioni «appuntate», vengono riportate in
+                    plancia quando spegni l&apos;opzione.
+                  </p>
+                  <label className="settings-modal-checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={floatingFloaterExperimental}
+                      onChange={onFloatingFloaterExperimentalChange}
+                      aria-describedby="settings-debug-floating-floater-label"
+                    />
+                    <span>Abilita puntina e finestre playlist OS</span>
+                  </label>
+                </div>
               </div>
-            </section>
+            </SettingsCollapsibleSection>
           </div>
         </div>
       </div>

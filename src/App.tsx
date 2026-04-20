@@ -19,10 +19,35 @@ import AppAboutModal from './components/AppAboutModal.tsx'
 import HeaderWorkspaceSelect from './components/HeaderWorkspaceSelect.tsx'
 import RegiaPanelHintHost from './components/RegiaPanelHintHost.tsx'
 import SettingsModal, { IconSettingsGear } from './components/SettingsModal.tsx'
+import {
+  usePanelTooltipHintsEnabled,
+  writePanelTooltipHintsEnabled,
+} from './lib/panelTooltipHintsSettings.ts'
 import { clampSidebarWidth } from './lib/sidebarLayout.ts'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
 import { formatRegiaProgramCreatedIt } from './lib/regiaAppBranding.ts'
 import { RegiaProvider, useRegia } from './state/RegiaContext.tsx'
+
+function IconHeaderHints() {
+  return (
+    <svg
+      className="regia-header-hints-icon"
+      viewBox="0 0 24 24"
+      width={18}
+      height={18}
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <path d="M12 17h.01" />
+    </svg>
+  )
+}
 
 function RegiaShell() {
   const {
@@ -44,6 +69,8 @@ function RegiaShell() {
     sidebarWidthPx,
     setSidebarWidthPx,
   } = useRegia()
+
+  const panelTooltipHintsEnabled = usePanelTooltipHintsEnabled()
 
   const dockedPlanciaSessionIds = useMemo(() => {
     if (!floatingPlaylistOpen) return [] as string[]
@@ -196,6 +223,26 @@ function RegiaShell() {
               </div>
               <button
                 type="button"
+                className={`btn-icon regia-header-hints-btn${panelTooltipHintsEnabled ? ' is-active' : ''}`}
+                aria-pressed={panelTooltipHintsEnabled}
+                aria-label={
+                  panelTooltipHintsEnabled
+                    ? 'Disattiva barre suggerimenti (HINT)'
+                    : 'Attiva barre suggerimenti (HINT)'
+                }
+                title={
+                  panelTooltipHintsEnabled
+                    ? 'HINT: disattiva le barre suggerimenti (come in Impostazioni → Interfaccia → Suggerimenti).'
+                    : 'HINT: attiva le barre suggerimenti al passaggio del mouse (come in Impostazioni → Interfaccia).'
+                }
+                onClick={() =>
+                  writePanelTooltipHintsEnabled(!panelTooltipHintsEnabled)
+                }
+              >
+                <IconHeaderHints />
+              </button>
+              <button
+                type="button"
                 className="btn-icon regia-header-settings-btn"
                 onClick={() => setSettingsOpen(true)}
                 title="Impostazioni"
@@ -261,16 +308,16 @@ function RegiaShell() {
         >
           <div
             className="regia-main-content"
-            data-preview-hint="Contenuto principale: barra trasporto in alto (sticky), sotto l’anteprima del programma e il riquadro «prossimo»."
+            data-preview-hint="Contenuto principale: barra trasporto sotto l’intestazione, poi l’anteprima programma e il riquadro «prossimo» (area anteprima scorrevole)."
           >
+            <div
+              className="regia-main-transport-bar"
+              aria-label="Trasporto e uscita audio"
+              data-preview-hint="Barra trasporto e uscita: play/pausa, avanti/indietro, volume e routing audio, visibilità anteprima. Resta sotto l’intestazione mentre scorre solo l’anteprima."
+            >
+              <DraggableAudioOutputBar />
+            </div>
             <div className="regia-main-preview-scroll">
-                <div
-                  className="regia-preview-transport-sticky"
-                  aria-label="Trasporto e uscita audio (agganciato all’anteprima)"
-                  data-preview-hint="Barra trasporto e uscita: play/pausa, avanti/indietro, volume e routing audio, visibilità anteprima. Resta in cima mentre scorri l’anteprima."
-                >
-                  <DraggableAudioOutputBar />
-                </div>
                 {previewDisplayMode === 'docked' ?
                   <section
                     className="preview-bus-section"

@@ -38,6 +38,7 @@ import {
   useLaunchPadCueEnabled,
 } from '../lib/launchPadSettings.ts'
 import { usePlanciaSnapEnabled } from '../lib/planciaSnapSettings.ts'
+import { useRegiaFloatingFloaterExperimental } from '../lib/regiaFloatingFloaterSettings.ts'
 import {
   dataTransferHasFileList,
   mediaPathsFromDataTransfer,
@@ -1002,6 +1003,7 @@ export default function FloatingPlaylist({
   } = useRegia()
 
   const launchPadCueEnabled = useLaunchPadCueEnabled()
+  const floatingFloaterExperimental = useRegiaFloatingFloaterExperimental()
 
   const panelClampWithDock = useMemo(
     () => ({ ...PANEL_CLAMP_OPTS, rightInset: rightPlanciaDockWidthPx }),
@@ -3131,30 +3133,32 @@ export default function FloatingPlaylist({
                 </div>
               ) : null}
             </div>
-            <button
-              type="button"
-              className={`floating-playlist-icon-btn floating-playlist-window-pin ${windowAlwaysOnTopPinned ? 'is-active' : ''}`}
-              aria-pressed={windowAlwaysOnTopPinned}
-              onClick={() => {
-                const next = !windowAlwaysOnTopPinned
-                updateFloatingPlaylistChrome(sessionId, {
-                  windowAlwaysOnTopPinned: next,
-                })
-                if (next) bringFloatingPanelToFront(sessionId)
-              }}
-              title={
-                windowAlwaysOnTopPinned
-                  ? 'Puntina attiva: pannello in una finestra Electron separata (resta visibile anche se riduci la finestra principale Regia). Trascina l’intestazione per spostarla. Clic per chiudere la finestra e riportare il pannello nella regia.'
-                  : 'Puntina: apre questo pannello in una finestra Electron separata sul desktop (resta visibile anche con la regia ridotta a icona). Spostabile fuori dalla regia. Clic per attivare.'
-              }
-              aria-label={
-                windowAlwaysOnTopPinned
-                  ? 'Disattiva puntina e chiudi finestra pannello separata'
-                  : 'Attiva puntina: finestra pannello separata sul desktop'
-              }
-            >
-              <IconWindowPin />
-            </button>
+            {floatingFloaterExperimental ? (
+              <button
+                type="button"
+                className={`floating-playlist-icon-btn floating-playlist-window-pin ${windowAlwaysOnTopPinned ? 'is-active' : ''}`}
+                aria-pressed={windowAlwaysOnTopPinned}
+                onClick={() => {
+                  const next = !windowAlwaysOnTopPinned
+                  updateFloatingPlaylistChrome(sessionId, {
+                    windowAlwaysOnTopPinned: next,
+                  })
+                  if (next) bringFloatingPanelToFront(sessionId)
+                }}
+                title={
+                  windowAlwaysOnTopPinned
+                    ? 'Puntina attiva: pannello in una finestra Electron separata (resta visibile anche se riduci la finestra principale Regia). Trascina l’intestazione per spostarla. Clic per chiudere la finestra e riportare il pannello nella regia.'
+                    : 'Puntina: apre questo pannello in una finestra Electron separata sul desktop (resta visibile anche con la regia ridotta a icona). Spostabile fuori dalla regia. Clic per attivare.'
+                }
+                aria-label={
+                  windowAlwaysOnTopPinned
+                    ? 'Disattiva puntina e chiudi finestra pannello separata'
+                    : 'Attiva puntina: finestra pannello separata sul desktop'
+                }
+              >
+                <IconWindowPin />
+              </button>
+            ) : null}
             {isChalkboard ? (
               <button
                 type="button"
