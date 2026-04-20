@@ -23,12 +23,18 @@ import {
 } from '../lib/launchPadSettings.ts'
 import {
   isLaunchpadSamplePausedWithSrc,
+  launchpadAnyVoicePlaying,
+  launchpadSlotHasAnyVoice,
+  launchpadVoiceCount,
   pauseLaunchpadSample,
+  pickAnyLaunchpadVoiceSlot,
   playLaunchpadSample,
   resumeLaunchpadSample,
   setLaunchpadSampleLevels,
   setLaunchpadSampleSink,
   stopLaunchpadSample,
+  stopLaunchpadVoice,
+  stopLaunchpadVoicesForSlot,
 } from '../lib/launchpadSamplePlayer.ts'
 import {
   buildRegiaBugReportSnapshot,
@@ -38,11 +44,18 @@ import {
 import { deriveOutputTrackListSession } from '../lib/deriveOutputTrackListSession.ts'
 import { planFirstDiskLinkForUnlinkedSession } from '../lib/playlistFirstDiskLinkPolicy.ts'
 import { normalizePlaylistThemeColor } from '../lib/playlistThemeColor.ts'
+import { normalizePlaylistWatermarkAbsPath } from '../lib/playlistWatermarkPath.ts'
 import { totalDurationSecForPlaylistSave } from '../lib/sumMediaDurationsSec.ts'
 import type { SavedPlaylistMeta } from '../playlistTypes.ts'
 import { clampPanelInViewport } from '../lib/floatingPanelGeometry.ts'
-import { queryPlanciaContentRect } from '../lib/planciaSnap.ts'
-import { persistPreviewDetached } from '../lib/previewDetachedStorage.ts'
+import {
+  computeRightPlanciaDockColumnWidthPx,
+  queryPlanciaContentRect,
+} from '../lib/planciaSnap.ts'
+import {
+  persistPreviewDisplayMode,
+  type PreviewDisplayMode,
+} from '../lib/previewDetachedStorage.ts'
 import { readPreviewLayoutFromLs, writePreviewLayoutToLs } from '../lib/previewLayoutStorage.ts'
 import { buildPlaylistFloaterSyncPayload } from '../floater/playlistFloaterSync.ts'
 import {
@@ -62,6 +75,7 @@ import {
   REGIA_LS_CUE_SINK_KEY,
   type WorkspaceShellPersist,
 } from '../lib/workspaceShell.ts'
+import { readOnAirOnAtStartup } from '../lib/onAirStartupSettings.ts'
 import {
   outputIdleCapToPlaybackCommand,
   readOutputIdleCapFromLs,
@@ -96,6 +110,8 @@ import {
   isTracksPlaylistMode,
   normalizeChalkboardPlacementsFromDisk,
   normalizeChalkboardOutputMode,
+  normalizePlanciaDockMode,
+  type PlanciaDockMode,
 } from './floatingPlaylistSession.ts'
 
 function sessionHasSavedEditLink(
@@ -107,6 +123,11 @@ function sessionHasSavedEditLink(
       s.savedEditLaunchPadBaseline != null ||
       s.savedEditChalkboardPathsBaseline != null)
   )
+}
+
+function watermarkPathForDiskSave(s: FloatingPlaylistSession): string | null {
+  const p = normalizePlaylistWatermarkAbsPath(s.playlistWatermarkPngPath)
+  return p === '' ? null : p
 }
 
 function mergeLaunchPadCellsWithDrop(
@@ -241,9 +262,16 @@ export type RegiaContextValue = {
   loadLaunchPadSlotAndPlay: (
     sessionId: string,
     slotIndex: number,
-  ) => Promise<void>
+  ) => Promise<number | undefined>
   /** Ferma l’audio launchpad e azzera lo stato di brano caricato (es. rilascio CUE). */
   stopLaunchPadCueRelease: () => void
+  /** Ferma una singola voce CUE (polifonia) o tutte le voci dello slot se `voiceId` è null. */
+  releaseLaunchPadCueVoice: (
+    voiceId: number | null,
+    sessionId: string,
+    bankIndex: number,
+    slotIndex: number,
+  ) => void
   updateLaunchPadCell: (
     sessionId: string,
     slotIndex: number,
@@ -297,6 +325,14 @@ export type RegiaContextValue = {
   setPlaylistTitle: (title: string, sessionId: string) => void
   /** Colore tema pannello (#rrggbb) o null per predefinito. */
   setPlaylistThemeColor: (hex: string | null, sessionId: string) => void
+  /**
+   * Path assoluto del watermark attivo in uscita/anteprima (lavagna in onda ha priorità sul PGM a elenco).
+   */
+  programWatermarkAbsPath: string | null
+  setPlaylistWatermarkPngPath: (
+    sessionId: string,
+    absPath: string | null,
+  ) => void
   /** Dissolvenza incrociata in uscita tra brani dello stesso tipo (video/immagine). */
   playlistCrossfade: boolean
   setPlaylistCrossfade: (enabled: boolean, sessionId: string) => void
@@ -348,6 +384,13 @@ export type RegiaContextValue = {
   openFloatingPlaylist: () => void
   /** Nasconde i pannelli floating senza eliminare le sessioni. */
   hideFloatingPlaylistPanels: () => void
+  /**
+   * Larghezza della colonna pannelli agganciati a destra della plancia (0 se assente).
+   * Usata per non far sovrapporre i pannelli flottanti alla colonna.
+   */
+  rightPlanciaDockWidthPx: number
+  /** Aggancia playlist / launchpad / lavagna alla colonna destra (restringe l’anteprima). */
+  dockFloatingPlaylistToPlanciaRight: (sessionId: string) => void
   updateFloatingPlaylistChrome: (
     sessionId: string,
     patch: {
@@ -358,6 +401,7 @@ export type RegiaContextValue = {
       playlistOutputVolume?: number
       windowAlwaysOnTopPinned?: boolean
       chalkboardFullscreen?: boolean
+      planciaDock?: PlanciaDockMode
     },
   ) => void
   /** Dispone i pannelli flottanti a cascata dentro l’area plancia (anti fuori schermo). */
@@ -416,6 +460,10 @@ export type RegiaContextValue = {
   activeNamedWorkspaceLabel: string
   /** Anteprima in finestra flottante (salvata nel workspace). */
   previewDetached: boolean
+  /** Modalità anteprima: layout principale, finestra OS, o nascosta. */
+  previewDisplayMode: PreviewDisplayMode
+  /** Ciclo occhio: agganciata → flottante → off → agganciata. */
+  cyclePreviewDisplayMode: () => void
   setPreviewDocked: () => void
   setPreviewFloating: () => void
   /**
@@ -711,6 +759,16 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
       ? normalizePlaylistThemeColor(r.savedEditThemeColorBaseline)
       : ''
 
+  const playlistWatermarkPngPath = normalizePlaylistWatermarkAbsPath(
+    (r as Record<string, unknown>).playlistWatermarkPngPath,
+  )
+  const savedEditWatermarkBaseline = normalizePlaylistWatermarkAbsPath(
+    typeof (r as Record<string, unknown>).savedEditWatermarkBaseline ===
+      'string'
+      ? ((r as Record<string, unknown>).savedEditWatermarkBaseline as string)
+      : '',
+  )
+
   let savedEditLaunchPadBaseline: LaunchPadCell[] | null = null
   if (r.savedEditLaunchPadBaseline === null) {
     savedEditLaunchPadBaseline = null
@@ -770,6 +828,8 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
       ? { savedEditPlaylistLoopBaseline }
       : {}),
     savedEditThemeColorBaseline,
+    savedEditWatermarkBaseline,
+    playlistWatermarkPngPath,
     savedEditLaunchPadBaseline,
     ...(playlistMode === 'chalkboard'
       ? {
@@ -801,6 +861,9 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
       : {}),
     ...(r.windowAlwaysOnTopPinned === true
       ? { windowAlwaysOnTopPinned: true as const }
+      : {}),
+    ...(normalizePlanciaDockMode(r.planciaDock) === 'right'
+      ? { planciaDock: 'right' as const }
       : {}),
   }
 }
@@ -864,6 +927,10 @@ function normalizeWorkspaceFile(parsed: unknown): {
   return { floating, shell: null }
 }
 
+function shellWithOnAirStartupPref(shell: WorkspaceShellPersist): WorkspaceShellPersist {
+  return { ...shell, secondScreenOn: readOnAirOnAtStartup() }
+}
+
 function readWorkspaceBootstrap(): {
   floating: NormalizedFloatingWorkspace
   shell: WorkspaceShellPersist
@@ -873,24 +940,24 @@ function readWorkspaceBootstrap(): {
     if (!raw) {
       return {
         floating: { ...EMPTY_FLOATING_WORKSPACE_STATE },
-        shell: readStandaloneWorkspaceShell(),
+        shell: shellWithOnAirStartupPref(readStandaloneWorkspaceShell()),
       }
     }
     const n = normalizeWorkspaceFile(JSON.parse(raw))
     if (!n) {
       return {
         floating: { ...EMPTY_FLOATING_WORKSPACE_STATE },
-        shell: readStandaloneWorkspaceShell(),
+        shell: shellWithOnAirStartupPref(readStandaloneWorkspaceShell()),
       }
     }
     return {
       floating: n.floating,
-      shell: n.shell ?? readStandaloneWorkspaceShell(),
+      shell: shellWithOnAirStartupPref(n.shell ?? readStandaloneWorkspaceShell()),
     }
   } catch {
     return {
       floating: { ...EMPTY_FLOATING_WORKSPACE_STATE },
-      shell: readStandaloneWorkspaceShell(),
+      shell: shellWithOnAirStartupPref(readStandaloneWorkspaceShell()),
     }
   }
 }
@@ -1057,6 +1124,8 @@ function deepCloneFloatingSessions(
       s.savedEditChalkboardBackgroundBaseline !== undefined
         ? normalizeChalkboardBackgroundHex(s.savedEditChalkboardBackgroundBaseline)
         : undefined,
+    playlistWatermarkPngPath: s.playlistWatermarkPngPath ?? '',
+    savedEditWatermarkBaseline: s.savedEditWatermarkBaseline ?? '',
   }))
 }
 
@@ -1077,7 +1146,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   )
   const [floatingZOrder, setFloatingZOrder] = useState<string[]>(() => {
     const ids = bootstrap.floating.sessions.map((s) => s.id)
-    if (bootstrap.shell.previewDetached)
+    if (bootstrap.shell.previewDisplayMode === 'floating')
       ids.push(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
     return ids
   })
@@ -1161,9 +1230,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const [secondScreenOn, setSecondScreenOn] = useState(
     () => bootstrap.shell.secondScreenOn,
   )
-  const [previewDetached, setPreviewDetached] = useState(
-    () => bootstrap.shell.previewDetached,
-  )
+  const [previewDisplayMode, setPreviewDisplayMode] = useState<
+    PreviewDisplayMode
+  >(() => bootstrap.shell.previewDisplayMode)
+  const previewDetached = previewDisplayMode === 'floating'
   const [sidebarOpen, setSidebarOpenState] = useState(
     () => bootstrap.shell.sidebarOpen,
   )
@@ -1196,10 +1266,14 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     mutedRef.current = muted
   }, [muted])
 
-  const previewDetachedRef = useRef(previewDetached)
+  const previewDisplayModeRef = useRef(previewDisplayMode)
   useLayoutEffect(() => {
-    previewDetachedRef.current = previewDetached
-  }, [previewDetached])
+    previewDisplayModeRef.current = previewDisplayMode
+  }, [previewDisplayMode])
+
+  useEffect(() => {
+    persistPreviewDisplayMode(previewDisplayMode)
+  }, [previewDisplayMode])
 
   const sidebarOpenRef = useRef(sidebarOpen)
   useLayoutEffect(() => {
@@ -1293,21 +1367,22 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     setFloatingZOrder((prev) => {
       const allowed = new Set<string>()
       for (const s of floatingSessions) allowed.add(s.id)
-      if (previewDetached) allowed.add(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
+      if (previewDisplayMode === 'floating')
+        allowed.add(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
       const kept = prev.filter((k) => allowed.has(k))
       const out = [...kept]
       for (const s of floatingSessions) {
         if (!out.includes(s.id)) out.push(s.id)
       }
       if (
-        previewDetached &&
+        previewDisplayMode === 'floating' &&
         !out.includes(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
       ) {
         out.push(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
       }
       return out
     })
-  }, [floatingSessions, previewDetached])
+  }, [floatingSessions, previewDisplayMode])
 
   useEffect(() => {
     setPlaybackSessionId((cur) =>
@@ -1384,6 +1459,29 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     return floatingSessions.find((s) => s.id === videoOutputSessionId) ?? null
   }, [floatingSessions, videoOutputSessionId])
 
+  const programWatermarkAbsPath = useMemo((): string | null => {
+    const chalkOn = floatingSessions.find(
+      (x) =>
+        x.playlistMode === 'chalkboard' &&
+        normalizeChalkboardOutputMode(
+          x.chalkboardOutputMode,
+          (x as { chalkboardOutputToProgram?: boolean })
+            .chalkboardOutputToProgram,
+        ) !== 'off',
+    )
+    if (chalkOn) {
+      const w = normalizePlaylistWatermarkAbsPath(chalkOn.playlistWatermarkPngPath)
+      if (w) return w
+    }
+    if (videoOutputSession) {
+      const w = normalizePlaylistWatermarkAbsPath(
+        videoOutputSession.playlistWatermarkPngPath,
+      )
+      if (w) return w
+    }
+    return null
+  }, [floatingSessions, videoOutputSession])
+
   /** Elenco della sessione attiva (sidebar «Salva», ecc.). */
   const paths = activeSession?.paths ?? []
   const currentIndex = activeSession?.currentIndex ?? 0
@@ -1394,6 +1492,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     floatingSessionsRef.current = floatingSessions
   }, [floatingSessions])
+
+  const rightPlanciaDockWidthPx = useMemo(
+    () => computeRightPlanciaDockColumnWidthPx(floatingSessions),
+    [floatingSessions],
+  )
 
   /** Evita salvataggi duplicati se Invio (repeat) o blur girano mentre il primo `playlistsSave` è ancora in corso. */
   const persistFloatingTitleBlurBySessionRef = useRef(
@@ -1507,7 +1610,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         /* ignore */
       }
       const shell: WorkspaceShellPersist = {
-        previewDetached: previewDetachedRef.current,
+        previewDisplayMode: previewDisplayModeRef.current,
         previewLayout: readPreviewLayoutFromLs(),
         sidebarOpen: sidebarOpenRef.current,
         sidebarWidthPx: sidebarWidthPxRef.current,
@@ -1558,7 +1661,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     activeFloatingSessionId,
     playbackSessionId,
     floatingSessions,
-    previewDetached,
+    previewDisplayMode,
     sidebarOpen,
     sidebarWidthPx,
     loopMode,
@@ -1755,16 +1858,18 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setPreviewDocked = useCallback(() => {
-    setPreviewDetached(false)
-    persistPreviewDetached(false)
+    setPreviewDisplayMode('docked')
   }, [])
 
   const setPreviewFloating = useCallback(() => {
-    setPreviewDetached(true)
-    persistPreviewDetached(true)
-    setFloatingZOrder((prev) => {
-      const k = REGIA_FLOATING_PREVIEW_ZORDER_KEY
-      return [...prev.filter((x) => x !== k), k]
+    setPreviewDisplayMode('floating')
+  }, [])
+
+  const cyclePreviewDisplayMode = useCallback(() => {
+    setPreviewDisplayMode((m) => {
+      const order: PreviewDisplayMode[] = ['docked', 'floating', 'hidden']
+      const i = order.indexOf(m)
+      return order[(i + 1) % order.length]!
     })
   }, [])
 
@@ -1788,8 +1893,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const applyWorkspaceShell = useCallback(async (shell: WorkspaceShellPersist) => {
-    setPreviewDetached(shell.previewDetached)
-    previewDetachedRef.current = shell.previewDetached
+    setPreviewDisplayMode(shell.previewDisplayMode)
+    previewDisplayModeRef.current = shell.previewDisplayMode
     setSidebarOpen(shell.sidebarOpen)
     sidebarOpenRef.current = shell.sidebarOpen
     setSidebarWidthPx(shell.sidebarWidthPx)
@@ -1839,7 +1944,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const buildNamedWorkspaceSnapshot =
     useCallback((): FloatingWorkspacePersistV2 => {
       const shell: WorkspaceShellPersist = {
-        previewDetached: previewDetachedRef.current,
+        previewDisplayMode: previewDisplayModeRef.current,
         previewLayout: readPreviewLayoutFromLs(),
         sidebarOpen: sidebarOpenRef.current,
         sidebarWidthPx: sidebarWidthPxRef.current,
@@ -2030,11 +2135,30 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         playlistOutputVolume?: number
         windowAlwaysOnTopPinned?: boolean
         chalkboardFullscreen?: boolean
+        planciaDock?: PlanciaDockMode
       },
     ) => {
       patchFloatingSession(sessionId, patch)
     },
     [patchFloatingSession],
+  )
+
+  const dockFloatingPlaylistToPlanciaRight = useCallback(
+    (sessionId: string) => {
+      recordUndoPoint()
+      setFloatingSessions((prev) => {
+        const i = prev.findIndex((s) => s.id === sessionId)
+        if (i < 0) return prev
+        const cur = prev[i]!
+        if (cur.planciaDock === 'right') return prev
+        const updated: FloatingPlaylistSession = { ...cur, planciaDock: 'right' }
+        const others = prev.filter((_, j) => j !== i)
+        const undocked = others.filter((s) => s.planciaDock !== 'right')
+        const docked = others.filter((s) => s.planciaDock === 'right')
+        return [...undocked, ...docked, updated]
+      })
+    },
+    [recordUndoPoint],
   )
 
   const repositionAllFloatingPanels = useCallback(() => {
@@ -2049,18 +2173,22 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     const step = 28
     const snapshot = floatingSessionsRef.current
     if (snapshot.length === 0) return
-    snapshot.forEach((s, i) => {
-      const nx = pl.left + M + (i % 5) * step
-      const ny = pl.top + M + (i % 5) * step
+    const dockInset = computeRightPlanciaDockColumnWidthPx(snapshot)
+    let k = 0
+    for (const s of snapshot) {
+      if (s.planciaDock === 'right') continue
+      const nx = pl.left + M + (k % 5) * step
+      const ny = pl.top + M + (k % 5) * step
+      k += 1
       const { pos, size } = clampPanelInViewport(
         { x: nx, y: ny },
         { width: s.panelSize.width, height: s.panelSize.height },
         MIN_W,
         MIN_H,
-        { maxW: MAX_W, maxH: MAX_H },
+        { maxW: MAX_W, maxH: MAX_H, rightInset: dockInset },
       )
       patchFloatingSession(s.id, { pos, panelSize: size })
-    })
+    }
   }, [patchFloatingSession, recordUndoPoint])
 
   const bringFloatingPanelToFront = useCallback((key: string) => {
@@ -2167,6 +2295,20 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     [patchFloatingSession],
   )
 
+  const setPlaylistWatermarkPngPath = useCallback(
+    (sessionId: string, absPath: string | null) => {
+      recordUndoPoint()
+      const next =
+        absPath == null || absPath.trim() === ''
+          ? ''
+          : normalizePlaylistWatermarkAbsPath(absPath.trim())
+      patchFloatingSession(sessionId, {
+        playlistWatermarkPngPath: next,
+      })
+    },
+    [patchFloatingSession, recordUndoPoint],
+  )
+
   const setPlaylistOutputMuted = useCallback(
     (enabled: boolean, sessionId: string) => {
       recordUndoPoint()
@@ -2187,6 +2329,18 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void send({ type: 'setCrossfade', enabled: playbackCrossfade })
   }, [playbackCrossfade, send])
+
+  useEffect(() => {
+    if (!programWatermarkAbsPath) {
+      void send({ type: 'playlistWatermark', visible: false })
+      return
+    }
+    void send({
+      type: 'playlistWatermark',
+      visible: true,
+      src: programWatermarkAbsPath,
+    })
+  }, [programWatermarkAbsPath, send])
 
   const savedPlaylistDirty = useCallback(
     (sessionId: string) => {
@@ -2241,6 +2395,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         const baseLoop = s.savedEditPlaylistLoopBaseline ?? loopMode
         if (curLoop !== baseLoop) return true
       }
+      if (
+        normalizePlaylistWatermarkAbsPath(s.playlistWatermarkPngPath) !==
+        normalizePlaylistWatermarkAbsPath(s.savedEditWatermarkBaseline)
+      )
+        return true
       return (
         normalizePlaylistThemeColor(s.playlistThemeColor ?? '') !==
         normalizePlaylistThemeColor(s.savedEditThemeColorBaseline ?? '')
@@ -2259,13 +2418,16 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const themeBase = normalizePlaylistThemeColor(
         s.savedEditThemeColorBaseline ?? '',
       )
+      const wmCur = normalizePlaylistWatermarkAbsPath(s.playlistWatermarkPngPath)
+      const wmBase = normalizePlaylistWatermarkAbsPath(s.savedEditWatermarkBaseline)
       if (s.playlistMode === 'launchpad') {
         const cells = s.launchPadCells ?? defaultLaunchPadCells()
         const baseCells = s.savedEditLaunchPadBaseline ?? defaultLaunchPadCells()
         if (
           launchPadCellsEqual(cells, baseCells) &&
           label.trim() === s.savedEditTitleBaseline.trim() &&
-          themeCur === themeBase
+          themeCur === themeBase &&
+          wmCur === wmBase
         )
           return
         recordUndoPoint()
@@ -2283,6 +2445,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           playlistMode: 'launchpad',
           launchPadCells: cloneLaunchPadCellsSnapshot(cells),
           totalDurationSec,
+          watermarkPngPath: watermarkPathForDiskSave(s),
         })
         await refreshSavedPlaylists()
         patchFloatingSession(sessionId, {
@@ -2290,6 +2453,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditLaunchPadBaseline: cloneLaunchPadCellsSnapshot(cells),
           savedEditTitleBaseline: label.trim(),
           savedEditThemeColorBaseline: themeCur,
+          savedEditWatermarkBaseline: wmCur,
         })
         return
       }
@@ -2312,7 +2476,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           chalkboardPlacementsEqual(pl, basePl) &&
           bgCur === bgBase &&
           label.trim() === s.savedEditTitleBaseline.trim() &&
-          themeCur === themeBase
+          themeCur === themeBase &&
+          wmCur === wmBase
         )
           return
         if (pathsCb.length < 4) return
@@ -2332,6 +2497,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           chalkboardBackgroundColor: bgCur,
           chalkboardPlacementsByBank: pl,
           totalDurationSec,
+          watermarkPngPath: watermarkPathForDiskSave(s),
         })
         await refreshSavedPlaylists()
         patchFloatingSession(sessionId, {
@@ -2341,6 +2507,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditChalkboardBackgroundBaseline: bgCur,
           savedEditTitleBaseline: label.trim(),
           savedEditThemeColorBaseline: themeCur,
+          savedEditWatermarkBaseline: wmCur,
         })
         return
       }
@@ -2352,7 +2519,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         label.trim() === s.savedEditTitleBaseline.trim() &&
         s.playlistCrossfade === s.savedEditCrossfadeBaseline &&
         trackLoop === baseLoop &&
-        themeCur === themeBase
+        themeCur === themeBase &&
+        wmCur === wmBase
       )
         return
       recordUndoPoint()
@@ -2369,6 +2537,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         themeColor: themeCur === '' ? undefined : themeCur,
         playlistMode: 'tracks',
         totalDurationSec,
+        watermarkPngPath: watermarkPathForDiskSave(s),
       })
       await refreshSavedPlaylists()
       patchFloatingSession(sessionId, {
@@ -2377,6 +2546,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         savedEditCrossfadeBaseline: s.playlistCrossfade,
         savedEditPlaylistLoopBaseline: trackLoop,
         savedEditThemeColorBaseline: themeCur,
+        savedEditWatermarkBaseline: wmCur,
       })
     },
     [patchFloatingSession, recordUndoPoint, refreshSavedPlaylists, loopMode],
@@ -2400,6 +2570,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           shellLoopMode: shellLoopModeRef.current,
         })
         if (plan.kind === 'skip') return
+        const wmForDisk = watermarkPathForDiskSave(s)
+        const wmBaseline = normalizePlaylistWatermarkAbsPath(
+          s.playlistWatermarkPngPath,
+        )
         if (plan.kind === 'launchpad_new') {
           const totalDurationSec = await totalDurationSecForPlaylistSave({
             playlistMode: 'launchpad',
@@ -2414,6 +2588,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             playlistMode: 'launchpad',
             launchPadCells: cloneLaunchPadCellsSnapshot(plan.cells),
             totalDurationSec,
+            watermarkPngPath: wmForDisk,
           })
           await refreshSavedPlaylists()
           patchFloatingSession(sessionId, {
@@ -2423,6 +2598,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             savedEditTitleBaseline: plan.label.trim(),
             savedEditCrossfadeBaseline: false,
             savedEditThemeColorBaseline: plan.themeColor,
+            savedEditWatermarkBaseline: wmBaseline,
           })
           return
         }
@@ -2445,6 +2621,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             chalkboardPlacementsByBank: plNew,
             chalkboardMigrateDraftSessionId: plan.chalkboardMigrateDraftSessionId,
             totalDurationSec,
+            watermarkPngPath: wmForDisk,
           })
           await refreshSavedPlaylists()
           const migrated = await window.electronAPI.playlistsLoad(newId)
@@ -2467,6 +2644,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             savedEditTitleBaseline: plan.label.trim(),
             savedEditCrossfadeBaseline: false,
             savedEditThemeColorBaseline: plan.themeColor,
+            savedEditWatermarkBaseline: wmBaseline,
           })
           return
         }
@@ -2482,6 +2660,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           themeColor: plan.themeColor === '' ? undefined : plan.themeColor,
           playlistMode: 'tracks',
           totalDurationSec,
+          watermarkPngPath: wmForDisk,
         })
         await refreshSavedPlaylists()
         patchFloatingSession(sessionId, {
@@ -2492,6 +2671,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditCrossfadeBaseline: plan.crossfade,
           savedEditPlaylistLoopBaseline: plan.loopMode,
           savedEditThemeColorBaseline: plan.themeColor,
+          savedEditWatermarkBaseline: wmBaseline,
         })
         return
       }
@@ -2536,6 +2716,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         s.savedEditThemeColorBaseline ?? '',
       )
       const themeDirty = themeCur !== themeBase
+      const wmCur = normalizePlaylistWatermarkAbsPath(s.playlistWatermarkPngPath)
+      const wmBase = normalizePlaylistWatermarkAbsPath(s.savedEditWatermarkBaseline)
+      const watermarkDirty = wmCur !== wmBase
       if (
         !titleDirty &&
         !pathsDirty &&
@@ -2543,7 +2726,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         !chalkboardDirty &&
         !crossfadeDirty &&
         !loopDirty &&
-        !themeDirty
+        !themeDirty &&
+        !watermarkDirty
       )
         return
       if (s.playlistMode === 'launchpad') {
@@ -2562,6 +2746,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           playlistMode: 'launchpad',
           launchPadCells: cloneLaunchPadCellsSnapshot(cells),
           totalDurationSec,
+          watermarkPngPath: watermarkPathForDiskSave(s),
         })
         await refreshSavedPlaylists()
         patchFloatingSession(sessionId, {
@@ -2569,6 +2754,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditLaunchPadBaseline: cloneLaunchPadCellsSnapshot(cells),
           savedEditTitleBaseline: label.trim(),
           savedEditThemeColorBaseline: themeCur,
+          savedEditWatermarkBaseline: wmCur,
         })
         return
       }
@@ -2595,6 +2781,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           ),
           chalkboardPlacementsByBank: plPersist,
           totalDurationSec,
+          watermarkPngPath: watermarkPathForDiskSave(s),
         })
         await refreshSavedPlaylists()
         patchFloatingSession(sessionId, {
@@ -2607,6 +2794,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           ),
           savedEditTitleBaseline: label.trim(),
           savedEditThemeColorBaseline: themeCur,
+          savedEditWatermarkBaseline: wmCur,
         })
         return
       }
@@ -2625,6 +2813,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         themeColor: themeCur === '' ? undefined : themeCur,
         playlistMode: 'tracks',
         totalDurationSec,
+        watermarkPngPath: watermarkPathForDiskSave(s),
       })
       await refreshSavedPlaylists()
       patchFloatingSession(sessionId, {
@@ -2633,6 +2822,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         savedEditCrossfadeBaseline: s.playlistCrossfade,
         savedEditPlaylistLoopBaseline: trackLoop,
         savedEditThemeColorBaseline: themeCur,
+        savedEditWatermarkBaseline: wmCur,
       })
       })
       chainMap.set(sessionId, next)
@@ -2734,6 +2924,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           playlistMode: 'launchpad',
           launchPadCells: cloneLaunchPadCellsSnapshot(cells),
           totalDurationSec,
+          watermarkPngPath: watermarkPathForDiskSave(s),
         })
         await refreshSavedPlaylists()
         return
@@ -2753,6 +2944,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         themeColor: themeCur === '' ? null : themeCur,
         playlistMode: 'tracks',
         totalDurationSec,
+        watermarkPngPath: watermarkPathForDiskSave(s),
       })
       await refreshSavedPlaylists()
     },
@@ -2785,6 +2977,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         : { x: 24, y: 96 }
       const label = data.label.trim() || 'Senza titolo'
       const loadedTheme = normalizePlaylistThemeColor(data.themeColor)
+      const loadedWm = normalizePlaylistWatermarkAbsPath(data.watermarkPngPath)
       let newS: FloatingPlaylistSession
       if (isLaunchpad) {
         const cells = cloneLaunchPadCellsSnapshot(
@@ -2802,6 +2995,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditTitleBaseline: label.trim(),
           savedEditCrossfadeBaseline: false,
           savedEditThemeColorBaseline: loadedTheme,
+          playlistWatermarkPngPath: loadedWm,
+          savedEditWatermarkBaseline: loadedWm,
         }
       } else if (isChalkboard) {
         const cbPaths = [...data.chalkboardBankPaths]
@@ -2833,6 +3028,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditTitleBaseline: label.trim(),
           savedEditCrossfadeBaseline: false,
           savedEditThemeColorBaseline: loadedTheme,
+          playlistWatermarkPngPath: loadedWm,
+          savedEditWatermarkBaseline: loadedWm,
         }
       } else {
         const loadedLoop = parsePersistedPlaylistLoopMode(data.loopMode) ?? 'off'
@@ -2851,6 +3048,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           playlistCrossfade: data.crossfade,
           playlistLoopMode: loadedLoop,
           playlistThemeColor: loadedTheme,
+          playlistWatermarkPngPath: loadedWm,
+          savedEditWatermarkBaseline: loadedWm,
         }
       }
       const nextFloating = [...floatingSessionsRef.current, newS]
@@ -2997,6 +3196,60 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     setPlaybackArmedNext({ sessionId, index })
   }, [])
 
+  const syncLaunchpadPlaybackAfterVoiceChangeRef = useRef<() => void>(() => {})
+
+  const syncLaunchpadPlaybackAfterVoiceChange = useCallback(() => {
+    if (launchpadVoiceCount() === 0) {
+      setLaunchpadAudioPlaying(false)
+      loadedIndexRef.current = null
+      setPlaybackLoadedTrack(null)
+      return
+    }
+    setLaunchpadAudioPlaying(launchpadAnyVoicePlaying())
+    const pl = playbackLoadedTrackRef.current
+    if (
+      pl != null &&
+      'index' in pl &&
+      !launchpadSlotHasAnyVoice(
+        pl.sessionId,
+        pl.launchPadBankIndex ?? 0,
+        pl.index,
+      )
+    ) {
+      const pick = pickAnyLaunchpadVoiceSlot()
+      if (pick) {
+        loadedIndexRef.current = pick.slotIndex
+        setPlaybackLoadedTrack({
+          sessionId: pick.sessionId,
+          index: pick.slotIndex,
+          launchPadBankIndex: pick.bankIndex,
+        })
+      }
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    syncLaunchpadPlaybackAfterVoiceChangeRef.current =
+      syncLaunchpadPlaybackAfterVoiceChange
+  }, [syncLaunchpadPlaybackAfterVoiceChange])
+
+  const releaseLaunchPadCueVoice = useCallback(
+    (
+      voiceId: number | null,
+      sessionId: string,
+      bankIndex: number,
+      slotIndex: number,
+    ) => {
+      if (typeof voiceId === 'number') {
+        stopLaunchpadVoice(voiceId)
+      } else {
+        stopLaunchpadVoicesForSlot(sessionId, bankIndex, slotIndex)
+      }
+      syncLaunchpadPlaybackAfterVoiceChange()
+    },
+    [syncLaunchpadPlaybackAfterVoiceChange],
+  )
+
   const loadLaunchPadSlotAndPlay = useCallback(
     async (sessionId: string, slotIndex: number) => {
       if (
@@ -3004,9 +3257,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         slotIndex >= LAUNCHPAD_CELL_COUNT ||
         !sessionId
       )
-        return
+        return undefined
       const sess = floatingSessionsRef.current.find((x) => x.id === sessionId)
-      if (sess?.playlistMode !== 'launchpad' || !sess.launchPadCells) return
+      if (sess?.playlistMode !== 'launchpad' || !sess.launchPadCells)
+        return undefined
       const bi = Math.max(
         0,
         Math.min(LAUNCHPAD_BANK_COUNT - 1, sess.launchPadBankIndex ?? 0),
@@ -3016,7 +3270,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         migrateLaunchPadBanksFromCells(sess.launchPadCells)
       const cell0 = banks[bi]![slotIndex]
       const p = cell0?.samplePath
-      if (!p) return
+      if (!p) return undefined
       const playlistMuted = Boolean(sess.playlistOutputMuted)
       const panelVol =
         typeof sess.playlistOutputVolume === 'number' &&
@@ -3031,20 +3285,22 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setPlaybackSessionId(sessionId)
       setActiveFloatingSessionId(sessionId)
       const url = await window.electronAPI.toFileUrl(p)
-      playLaunchpadSample({
+      const voiceId = playLaunchpadSample({
+        sessionId,
+        bankIndex: bi,
+        slotIndex,
         src: url,
         volume: panelVol * padVol,
         muted: playlistMuted,
         sinkId: outputSinkIdRef.current,
         onEnded: () => {
-          setLaunchpadAudioPlaying(false)
-          loadedIndexRef.current = null
-          setPlaybackLoadedTrack(null)
+          syncLaunchpadPlaybackAfterVoiceChangeRef.current()
         },
       })
       loadedIndexRef.current = slotIndex
       setPlaybackLoadedTrack({ sessionId, index: slotIndex, launchPadBankIndex: bi })
       setLaunchpadAudioPlaying(true)
+      return voiceId
     },
     [patchFloatingSession],
   )
@@ -3072,16 +3328,14 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (!cell0?.samplePath) return
       const keyMode =
         cell0.padKeyMode === 'toggle' ? ('toggle' as const) : ('play' as const)
-      const loadedThisSlot =
-        playbackLoadedTrackRef.current?.sessionId === sessionId &&
-        playbackLoadedTrackRef.current?.index === slotIndex &&
-        (playbackLoadedTrackRef.current?.launchPadBankIndex ?? 0) === bi
-      const stillActiveThisSlot =
-        loadedThisSlot &&
-        (launchpadAudioPlayingRef.current ||
-          isLaunchpadSamplePausedWithSrc())
+      const stillActiveThisSlot = launchpadSlotHasAnyVoice(
+        sessionId,
+        bi,
+        slotIndex,
+      )
       if (keyMode === 'toggle' && stillActiveThisSlot) {
-        stopLaunchPadCueRelease()
+        stopLaunchpadVoicesForSlot(sessionId, bi, slotIndex)
+        syncLaunchpadPlaybackAfterVoiceChange()
         return
       }
       const bnk = cloneLaunchPadBanksDeep(
@@ -3098,7 +3352,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     [
       patchFloatingSession,
       loadLaunchPadSlotAndPlay,
-      stopLaunchPadCueRelease,
+      syncLaunchpadPlaybackAfterVoiceChange,
     ],
   )
 
@@ -3112,22 +3366,30 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     stopLaunchPadCueReleaseRef.current = stopLaunchPadCueRelease
   }, [stopLaunchPadCueRelease])
 
+  const releaseLaunchPadCueVoiceRef = useRef(releaseLaunchPadCueVoice)
+  useLayoutEffect(() => {
+    releaseLaunchPadCueVoiceRef.current = releaseLaunchPadCueVoice
+  }, [releaseLaunchPadCueVoice])
+
   type RemoteLaunchPadGesture = {
     sessionId: string
+    bankIndex: number
     slotIndex: number
     timer: ReturnType<typeof setTimeout> | null
     cueCommitted: boolean
     cancelled: boolean
+    cueVoiceId: number | null
   }
-  const remoteLaunchPadGestureRef = useRef<RemoteLaunchPadGesture | null>(
-    null,
+  const remoteLaunchPadGesturesRef = useRef(
+    new Map<string, RemoteLaunchPadGesture>(),
   )
 
   useEffect(() => {
     return () => {
-      const g = remoteLaunchPadGestureRef.current
-      if (g?.timer != null) clearTimeout(g.timer)
-      remoteLaunchPadGestureRef.current = null
+      for (const g of remoteLaunchPadGesturesRef.current.values()) {
+        if (g.timer != null) clearTimeout(g.timer)
+      }
+      remoteLaunchPadGesturesRef.current.clear()
     }
   }, [])
 
@@ -3140,8 +3402,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     /** `window.setTimeout` nel renderer (compatibile con tipi DOM + Node). */
     timer: number | null
     cueCommitted: boolean
+    cueVoiceId: number | null
   }
-  const padKeyboardGestureRef = useRef<PadKeyboardGesture | null>(null)
+  const padKeyboardGesturesRef = useRef(
+    new Map<string, PadKeyboardGesture>(),
+  )
 
   useEffect(() => {
     function findPadKeyBinding(code: string): {
@@ -3185,8 +3450,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       return null
     }
 
-    const clearGestureTimer = () => {
-      const g = padKeyboardGestureRef.current
+    const clearGestureTimerFor = (code: string) => {
+      const g = padKeyboardGesturesRef.current.get(code)
       if (g?.timer != null) {
         clearTimeout(g.timer)
         g.timer = null
@@ -3200,15 +3465,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const bound = findPadKeyBinding(e.code)
       if (!bound) return
 
-      if (padKeyboardGestureRef.current?.code === e.code && e.repeat) return
-
-      if (
-        padKeyboardGestureRef.current &&
-        padKeyboardGestureRef.current.code !== e.code
-      ) {
-        clearGestureTimer()
-        padKeyboardGestureRef.current = null
-      }
+      if (e.repeat) return
+      if (padKeyboardGesturesRef.current.has(e.code)) return
 
       e.preventDefault()
       e.stopPropagation()
@@ -3221,12 +3479,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         keyMode: bound.keyMode,
         timer: null,
         cueCommitted: false,
+        cueVoiceId: null,
       }
-      padKeyboardGestureRef.current = g
+      padKeyboardGesturesRef.current.set(e.code, g)
 
       if (readLaunchPadCueEnabled()) {
         g.timer = window.setTimeout(() => {
-          const cur = padKeyboardGestureRef.current
+          const cur = padKeyboardGesturesRef.current.get(g.code)
           if (!cur || cur.code !== g.code || cur.cueCommitted) return
           cur.cueCommitted = true
           cur.timer = null
@@ -3248,41 +3507,50 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
               launchPadCells: bnk[bix]!.map((c) => ({ ...c })),
             })
           }
-          void loadLaunchPadSlotAndPlayRef.current(
-            cur.sessionId,
-            cur.slotIndex,
-          )
+          void loadLaunchPadSlotAndPlayRef
+            .current(cur.sessionId, cur.slotIndex)
+            .then((vid) => {
+              const live = padKeyboardGesturesRef.current.get(g.code)
+              if (!live || live.code !== g.code) return
+              if (typeof vid === 'number') live.cueVoiceId = vid
+            })
         }, LAUNCHPAD_CUE_HOLD_MS)
       }
     }
 
     const onKeyUp = (e: globalThis.KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return
-      const g = padKeyboardGestureRef.current
-      if (!g || g.code !== e.code) return
+      const g = padKeyboardGesturesRef.current.get(e.code)
+      if (!g) return
 
       e.preventDefault()
       e.stopPropagation()
-      clearGestureTimer()
-      padKeyboardGestureRef.current = null
+      clearGestureTimerFor(e.code)
+      padKeyboardGesturesRef.current.delete(e.code)
 
       if (g.cueCommitted) {
-        stopLaunchPadCueReleaseRef.current()
+        releaseLaunchPadCueVoiceRef.current(
+          g.cueVoiceId,
+          g.sessionId,
+          g.bankIndex,
+          g.slotIndex,
+        )
         return
       }
 
-      const loadedThisSlot =
-        playbackLoadedTrackRef.current?.sessionId === g.sessionId &&
-        playbackLoadedTrackRef.current?.index === g.slotIndex &&
-        (playbackLoadedTrackRef.current?.launchPadBankIndex ?? 0) ===
-          g.bankIndex
-      const stillActiveThisSlot =
-        loadedThisSlot &&
-        (launchpadAudioPlayingRef.current ||
-          isLaunchpadSamplePausedWithSrc())
+      const stillActiveThisSlot = launchpadSlotHasAnyVoice(
+        g.sessionId,
+        g.bankIndex,
+        g.slotIndex,
+      )
 
       if (g.keyMode === 'toggle' && stillActiveThisSlot) {
-        stopLaunchPadCueReleaseRef.current()
+        stopLaunchpadVoicesForSlot(
+          g.sessionId,
+          g.bankIndex,
+          g.slotIndex,
+        )
+        syncLaunchpadPlaybackAfterVoiceChangeRef.current()
         return
       }
       const sUp = floatingSessionsRef.current.find((x) => x.id === g.sessionId)
@@ -3307,8 +3575,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     window.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('keyup', onKeyUp, true)
     return () => {
-      clearGestureTimer()
-      padKeyboardGestureRef.current = null
+      for (const code of padKeyboardGesturesRef.current.keys()) {
+        clearGestureTimerFor(code)
+      }
+      padKeyboardGesturesRef.current.clear()
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('keyup', onKeyUp, true)
     }
@@ -3442,26 +3712,18 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         }
       })
       banks[bi] = cells
-      const loaded = playbackLoadedTrackRef.current
-      const clearingPlayingOrLoadedPad =
-        loaded != null &&
-        loaded.sessionId === sessionId &&
-        loaded.index === slotIndex &&
-        (loaded.launchPadBankIndex ?? 0) === bi &&
-        'samplePath' in patch &&
-        patch.samplePath === null
+      const clearingSampleFromSlot =
+        'samplePath' in patch && patch.samplePath === null
       patchFloatingSession(sessionId, {
         launchPadBanks: banks,
         launchPadCells: cells,
       })
-      if (clearingPlayingOrLoadedPad) {
-        stopLaunchpadSample()
-        setLaunchpadAudioPlaying(false)
-        loadedIndexRef.current = null
-        setPlaybackLoadedTrack(null)
+      if (clearingSampleFromSlot) {
+        stopLaunchpadVoicesForSlot(sessionId, bi, slotIndex)
+        syncLaunchpadPlaybackAfterVoiceChange()
       }
     },
-    [patchFloatingSession, recordUndoPoint],
+    [patchFloatingSession, recordUndoPoint, syncLaunchpadPlaybackAfterVoiceChange],
   )
 
   const setLaunchPadBankIndex = useCallback(
@@ -4091,18 +4353,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         Math.max(0, Math.min(LAUNCHPAD_CELL_COUNT - 1, Math.floor(x)))
 
       const stopPadAt = (sid: string, bi: number, si: number) => {
-        const ld = playbackLoadedTrackRef.current
-        if (
-          ld &&
-          ld.sessionId === sid &&
-          ld.index === si &&
-          (ld.launchPadBankIndex ?? 0) === bi
-        ) {
-          stopLaunchpadSample()
-          setLaunchpadAudioPlaying(false)
-          loadedIndexRef.current = null
-          setPlaybackLoadedTrack(null)
-        }
+        stopLaunchpadVoicesForSlot(sid, bi, si)
+        syncLaunchpadPlaybackAfterVoiceChange()
       }
 
       const syncLaunchPadCellsForSession = (
@@ -4487,6 +4739,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setPreviewSrc,
       setPreviewSyncKey,
       setVideoPlaying,
+      syncLaunchpadPlaybackAfterVoiceChange,
     ],
   )
 
@@ -4613,8 +4866,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
               playbackSessionIdStateRef.current = sid
             }
 
-            const clearRemotePadTimer = () => {
-              const g0 = remoteLaunchPadGestureRef.current
+            const remotePadKey = `${sid}:${p.slotIndex}`
+
+            const clearRemotePadTimerFor = (key: string) => {
+              const g0 = remoteLaunchPadGesturesRef.current.get(key)
               if (g0?.timer != null) {
                 clearTimeout(g0.timer)
                 g0.timer = null
@@ -4628,8 +4883,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             }
 
             if (pointerPhase === 'down') {
-              clearRemotePadTimer()
-              remoteLaunchPadGestureRef.current = null
+              clearRemotePadTimerFor(remotePadKey)
               const sess0 = floatingSessionsRef.current.find(
                 (x) => x.id === sid,
               )
@@ -4637,27 +4891,49 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
                 finish(false, 'not_launchpad')
                 return
               }
+              const bi0 = Math.max(
+                0,
+                Math.min(
+                  LAUNCHPAD_BANK_COUNT - 1,
+                  sess0.launchPadBankIndex ?? 0,
+                ),
+              )
               const g: RemoteLaunchPadGesture = {
                 sessionId: sid,
+                bankIndex: bi0,
                 slotIndex: p.slotIndex,
                 timer: null,
                 cueCommitted: false,
                 cancelled: false,
+                cueVoiceId: null,
               }
-              remoteLaunchPadGestureRef.current = g
+              remoteLaunchPadGesturesRef.current.set(remotePadKey, g)
               if (readLaunchPadCueEnabled()) {
                 g.timer = setTimeout(() => {
-                  const cur = remoteLaunchPadGestureRef.current
+                  const cur =
+                    remoteLaunchPadGesturesRef.current.get(remotePadKey)
                   if (
                     !cur ||
-                    cur.sessionId !== g.sessionId ||
-                    cur.slotIndex !== g.slotIndex ||
+                    cur.sessionId !== sid ||
+                    cur.slotIndex !== p.slotIndex ||
                     cur.cancelled
                   )
                     return
                   cur.cueCommitted = true
                   cur.timer = null
-                  void loadLaunchPadSlotAndPlay(g.sessionId, g.slotIndex)
+                  void loadLaunchPadSlotAndPlay(sid, p.slotIndex).then(
+                    (vid) => {
+                      const live =
+                        remoteLaunchPadGesturesRef.current.get(remotePadKey)
+                      if (
+                        !live ||
+                        live.sessionId !== sid ||
+                        live.slotIndex !== p.slotIndex
+                      )
+                        return
+                      if (typeof vid === 'number') live.cueVoiceId = vid
+                    },
+                  )
                 }, LAUNCHPAD_CUE_HOLD_MS)
               }
               finish(true)
@@ -4665,20 +4941,20 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             }
 
             if (pointerPhase === 'cancel') {
-              const g1 = remoteLaunchPadGestureRef.current
+              const g1 = remoteLaunchPadGesturesRef.current.get(remotePadKey)
               if (
                 g1 &&
                 g1.sessionId === sid &&
                 g1.slotIndex === p.slotIndex
               ) {
                 g1.cancelled = true
-                clearRemotePadTimer()
+                clearRemotePadTimerFor(remotePadKey)
               }
               finish(true)
               return
             }
 
-            const g2 = remoteLaunchPadGestureRef.current
+            const g2 = remoteLaunchPadGesturesRef.current.get(remotePadKey)
             if (
               !g2 ||
               g2.sessionId !== sid ||
@@ -4687,10 +4963,15 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
               finish(true)
               return
             }
-            clearRemotePadTimer()
-            remoteLaunchPadGestureRef.current = null
+            clearRemotePadTimerFor(remotePadKey)
+            remoteLaunchPadGesturesRef.current.delete(remotePadKey)
             if (g2.cueCommitted) {
-              stopLaunchPadCueRelease()
+              releaseLaunchPadCueVoice(
+                g2.cueVoiceId,
+                sid,
+                g2.bankIndex,
+                g2.slotIndex,
+              )
               finish(true)
               return
             }
@@ -4803,6 +5084,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     loadLaunchPadSlotAndPlay,
     handleLaunchPadShortTap,
     stopLaunchPadCueRelease,
+    releaseLaunchPadCueVoice,
     togglePlay,
     goPrev,
     goNext,
@@ -4823,7 +5105,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       ? floatingSessions.find((s) => s.id === pl.sessionId)
       : undefined
     let launchpadTitle: string | null = null
-    if (launchpadAudioPlaying && pl && sess?.playlistMode === 'launchpad') {
+    const launchpadRemoteActive = launchpadVoiceCount() > 0
+    if (launchpadRemoteActive && pl && sess?.playlistMode === 'launchpad') {
       const banks =
         sess.launchPadBanks ??
         migrateLaunchPadBanksFromCells(sess.launchPadCells ?? [])
@@ -4844,8 +5127,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         : base || `Pad ${pl.index + 1}`
     }
     window.electronAPI.reportRemotePlaybackSnapshotPatch({
-      launchpadActive: launchpadAudioPlaying,
-      launchpadSlot: launchpadAudioPlaying && pl ? pl.index : null,
+      launchpadActive: launchpadRemoteActive,
+      launchpadSlot: launchpadRemoteActive && pl ? pl.index : null,
       launchpadTitle,
       outputVolume,
       playlistLoopMode: outputTrackLoopMode,
@@ -5024,6 +5307,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       loadIndexAndPlay,
       loadLaunchPadSlotAndPlay,
       stopLaunchPadCueRelease,
+      releaseLaunchPadCueVoice,
       updateLaunchPadCell,
       setLaunchPadBankIndex,
       togglePlay,
@@ -5042,6 +5326,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       playlistTitle,
       setPlaylistTitle,
       setPlaylistThemeColor,
+      programWatermarkAbsPath,
+      setPlaylistWatermarkPngPath,
       playlistCrossfade,
       setPlaylistCrossfade,
       setPlaylistLoopMode,
@@ -5056,6 +5342,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       closeFloatingPlaylist,
       openFloatingPlaylist,
       hideFloatingPlaylistPanels,
+      rightPlanciaDockWidthPx,
+      dockFloatingPlaylistToPlanciaRight,
       updateFloatingPlaylistChrome,
       repositionAllFloatingPanels,
       patchFloatingPlaylistSession: patchFloatingSession,
@@ -5084,6 +5372,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       activeNamedWorkspaceId,
       activeNamedWorkspaceLabel,
       previewDetached,
+      previewDisplayMode,
+      cyclePreviewDisplayMode,
       setPreviewDocked,
       setPreviewFloating,
       sidebarOpen,
@@ -5137,6 +5427,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       loadIndexAndPlay,
       loadLaunchPadSlotAndPlay,
       stopLaunchPadCueRelease,
+      releaseLaunchPadCueVoice,
       updateLaunchPadCell,
       setLaunchPadBankIndex,
       togglePlay,
@@ -5155,6 +5446,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       playlistTitle,
       setPlaylistTitle,
       setPlaylistThemeColor,
+      programWatermarkAbsPath,
+      setPlaylistWatermarkPngPath,
       playlistCrossfade,
       setPlaylistCrossfade,
       setPlaylistLoopMode,
@@ -5169,6 +5462,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       closeFloatingPlaylist,
       openFloatingPlaylist,
       hideFloatingPlaylistPanels,
+      rightPlanciaDockWidthPx,
+      dockFloatingPlaylistToPlanciaRight,
       updateFloatingPlaylistChrome,
       repositionAllFloatingPanels,
       patchFloatingSession,
@@ -5197,6 +5492,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       activeNamedWorkspaceId,
       activeNamedWorkspaceLabel,
       previewDetached,
+      previewDisplayMode,
+      cyclePreviewDisplayMode,
       setPreviewDocked,
       setPreviewFloating,
       sidebarOpen,
@@ -5239,6 +5536,7 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
   'removeFloatingPlaylist',
   'setPlaylistTitle',
   'setPlaylistThemeColor',
+  'setPlaylistWatermarkPngPath',
   'setPlaylistCrossfade',
   'setPlaylistOutputMuted',
   'setPlaylistOutputVolume',
@@ -5249,9 +5547,11 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
   'applyLaunchPadDropFromPaths',
   'loadLaunchPadSlotAndPlay',
   'stopLaunchPadCueRelease',
+  'releaseLaunchPadCueVoice',
   'updateLaunchPadCell',
   'setLaunchPadBankIndex',
   'updateFloatingPlaylistChrome',
+  'dockFloatingPlaylistToPlanciaRight',
   'undo',
   'redo',
   'setPlaylistLoopMode',
@@ -5288,6 +5588,7 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
   'duplicateNamedWorkspace',
   'setPreviewDocked',
   'setPreviewFloating',
+  'cyclePreviewDisplayMode',
   'setSidebarOpen',
   'toggleSidebarOpen',
   'setSidebarWidthPx',

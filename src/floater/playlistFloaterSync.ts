@@ -1,12 +1,15 @@
 import type { MutableRefObject } from 'react'
 import { deriveOutputTrackListSession } from '../lib/deriveOutputTrackListSession.ts'
 import { buildRegiaBugReportSnapshot } from '../lib/regiaBugReportSnapshot.ts'
+import type { PreviewDisplayMode } from '../lib/previewDetachedStorage.ts'
+import { computeRightPlanciaDockColumnWidthPx } from '../lib/planciaSnap.ts'
 import type { RegiaContextValue } from '../state/RegiaContext.tsx'
 
 /** Stato serializzabile inviato dalla finestra Regia al pannello playlist in finestra OS. */
 export type PlaylistFloaterSyncPayload = {
   floatingPlaylistSessions: RegiaContextValue['floatingPlaylistSessions']
   previewDetached: boolean
+  previewDisplayMode: PreviewDisplayMode
   floatingZOrder: string[]
   playbackLoadedTrack: RegiaContextValue['playbackLoadedTrack']
   loopMode: RegiaContextValue['loopMode']
@@ -52,6 +55,7 @@ export function buildPlaylistFloaterSyncPayload(
   return {
     floatingPlaylistSessions: structuredClone(v.floatingPlaylistSessions),
     previewDetached: v.previewDetached,
+    previewDisplayMode: v.previewDisplayMode,
     floatingZOrder: [...v.floatingZOrder],
     playbackLoadedTrack: v.playbackLoadedTrack,
     loopMode: v.loopMode,
@@ -185,6 +189,9 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     stopLaunchPadCueRelease: call(
       'stopLaunchPadCueRelease',
     ) as RegiaContextValue['stopLaunchPadCueRelease'],
+    releaseLaunchPadCueVoice: call(
+      'releaseLaunchPadCueVoice',
+    ) as RegiaContextValue['releaseLaunchPadCueVoice'],
     updateLaunchPadCell: call(
       'updateLaunchPadCell',
     ) as RegiaContextValue['updateLaunchPadCell'],
@@ -215,6 +222,10 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     setPlaylistThemeColor: call(
       'setPlaylistThemeColor',
     ) as RegiaContextValue['setPlaylistThemeColor'],
+    programWatermarkAbsPath: null,
+    setPlaylistWatermarkPngPath: call(
+      'setPlaylistWatermarkPngPath',
+    ) as RegiaContextValue['setPlaylistWatermarkPngPath'],
     playlistCrossfade: sync.playlistCrossfade,
     setPlaylistCrossfade: call(
       'setPlaylistCrossfade',
@@ -271,6 +282,12 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     hideFloatingPlaylistPanels: call(
       'hideFloatingPlaylistPanels',
     ) as RegiaContextValue['hideFloatingPlaylistPanels'],
+    rightPlanciaDockWidthPx: computeRightPlanciaDockColumnWidthPx(
+      sync.floatingPlaylistSessions,
+    ),
+    dockFloatingPlaylistToPlanciaRight: call(
+      'dockFloatingPlaylistToPlanciaRight',
+    ) as RegiaContextValue['dockFloatingPlaylistToPlanciaRight'],
     updateFloatingPlaylistChrome: call(
       'updateFloatingPlaylistChrome',
     ) as RegiaContextValue['updateFloatingPlaylistChrome'],
@@ -326,6 +343,12 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     activeNamedWorkspaceId: sync.activeNamedWorkspaceId,
     activeNamedWorkspaceLabel: sync.activeNamedWorkspaceLabel,
     previewDetached: sync.previewDetached,
+    previewDisplayMode:
+      sync.previewDisplayMode ??
+      (sync.previewDetached ? 'floating' : 'docked'),
+    cyclePreviewDisplayMode: call(
+      'cyclePreviewDisplayMode',
+    ) as RegiaContextValue['cyclePreviewDisplayMode'],
     setPreviewDocked: call('setPreviewDocked') as RegiaContextValue['setPreviewDocked'],
     setPreviewFloating: call(
       'setPreviewFloating',

@@ -30,6 +30,11 @@ export type PlaybackCommand =
       boardBackgroundColor?: string
     }
   /**
+   * Overlay PNG (tipicamente con alpha) fisso sopra PGM, lavagna e tappo in uscita.
+   * `src` = path assoluto o URL già normalizzato dal processo main.
+   */
+  | { type: 'playlistWatermark'; visible: boolean; src?: string }
+  /**
    * Sfondo «tappo» quando non c’è nulla in onda (nessun media sui due slot né lavagna visibile).
    * `black` = nero come prima; `color` / `image` = riempi lo schermo finché non arriva un segnale.
    */
@@ -39,3 +44,5 @@ export type PlaybackCommand =
       color?: string
       imagePath?: string | null
     }
+  /** Logo marchio in alto a sinistra sulla finestra Schermo 2. */
+  | { type: 'setOutputProgramLogoVisible'; visible: boolean }

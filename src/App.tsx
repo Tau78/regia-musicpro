@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -15,6 +16,7 @@ import PlanciaWorkspaceBanner from './components/PlanciaWorkspaceBanner.tsx'
 import SidebarTabsPanel from './components/SidebarTabsPanel.tsx'
 import DraggableAudioOutputBar from './components/DraggableAudioOutputBar.tsx'
 import AppAboutModal from './components/AppAboutModal.tsx'
+import HeaderWorkspaceSelect from './components/HeaderWorkspaceSelect.tsx'
 import SettingsModal, { IconSettingsGear } from './components/SettingsModal.tsx'
 import { clampSidebarWidth } from './lib/sidebarLayout.ts'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
@@ -29,17 +31,30 @@ function RegiaShell() {
     floatingPlaylistOpen,
     floatingPlaylistSessions,
     playlistFloaterOsSessionIds,
+    rightPlanciaDockWidthPx,
     canUndo,
     canRedo,
     undo,
     redo,
-    previewDetached,
+    previewDisplayMode,
     setPreviewDocked,
     sidebarOpen,
     toggleSidebarOpen,
     sidebarWidthPx,
     setSidebarWidthPx,
   } = useRegia()
+
+  const dockedPlanciaSessionIds = useMemo(() => {
+    if (!floatingPlaylistOpen) return [] as string[]
+    return floatingPlaylistSessions
+      .filter((s) => !playlistFloaterOsSessionIds.includes(s.id))
+      .filter((s) => s.planciaDock === 'right')
+      .map((s) => s.id)
+  }, [
+    floatingPlaylistOpen,
+    floatingPlaylistSessions,
+    playlistFloaterOsSessionIds,
+  ])
 
   const [sidebarResizeActive, setSidebarResizeActive] = useState(false)
   const sidebarResizeDragRef = useRef<{
@@ -165,18 +180,18 @@ function RegiaShell() {
           </h1>
         </div>
         <div className="regia-header-right">
-          <div className="regia-header-controls">
-            <DraggableAudioOutputBar />
+          <div className="regia-header-trailing">
+            <HeaderWorkspaceSelect />
+            <button
+              type="button"
+              className="btn-icon regia-header-settings-btn"
+              onClick={() => setSettingsOpen(true)}
+              title="Impostazioni"
+              aria-label="Apri impostazioni"
+            >
+              <IconSettingsGear />
+            </button>
           </div>
-          <button
-            type="button"
-            className="btn-icon regia-header-settings-btn"
-            onClick={() => setSettingsOpen(true)}
-            title="Impostazioni"
-            aria-label="Apri impostazioni"
-          >
-            <IconSettingsGear />
-          </button>
         </div>
       </header>
 
@@ -226,41 +241,82 @@ function RegiaShell() {
             {sidebarOpen ? '◀' : '▶'}
           </button>
         </aside>
-        <div className="regia-main-content">
-          {!previewDetached ? (
-            <section
-              className="preview-bus-section"
-              aria-label="Anteprima program e coda successiva"
-            >
-              <PreviewProgramNextLayout />
-            </section>
-          ) : (
-            <section
-              className="preview-panel preview-panel--docked-placeholder"
-              aria-label="Anteprima staccata"
-            >
-              <p className="preview-panel-placeholder-text">
-                L’anteprima è in una finestra flottante sopra questa regia.
-              </p>
-              <button
-                type="button"
-                className="preview-panel-reattach-btn"
-                onClick={setPreviewDocked}
+        <div className="regia-main-work">
+          <div className="regia-main-content">
+            <div className="regia-main-preview-scroll">
+              <div
+                className="regia-preview-transport-sticky"
+                aria-label="Trasporto e uscita audio (agganciato all’anteprima)"
               >
-                Riaggancia nell’area principale
-              </button>
-            </section>
-          )}
+                <DraggableAudioOutputBar />
+              </div>
+              {previewDisplayMode === 'docked' ?
+                <section
+                  className="preview-bus-section"
+                  aria-label="Anteprima program e coda successiva"
+                >
+                  <PreviewProgramNextLayout />
+                </section>
+              : previewDisplayMode === 'floating' ?
+                <section
+                  className="preview-panel preview-panel--docked-placeholder"
+                  aria-label="Anteprima staccata"
+                >
+                  <p className="preview-panel-placeholder-text">
+                    L’anteprima è in una finestra flottante sopra questa regia.
+                  </p>
+                  <button
+                    type="button"
+                    className="preview-panel-reattach-btn"
+                    onClick={setPreviewDocked}
+                  >
+                    Riaggancia nell’area principale
+                  </button>
+                </section>
+              : <section
+                  className="preview-panel preview-panel--docked-placeholder preview-panel--preview-hidden"
+                  aria-label="Anteprima nascosta"
+                >
+                  <p className="preview-panel-placeholder-text">
+                    Anteprima disattivata nel layout: il trasporto e l’uscita restano
+                    attivi. Usa l’icona occhio nella barra trasporto per ripristinare
+                    l’anteprima qui o in finestra flottante.
+                  </p>
+                  <button
+                    type="button"
+                    className="preview-panel-reattach-btn"
+                    onClick={setPreviewDocked}
+                  >
+                    Mostra anteprima nel layout
+                  </button>
+                </section>
+              }
+            </div>
+          </div>
+          {rightPlanciaDockWidthPx > 0 ?
+            <aside
+              className="regia-plancia-right-dock"
+              style={{ width: rightPlanciaDockWidthPx }}
+              aria-label="Pannelli agganciati a destra della plancia"
+            >
+              {dockedPlanciaSessionIds.map((id) => (
+                <FloatingPlaylist key={id} sessionId={id} />
+              ))}
+            </aside>
+          : null}
         </div>
       </main>
 
-      {previewDetached ? <FloatingPreview onDock={setPreviewDocked} /> : null}
+      {previewDisplayMode === 'floating' ?
+        <FloatingPreview onDock={setPreviewDocked} />
+      : null}
 
       <PlanciaWorkspaceBanner />
 
       {floatingPlaylistOpen
         ? floatingPlaylistSessions
             .filter((s) => !playlistFloaterOsSessionIds.includes(s.id))
+            .filter((s) => s.planciaDock !== 'right')
             .map((s) => <FloatingPlaylist key={s.id} sessionId={s.id} />)
         : null}
     </div>

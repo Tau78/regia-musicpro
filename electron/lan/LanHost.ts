@@ -34,6 +34,11 @@ export type LanHostDeps = {
   preferredPort: number
   listPlaylists: () => Promise<LanHostPlaylistMeta[]>
   getPlaylistPublicDetail: (id: string) => Promise<unknown | null>
+  /** PNG composito del banco lavagna (solo playlist lavagna). */
+  readChalkboardBankPng: (
+    playlistId: string,
+    bankIndex: number,
+  ) => Promise<Buffer | null>
   dispatchToRegia: (payload: RemoteDispatchPayload) => Promise<void>
   getPlaybackSnapshot: () => RemotePlaybackSnapshotV1
 }
@@ -430,6 +435,30 @@ export class LanHost {
       })
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ items: filtered }))
+      return
+    }
+
+    const mCbBank =
+      /^\/api\/remote\/v1\/playlists\/([^/]+)\/chalkboard-bank\/(\d+)$/.exec(
+        u.pathname,
+      )
+    if (mCbBank && req.method === 'GET') {
+      const playlistId = decodeURIComponent(mCbBank[1]!)
+      const bankIndex = Number(mCbBank[2]!)
+      if (!Number.isInteger(bankIndex) || bankIndex < 0 || bankIndex > 32) {
+        res.writeHead(400).end()
+        return
+      }
+      const buf = await this.deps.readChalkboardBankPng(playlistId, bankIndex)
+      if (!buf) {
+        res.writeHead(404).end()
+        return
+      }
+      res.writeHead(200, {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'no-store',
+      })
+      res.end(buf)
       return
     }
 

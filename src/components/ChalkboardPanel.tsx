@@ -100,6 +100,37 @@ function fitAspectBox(
   return { w: Math.max(2, Math.floor(w)), h: Math.max(2, Math.floor(h)) }
 }
 
+/** Vecchi `*-draw.png` opachi col colore lavagna → alpha 0 (solo in caricamento TRANSP). */
+function stripOpaqueBoardRgbToTransparent(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  boardHex: string,
+) {
+  const hex = normalizeChalkboardBackgroundHex(boardHex).replace('#', '')
+  if (hex.length !== 6) return
+  const br = Number.parseInt(hex.slice(0, 2), 16)
+  const bg = Number.parseInt(hex.slice(2, 4), 16)
+  const bb = Number.parseInt(hex.slice(4, 6), 16)
+  const tol = 3
+  const img = ctx.getImageData(0, 0, w, h)
+  const d = img.data
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3]! < 250) continue
+    const r = d[i]!
+    const g = d[i + 1]!
+    const b = d[i + 2]!
+    if (
+      Math.abs(r - br) <= tol &&
+      Math.abs(g - bg) <= tol &&
+      Math.abs(b - bb) <= tol
+    ) {
+      d[i + 3] = 0
+    }
+  }
+  ctx.putImageData(img, 0, 0)
+}
+
 async function readOutputResolution(): Promise<{
   width: number
   height: number
@@ -119,13 +150,6 @@ async function readOutputResolution(): Promise<{
     /* ignore */
   }
   return null
-}
-
-function outputScratchPathFromBankCompositePath(compositeAbs: string): string {
-  if (/bank-\d+\.png$/i.test(compositeAbs)) {
-    return compositeAbs.replace(/bank-\d+\.png$/i, 'regia-output-push.png')
-  }
-  return compositeAbs.replace(/\.png$/i, '') + '-output-push.png'
 }
 
 async function buildCompositeDataUrl(
@@ -379,9 +403,16 @@ export default function ChalkboardPanel({
   const [lineWidth, setLineWidth] = useState(4)
   const drawingRef = useRef(false)
   const lastRef = useRef<{ x: number; y: number } | null>(null)
-  const chalkboardOutputPushGenRef = useRef(0)
+  /** Serializza build+write+send: evita race del contatore gen tra pump, Strict Mode e sync. */
+  const chalkboardOutputSendChainRef = useRef(Promise.resolve())
   const outputModeRef = useRef(outputMode)
   const placementsRef = useRef(placements)
+  const bankPathsRef = useRef(bankPaths)
+  const bankIndexRef = useRef(bankIndex)
+  const bgHexRef = useRef('')
+  const resolutionReadyRef = useRef(false)
+  const outWRef = useRef(0)
+  const outHRef = useRef(0)
   const textLiveRef = useRef({
     textDraft: null as { bitmapX: number; bitmapY: number } | null,
     textDraftValue: '',
@@ -452,6 +483,15 @@ export default function ChalkboardPanel({
   const outW = outSize?.width ?? 0
   const outH = outSize?.height ?? 0
   const resolutionReady = outW > 0 && outH > 0
+
+  useLayoutEffect(() => {
+    bankPathsRef.current = bankPaths
+    bankIndexRef.current = bankIndex
+    bgHexRef.current = bgHex
+    resolutionReadyRef.current = resolutionReady
+    outWRef.current = outW
+    outHRef.current = outH
+  }, [bankPaths, bankIndex, bgHex, resolutionReady, outW, outH])
 
   useEffect(() => {
     if (!resolutionReady) return
@@ -633,6 +673,9 @@ export default function ChalkboardPanel({
     }
     try {
       await tryLoad(drawPath)
+      if (transp) {
+        stripOpaqueBoardRgbToTransparent(ctx, outW, outH, bgHex)
+      }
     } catch {
       if (transp) {
         /* In TRANSP non caricare il composito opaco (avrebbe lo sfondo “bancato”). */
@@ -693,46 +736,51 @@ export default function ChalkboardPanel({
   )
 
   const renderAndSendChalkboardOutputLayer = useCallback(
-    async (
+    (
       mode: ChalkboardOutputMode,
       placementsOverride?: ChalkboardPlacedImage[],
       textDraftPreview?: ChalkboardTextDraftPreview | null,
     ) => {
-      if (mode === 'off' || !resolutionReady || bankPaths.length <= bankIndex)
-        return
-      const path = bankPaths[bankIndex]
-      const canvas = canvasRef.current
-      if (!path || !canvas) return
-      const gen = ++chalkboardOutputPushGenRef.current
-      const pl = placementsOverride ?? placements
-      const compositeUrl = await buildCompositeDataUrl(
-        canvas,
-        pl,
-        outW,
-        outH,
-        bgHex,
-        {
-          opaqueBackground: mode === 'solid',
-          textDraftPreview: textDraftPreview ?? undefined,
-        },
-      )
-      if (gen !== chalkboardOutputPushGenRef.current) return
-      const scratch = outputScratchPathFromBankCompositePath(path)
-      await window.electronAPI.chalkboardWriteBankDataUrl({
-        absPath: scratch,
-        dataUrl: compositeUrl,
+      const p = chalkboardOutputSendChainRef.current.then(async () => {
+        const paths = bankPathsRef.current
+        const bi = bankIndexRef.current
+        if (mode === 'off' || !resolutionReadyRef.current || paths.length <= bi) {
+          return
+        }
+        const path = paths[bi]
+        const canvas = canvasRef.current
+        if (!path || !canvas) return
+        const pl = placementsOverride ?? placementsRef.current
+        const ow = outWRef.current
+        const oh = outHRef.current
+        const bg = bgHexRef.current
+        const compositeUrl = await buildCompositeDataUrl(
+          canvas,
+          pl,
+          ow,
+          oh,
+          bg,
+          {
+            opaqueBackground: mode === 'solid',
+            textDraftPreview: textDraftPreview ?? undefined,
+          },
+        )
+        /*
+         * Data URL: la finestra Uscita in dev è `http://localhost/...` e spesso non può
+         * mostrare `file://` in <img>; l’anteprima (canvas) funziona comunque.
+         */
+        void window.electronAPI.sendPlayback({
+          type: 'chalkboardLayer',
+          visible: true,
+          src: compositeUrl,
+          composite: mode === 'transparent' ? 'transparent' : 'solid',
+          ...(mode === 'solid' ? { boardBackgroundColor: bg } : {}),
+        })
       })
-      if (gen !== chalkboardOutputPushGenRef.current) return
-      /* Path assoluto: `playback:send` in main applica `pathToMediaUrl` come per `load`. */
-      void window.electronAPI.sendPlayback({
-        type: 'chalkboardLayer',
-        visible: true,
-        src: scratch,
-        composite: mode === 'transparent' ? 'transparent' : 'solid',
-        ...(mode === 'solid' ? { boardBackgroundColor: bgHex } : {}),
-      })
+      chalkboardOutputSendChainRef.current = p.catch(() => {})
+      return p
     },
-    [resolutionReady, bankPaths, bankIndex, placements, outW, outH, bgHex],
+    [],
   )
 
   /**
@@ -863,11 +911,16 @@ export default function ChalkboardPanel({
     const canvasKey = `${outputMode}:${bankIndex}:${bankPaths.join('|')}`
     const needsCanvasReload = syncPushCanvasKeyRef.current !== canvasKey
     if (needsCanvasReload) syncPushCanvasKeyRef.current = canvasKey
+    let cancelled = false
     void (async () => {
       await outputLivePumpDoneRef.current
+      if (cancelled) return
       if (needsCanvasReload) await loadBankIntoCanvas()
+      if (cancelled) return
       await persistCurrentBank()
+      if (cancelled) return
       await renderAndSendChalkboardOutputLayer(outputMode, undefined, null)
+      if (cancelled) return
       const tl = textLiveRef.current
       if (tl.textDraft) {
         const raw = tl.textDraftValue.replace(/\r\n/g, '\n').trimEnd()
@@ -883,6 +936,9 @@ export default function ChalkboardPanel({
         }
       }
     })()
+    return () => {
+      cancelled = true
+    }
   }, [
     outputMode,
     bankIndex,

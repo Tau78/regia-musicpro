@@ -5,6 +5,7 @@
  * Tenere qui launchpad + tracks insieme evita regressioni del tipo «solo launchpad salvato al primo commit».
  */
 import { normalizePlaylistThemeColor } from './playlistThemeColor.ts'
+import { normalizePlaylistWatermarkAbsPath } from './playlistWatermarkPath.ts'
 import {
   CHALKBOARD_BANK_COUNT,
   defaultLaunchPadCells,
@@ -50,6 +51,7 @@ export function planFirstDiskLinkForUnlinkedSession(args: {
   const s = args.session
   const label = args.trimmedTitle.trim().slice(0, 120) || 'Senza titolo'
   const themeCur = normalizePlaylistThemeColor(s.playlistThemeColor ?? '')
+  const wmCur = normalizePlaylistWatermarkAbsPath(s.playlistWatermarkPngPath)
 
   if (s.playlistMode === 'launchpad') {
     const cells = s.launchPadCells ?? defaultLaunchPadCells()
@@ -58,7 +60,9 @@ export function planFirstDiskLinkForUnlinkedSession(args: {
       titleNorm === '' || titleNorm.toLowerCase() === 'launchpad'
     const cellsPristine = launchPadCellsEqual(cells, defaultLaunchPadCells())
     const themePristine = themeCur === ''
-    if (stillDefaultTitle && cellsPristine && themePristine) return { kind: 'skip' }
+    const watermarkPristine = wmCur === ''
+    if (stillDefaultTitle && cellsPristine && themePristine && watermarkPristine)
+      return { kind: 'skip' }
     return { kind: 'launchpad_new', label, themeColor: themeCur, cells }
   }
 
@@ -69,7 +73,9 @@ export function planFirstDiskLinkForUnlinkedSession(args: {
     const stillDefaultTitle =
       titleNorm === '' || titleNorm.toLowerCase() === 'chalkboard'
     const pristine =
-      (s.chalkboardContentRev ?? 0) === 0 && themeCur === ''
+      (s.chalkboardContentRev ?? 0) === 0 &&
+      themeCur === '' &&
+      wmCur === ''
     if (stillDefaultTitle && pristine) return { kind: 'skip' }
     return {
       kind: 'chalkboard_new',

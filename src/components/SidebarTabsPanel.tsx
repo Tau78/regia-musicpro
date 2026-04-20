@@ -42,48 +42,6 @@ function persistKindFilters(filters: SidebarCardKindFilter[]) {
   }
 }
 
-/** Finestra divisa in quattro (layout plancia / workspace). */
-function IconNewWorkspace() {
-  return (
-    <svg
-      className="regia-sidebar-primary-svg"
-      viewBox="0 0 24 24"
-      width={16}
-      height={16}
-      aria-hidden="true"
-    >
-      <rect
-        x="3"
-        y="4"
-        width="14"
-        height="15"
-        rx={2}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-      <line
-        x1="10"
-        y1="4.5"
-        x2="10"
-        y2="18.5"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-      />
-      <line
-        x1="3.5"
-        y1="11"
-        x2="16.5"
-        y2="11"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
-
 /** Elenco puntato, leggermente più grande delle icone elenco (16–18px). */
 function IconSidebarBulletedList() {
   return (
@@ -250,7 +208,6 @@ export default function SidebarTabsPanel() {
     addFloatingLaunchPad,
     addFloatingChalkboard,
     openFloatingPlaylist,
-    createNewNamedWorkspace,
   } = useRegia()
 
   useEffect(() => {
@@ -288,10 +245,6 @@ export default function SidebarTabsPanel() {
     await addFloatingChalkboard()
     openFloatingPlaylist()
   }, [addFloatingChalkboard, openFloatingPlaylist])
-
-  const onNewWorkspace = useCallback(() => {
-    createNewNamedWorkspace()
-  }, [createNewNamedWorkspace])
 
   return (
     <div className="regia-sidebar-tabs">
@@ -362,32 +315,10 @@ export default function SidebarTabsPanel() {
       <div className="regia-sidebar-cards-scroll">
         <SavedPlaylistsPanel listOnly kindFilters={kindFiltersForPanel} />
       </div>
-      <details className="regia-sidebar-workspace-details">
-        <summary className="regia-sidebar-workspace-summary">
-          <span className="regia-sidebar-workspace-summary-label">WORKSPACE</span>
-          <span className="regia-sidebar-workspace-summary-hint">
-            layout plancia salvati
-          </span>
-        </summary>
-        <div className="regia-sidebar-workspace-body">
-          <div
-            className="saved-playlists-new-row regia-sidebar-workspace-new-row"
-            role="group"
-            aria-label="Nuovo workspace"
-          >
-            <button
-              type="button"
-              className="btn-icon regia-sidebar-new-icon-btn workspace-presets-new-btn"
-              onClick={onNewWorkspace}
-              title="Nuovo workspace con il layout attuale della plancia"
-              aria-label="Nuovo workspace"
-            >
-              <IconNewWorkspace />
-            </button>
-          </div>
-          <WorkspacePresetsPanel />
-        </div>
-      </details>
+      <div className="regia-sidebar-workspace-panel">
+        <p className="regia-sidebar-workspace-panel-title">Layout workspace</p>
+        <WorkspacePresetsPanel />
+      </div>
     </div>
   )
 }

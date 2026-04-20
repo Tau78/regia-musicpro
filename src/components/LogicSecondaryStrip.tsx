@@ -74,7 +74,7 @@ function IconGrid() {
   )
 }
 
-/** Linea + punta a sinistra = annulla (indietro nella cronologia). */
+/** Freccia a U verso sinistra (annulla). */
 function IconUndo() {
   return (
     <svg
@@ -84,17 +84,17 @@ function IconUndo() {
       aria-hidden
       fill="none"
       stroke="currentColor"
-      strokeWidth="2.25"
+      strokeWidth="2.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M21 12H10.5" />
-      <path d="M10.5 12 6.5 8M10.5 12 6.5 16" />
+      <path d="M3 7v6h6" />
+      <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.32 2.66L3 13" />
     </svg>
   )
 }
 
-/** Linea + punta a destra = ripristina (avanti nella cronologia). */
+/** Freccia a U verso destra (ripristina). */
 function IconRedo() {
   return (
     <svg
@@ -104,12 +104,12 @@ function IconRedo() {
       aria-hidden
       fill="none"
       stroke="currentColor"
-      strokeWidth="2.25"
+      strokeWidth="2.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M3 12h10.5" />
-      <path d="M13.5 12l4-4M13.5 12l4 4" />
+      <path d="M21 7v6h-6" />
+      <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6.35 2.65L21 13" />
     </svg>
   )
 }
@@ -172,17 +172,15 @@ export default function LogicSecondaryStrip() {
       </div>
 
       {showGrid ? (
-        <div className="logic-transport-well logic-secondary-well">
-          <button
-            type="button"
-            className="logic-tbtn logic-tbtn--icon"
-            onClick={() => repositionAllFloatingPanels()}
-            title="Riposiziona tutti i pannelli flottanti a cascata nell’area principale (evita fuori schermo)"
-            aria-label="Riposiziona pannelli flottanti"
-          >
-            <IconGrid />
-          </button>
-        </div>
+        <button
+          type="button"
+          className="logic-tbtn logic-tbtn--icon"
+          onClick={() => repositionAllFloatingPanels()}
+          title="Riposiziona tutti i pannelli flottanti a cascata nell’area principale (evita fuori schermo)"
+          aria-label="Riposiziona pannelli flottanti"
+        >
+          <IconGrid />
+        </button>
       ) : null}
 
       <div

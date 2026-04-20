@@ -2,6 +2,13 @@ import { readLaunchPadDefaultKeyMode } from '../lib/launchPadSettings.ts'
 
 export type FloatingPlaylistPos = { x: number; y: number }
 
+/** Pannello agganciato alla colonna destra della plancia (restringe l’area anteprima). */
+export type PlanciaDockMode = 'none' | 'right'
+
+export function normalizePlanciaDockMode(v: unknown): PlanciaDockMode {
+  return v === 'right' ? 'right' : 'none'
+}
+
 /** Dimensioni pannello espanso (in comprimi l’altezza è automatica). */
 export type FloatingPlaylistPanelSize = { width: number; height: number }
 
@@ -245,6 +252,8 @@ export type FloatingPlaylistSession = {
   id: string
   pos: FloatingPlaylistPos
   panelSize: FloatingPlaylistPanelSize
+  /** Agganciato alla colonna destra tipo pannelli Photoshop (`none` se assente). */
+  planciaDock?: PlanciaDockMode
   collapsed: boolean
   /** Assente o `tracks` = playlist classica a elenco. */
   playlistMode?: PlaylistMode
@@ -269,6 +278,11 @@ export type FloatingPlaylistSession = {
   playlistOutputVolume: number
   /** Hex #rrggbb o stringa vuota = tema predefinito del pannello. */
   playlistThemeColor: string
+  /**
+   * Path assoluto a PNG mostrato come overlay fisso in uscita e in anteprima (stesso criterio della regia).
+   * Stringa vuota = disattivato.
+   */
+  playlistWatermarkPngPath?: string
   editingSavedPlaylistId: string | null
   savedEditPathsBaseline: string[] | null
   savedEditTitleBaseline: string
@@ -277,6 +291,8 @@ export type FloatingPlaylistSession = {
   savedEditPlaylistLoopBaseline?: 'off' | 'one' | 'all'
   /** Tema salvato su disco (solo quando si modifica una playlist salvata). */
   savedEditThemeColorBaseline: string
+  /** Watermark salvato su disco (solo con collegamento a playlist salvata). */
+  savedEditWatermarkBaseline?: string
   /** Copia slot launchpad all’ultimo «Carica» (solo se collegato a salvataggio launchpad). */
   savedEditLaunchPadBaseline: LaunchPadCell[] | null
   /** Indice banco 0…`CHALKBOARD_BANK_COUNT`-1 (solo chalkboard). */
@@ -316,6 +332,7 @@ export function createEmptyFloatingSession(
     id: newSessionId(),
     pos: pos ?? { x: 24, y: 96 },
     panelSize: { ...DEFAULT_FLOATING_PANEL_SIZE },
+    planciaDock: 'none',
     collapsed: false,
     paths: [],
     currentIndex: 0,
@@ -324,11 +341,13 @@ export function createEmptyFloatingSession(
     playlistOutputMuted: false,
     playlistOutputVolume: 1,
     playlistThemeColor: '',
+    playlistWatermarkPngPath: '',
     editingSavedPlaylistId: null,
     savedEditPathsBaseline: null,
     savedEditTitleBaseline: '',
     savedEditCrossfadeBaseline: false,
     savedEditThemeColorBaseline: '',
+    savedEditWatermarkBaseline: '',
     savedEditLaunchPadBaseline: null,
   }
 }
@@ -388,6 +407,7 @@ export function createLaunchPadFloatingSession(
     savedEditTitleBaseline: '',
     savedEditCrossfadeBaseline: false,
     savedEditThemeColorBaseline: '',
+    savedEditWatermarkBaseline: '',
   }
 }
 

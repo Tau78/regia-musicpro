@@ -70,6 +70,16 @@ function authHeaders(token: string): HeadersInit {
   return { Authorization: `Bearer ${token}` }
 }
 
+function chalkboardBankPreviewSrc(
+  playlistId: string,
+  bankIndex: number,
+  token: string,
+): string {
+  const id = encodeURIComponent(playlistId)
+  const tok = encodeURIComponent(token)
+  return `/api/remote/v1/playlists/${id}/chalkboard-bank/${bankIndex}?token=${tok}`
+}
+
 function formatMmSs(sec: number | null | undefined): string {
   if (sec == null || !Number.isFinite(sec)) return '—'
   const s = Math.max(0, Math.floor(sec))
@@ -739,40 +749,52 @@ export function RemoteApp() {
                 ) : (
                   <div className="remote-chalk-wrap">
                     <p className="remote-chalk-hint">
-                      Invia in onda il PNG composito salvato per ogni banco. Trasparente =
-                      alpha (vedi il programma sotto); solido = sfondo lavagna opaco.
+                      Sotto vedi l’anteprima del PNG salvato per ogni banco. Trasparente = alpha
+                      sul programma; solido = sfondo lavagna opaco. Il disegno con dito o pennino
+                      va fatto nella finestra Lavagna sulla regia: dal telecomando puoi solo
+                      mandare in onda o nascondere.
                     </p>
                     <div className="remote-chalk-grid">
                       {detail.banks.map((b) => (
                         <div key={b.index} className="remote-chalk-cell">
-                          <button
-                            type="button"
-                            className="remote-chalk-bank"
-                            onClick={() =>
-                              void onChalkboardBankToOutput(
-                                detail.id,
-                                b.index,
-                                'transparent',
-                              )
-                            }
-                          >
-                            {b.label}
-                            <span className="remote-chalk-bank-sub">Trasparente</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="remote-chalk-bank remote-chalk-bank--solid"
-                            onClick={() =>
-                              void onChalkboardBankToOutput(
-                                detail.id,
-                                b.index,
-                                'solid',
-                              )
-                            }
-                          >
-                            {b.label}
-                            <span className="remote-chalk-bank-sub">Solido</span>
-                          </button>
+                          <div className="remote-chalk-thumb-wrap">
+                            <img
+                              className="remote-chalk-thumb"
+                              alt={`Anteprima ${b.label}`}
+                              src={chalkboardBankPreviewSrc(detail.id, b.index, token)}
+                              loading="lazy"
+                            />
+                          </div>
+                          <div className="remote-chalk-bank-actions">
+                            <button
+                              type="button"
+                              className="remote-chalk-bank"
+                              onClick={() =>
+                                void onChalkboardBankToOutput(
+                                  detail.id,
+                                  b.index,
+                                  'transparent',
+                                )
+                              }
+                            >
+                              {b.label}
+                              <span className="remote-chalk-bank-sub">Trasparente</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="remote-chalk-bank remote-chalk-bank--solid"
+                              onClick={() =>
+                                void onChalkboardBankToOutput(
+                                  detail.id,
+                                  b.index,
+                                  'solid',
+                                )
+                              }
+                            >
+                              {b.label}
+                              <span className="remote-chalk-bank-sub">Solido</span>
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>

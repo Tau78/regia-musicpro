@@ -11,4 +11,6 @@ export type SavedPlaylistMeta = {
   playlistMode?: SavedPlaylistKind
   /** Hex #rrggbb se impostato; assente = tema predefinito. */
   themeColor?: string
+  /** Indica se la playlist ha un watermark PNG in uscita. */
+  hasWatermark?: boolean
 }

@@ -48,48 +48,6 @@ function IconSaveWorkspace() {
   )
 }
 
-function IconRenameWorkspace() {
-  return (
-    <svg
-      className="saved-playlists-icon-svg"
-      viewBox="0 0 24 24"
-      width={16}
-      height={16}
-      aria-hidden="true"
-    >
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
-      />
-    </svg>
-  )
-}
-
-function IconConfirmRename() {
-  return (
-    <svg
-      className="saved-playlists-icon-svg"
-      viewBox="0 0 24 24"
-      width={16}
-      height={16}
-      aria-hidden="true"
-    >
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2.25}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M5 12l4 4L19 7"
-      />
-    </svg>
-  )
-}
-
 function IconDuplicate() {
   return (
     <svg
@@ -210,10 +168,9 @@ export default function WorkspacePresetsPanel() {
   return (
     <section className="workspace-presets" aria-label="Workspace plancia">
       <p className="workspace-presets-intro">
-        Salva il layout su un workspace con «Salva» sulla riga. «Carica»
-        ripristina plancia e pannelli come erano in quel salvataggio. La
-        matita apre il nome in modifica: Invio o spunta confermano, Esc
-        annulla.
+        Salva il layout con «Salva» sulla riga; «Carica» ripristina plancia e
+        pannelli. EDIT modifica il nome (Invio conferma, Esc
+        annulla); il cestino elimina il workspace.
       </p>
       {namedWorkspaces.length === 0 ? (
         <p className="saved-playlists-empty workspace-presets-empty">
@@ -225,29 +182,75 @@ export default function WorkspacePresetsPanel() {
             <li key={w.id} className="saved-playlists-item workspace-presets-item">
               <div className="saved-playlists-meta">
                 <div className="saved-playlists-meta-text workspace-presets-meta-text">
-                  {renameId === w.id ? (
-                    <input
-                      ref={renameInputRef}
-                      type="text"
-                      className="workspace-presets-rename-input"
-                      value={renameDraft}
-                      maxLength={80}
-                      aria-label="Nome workspace"
-                      onChange={(e) => setRenameDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault()
-                          commitRename()
+                  <div className="workspace-presets-title-row">
+                    {renameId === w.id ? (
+                      <input
+                        ref={renameInputRef}
+                        type="text"
+                        className="workspace-presets-rename-input"
+                        value={renameDraft}
+                        maxLength={80}
+                        aria-label="Nome workspace"
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            commitRename()
+                          }
+                          if (e.key === 'Escape') {
+                            e.preventDefault()
+                            cancelRename()
+                          }
+                        }}
+                      />
+                    ) : (
+                      <span className="saved-playlists-name">{w.label}</span>
+                    )}
+                    <div
+                      className="workspace-presets-entry-inline-actions"
+                      role="group"
+                      aria-label={`Azioni su ${w.label}`}
+                    >
+                      <button
+                        type="button"
+                        className="workspace-presets-edit-btn"
+                        title={
+                          renameId === w.id
+                            ? 'Conferma nome (Invio)'
+                            : `Modifica nome «${w.label}»`
                         }
-                        if (e.key === 'Escape') {
-                          e.preventDefault()
-                          cancelRename()
+                        aria-label={
+                          renameId === w.id
+                            ? 'Conferma nuovo nome workspace'
+                            : `Modifica nome workspace ${w.label}`
                         }
-                      }}
-                    />
-                  ) : (
-                    <span className="saved-playlists-name">{w.label}</span>
-                  )}
+                        onPointerDown={(e) => {
+                          if (renameId === w.id) e.preventDefault()
+                        }}
+                        onClick={() => onRenameButton(w.id, w.label)}
+                      >
+                        {renameId === w.id ? 'OK' : 'EDIT'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-icon workspace-presets-trash-btn"
+                        disabled={renameId === w.id}
+                        title={`Elimina «${w.label}»`}
+                        aria-label={`Elimina workspace ${w.label}`}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              `Eliminare il workspace «${w.label}» dalla memoria locale?`,
+                            )
+                          ) {
+                            deleteNamedWorkspace(w.id)
+                          }
+                        }}
+                      >
+                        <IconDeleteWorkspace />
+                      </button>
+                    </div>
+                  </div>
                   <span className="saved-playlists-count workspace-presets-date">
                     {formatSavedAt(w.savedAt)}
                   </span>
@@ -274,53 +277,12 @@ export default function WorkspacePresetsPanel() {
                 </button>
                 <button
                   type="button"
-                  className="btn-icon saved-playlists-icon-btn workspace-presets-rename"
-                  title={
-                    renameId === w.id
-                      ? 'Conferma nome (Invio)'
-                      : `Rinomina «${w.label}»`
-                  }
-                  aria-label={
-                    renameId === w.id
-                      ? 'Conferma nuovo nome workspace'
-                      : `Rinomina workspace ${w.label}`
-                  }
-                  onPointerDown={(e) => {
-                    if (renameId === w.id) e.preventDefault()
-                  }}
-                  onClick={() => onRenameButton(w.id, w.label)}
-                >
-                  {renameId === w.id ? (
-                    <IconConfirmRename />
-                  ) : (
-                    <IconRenameWorkspace />
-                  )}
-                </button>
-                <button
-                  type="button"
                   className="btn-icon saved-playlists-icon-btn saved-playlists-duplicate"
                   title={`Duplica «${w.label}»`}
                   aria-label={`Duplica workspace ${w.label}`}
                   onClick={() => duplicateNamedWorkspace(w.id)}
                 >
                   <IconDuplicate />
-                </button>
-                <button
-                  type="button"
-                  className="btn-icon saved-playlists-icon-btn saved-playlists-delete"
-                  title={`Elimina «${w.label}»`}
-                  aria-label={`Elimina workspace ${w.label}`}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `Eliminare il workspace «${w.label}» dalla memoria locale?`,
-                      )
-                    ) {
-                      deleteNamedWorkspace(w.id)
-                    }
-                  }}
-                >
-                  <IconDeleteWorkspace />
                 </button>
               </div>
             </li>

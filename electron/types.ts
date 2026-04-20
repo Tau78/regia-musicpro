@@ -18,9 +18,11 @@ export type PlaybackCommand =
       composite?: 'solid' | 'transparent'
       boardBackgroundColor?: string
     }
+  | { type: 'playlistWatermark'; visible: boolean; src?: string }
   | {
       type: 'setOutputIdleCap'
       mode: 'black' | 'color' | 'image'
       color?: string
       imagePath?: string | null
     }
+  | { type: 'setOutputProgramLogoVisible'; visible: boolean }

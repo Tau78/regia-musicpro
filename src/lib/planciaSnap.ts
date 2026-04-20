@@ -6,6 +6,38 @@ export const SNAP_PEER_DIMENSION_PX = 12
 /** Allineamento leggero ai bordi interni dell’area principale (`.regia-main-content`). */
 export const SNAP_PLANCIA_EDGE_PX = 10
 
+/** Distanza dal bordo destro finestra per agganciare un pannello alla colonna plancia destra. */
+export const PLANCIA_DOCK_SCREEN_RIGHT_PX = 28
+
+/**
+ * Trascinando un pannello agganciato verso sinistra oltre questo margine dal bordo
+ * destro dell’area plancia, si stacca e torna flottante.
+ */
+export const PLANCIA_UNDOCK_DRAG_LEFT_PX = 56
+
+const PLANCIA_DOCK_COL_MIN_W = 220
+const PLANCIA_DOCK_COL_MAX_W = 960
+
+/** Larghezza colonna dock destra (0 se nessun pannello agganciato). */
+export function computeRightPlanciaDockColumnWidthPx(
+  sessions: readonly {
+    planciaDock?: 'none' | 'right'
+    panelSize: { width: number }
+  }[],
+): number {
+  let maxW = 0
+  for (const s of sessions) {
+    if (s.planciaDock !== 'right') continue
+    const w = s.panelSize.width
+    if (typeof w === 'number' && Number.isFinite(w)) maxW = Math.max(maxW, w)
+  }
+  if (maxW <= 0) return 0
+  return Math.min(
+    PLANCIA_DOCK_COL_MAX_W,
+    Math.max(PLANCIA_DOCK_COL_MIN_W, Math.round(maxW)),
+  )
+}
+
 /** Spostamento: aggancio ai bordi di altri pannelli flottanti. */
 export const SNAP_PEER_DRAG_PX = 10
 

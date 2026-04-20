@@ -29,9 +29,17 @@ import {
   type OutputIdleCapPersist,
 } from '../lib/outputIdleCapStorage.ts'
 import {
+  readOutputProgramLogoVisibleFromLs,
+  writeOutputProgramLogoVisibleToLs,
+} from '../lib/outputProgramLogoStorage.ts'
+import {
   readRegiaSafeMode,
   writeRegiaSafeMode,
 } from '../lib/regiaSafeModeSettings.ts'
+import {
+  readOnAirOnAtStartup,
+  writeOnAirOnAtStartup,
+} from '../lib/onAirStartupSettings.ts'
 import { useRegia } from '../state/RegiaContext.tsx'
 import SettingsCueSinkSection from './SettingsCueSinkSection.tsx'
 
@@ -100,6 +108,9 @@ export default function SettingsModal({
     text: string
   } | null>(null)
   const [safeModeEnabled, setSafeModeEnabled] = useState(false)
+  const [onAirOnAtStartup, setOnAirOnAtStartup] = useState(false)
+  const [outputProgramLogoVisible, setOutputProgramLogoVisible] =
+    useState(true)
 
   useEffect(() => {
     if (!open) return
@@ -120,6 +131,7 @@ export default function SettingsModal({
   useEffect(() => {
     if (!open) return
     setSnapEnabled(readPlanciaSnapEnabled())
+    setOnAirOnAtStartup(readOnAirOnAtStartup())
     setLaunchPadDefaultKeyMode(readLaunchPadDefaultKeyMode())
     setLaunchPadCueEnabled(readLaunchPadCueEnabled())
     void (async () => {
@@ -135,6 +147,19 @@ export default function SettingsModal({
         /* ignore */
       }
       setIdleCapDraft(readOutputIdleCapFromLs())
+    })()
+    void (async () => {
+      try {
+        const r = await window.electronAPI?.getOutputProgramLogoVisible?.()
+        if (r && typeof r.visible === 'boolean') {
+          setOutputProgramLogoVisible(r.visible)
+          writeOutputProgramLogoVisibleToLs(r.visible)
+          return
+        }
+      } catch {
+        /* ignore */
+      }
+      setOutputProgramLogoVisible(readOutputProgramLogoVisibleFromLs())
     })()
   }, [open])
 
@@ -190,6 +215,12 @@ export default function SettingsModal({
     const v = e.target.checked
     writePlanciaSnapEnabled(v)
     setSnapEnabled(v)
+  }, [])
+
+  const onOnAirStartupChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.checked
+    writeOnAirOnAtStartup(v)
+    setOnAirOnAtStartup(v)
   }, [])
 
   const onLaunchPadDefaultKeyModeChange = useCallback(
@@ -308,6 +339,16 @@ export default function SettingsModal({
   const onIdleCapClearImage = useCallback(() => {
     applyIdleCap({ mode: 'black', imagePath: null })
   }, [applyIdleCap])
+
+  const onOutputProgramLogoVisibleChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const v = e.target.checked
+      setOutputProgramLogoVisible(v)
+      writeOutputProgramLogoVisibleToLs(v)
+      void window.electronAPI?.setOutputProgramLogoVisible?.(v).catch(() => {})
+    },
+    [],
+  )
 
   const onPickResolution = useCallback(
     async (width: number, height: number) => {
@@ -516,6 +557,28 @@ export default function SettingsModal({
                     )
                   })}
                 </ul>
+              </div>
+
+              <div className="settings-panel-block">
+                <h4
+                  id="settings-output-logo-label"
+                  className="settings-subsection-title"
+                >
+                  Logo su Schermo 2
+                </h4>
+                <p className="settings-modal-hint">
+                  Il marchio in alto a sinistra sulla finestra di uscita programma (nessuna
+                  anteprima «prossimo» in quella finestra).
+                </p>
+                <label className="settings-modal-checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={outputProgramLogoVisible}
+                    onChange={onOutputProgramLogoVisibleChange}
+                    aria-labelledby="settings-output-logo-label"
+                  />
+                  <span>Mostra il logo</span>
+                </label>
               </div>
 
               <div className="settings-panel-block">
@@ -768,6 +831,29 @@ export default function SettingsModal({
                 <label className="settings-modal-checkbox-row">
                   <input type="checkbox" checked={snapEnabled} onChange={onSnapChange} />
                   <span>SNAP attivo</span>
+                </label>
+              </div>
+
+              <div className="settings-panel-block">
+                <h4
+                  id="settings-on-air-startup-label"
+                  className="settings-subsection-title"
+                >
+                  ON AIR all’avvio
+                </h4>
+                <p className="settings-modal-hint">
+                  All’apertura dell’app la finestra di uscita sul secondo schermo parte
+                  visibile (ON) o nascosta (OFF), indipendentemente dall’ultimo stato
+                  salvato nel workspace.
+                </p>
+                <label className="settings-modal-checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={onAirOnAtStartup}
+                    onChange={onOnAirStartupChange}
+                    aria-labelledby="settings-on-air-startup-label"
+                  />
+                  <span>ON AIR on all’avvio</span>
                 </label>
               </div>
 

@@ -68,6 +68,11 @@ export type ClampPanelOptions = {
   maxW?: number
   /** Altezza massima del pannello (oltre al limite del viewport). */
   maxH?: number
+  /**
+   * Area non usabile sul bordo destro (es. colonna pannelli agganciati alla plancia),
+   * in pixel.
+   */
+  rightInset?: number
 }
 
 export function clampPanelInViewport(
@@ -80,6 +85,12 @@ export function clampPanelInViewport(
   const vw = window.innerWidth
   const vh = window.innerHeight
   const margin = 6
+  const rightInset =
+    typeof opts?.rightInset === 'number' &&
+    Number.isFinite(opts.rightInset) &&
+    opts.rightInset > 0
+      ? opts.rightInset
+      : 0
   const capW =
     typeof opts?.maxW === 'number' && Number.isFinite(opts.maxW) && opts.maxW > minW
       ? opts.maxW
@@ -90,7 +101,7 @@ export function clampPanelInViewport(
       : Number.POSITIVE_INFINITY
   let w = Math.min(
     Math.max(minW, size.width),
-    Math.max(minW, vw - margin * 2),
+    Math.max(minW, vw - margin * 2 - rightInset),
     capW,
   )
   let h = Math.min(
@@ -100,9 +111,9 @@ export function clampPanelInViewport(
   )
   let x = pos.x
   let y = pos.y
-  x = Math.min(Math.max(margin, x), vw - w - margin)
+  x = Math.min(Math.max(margin, x), vw - w - margin - rightInset)
   y = Math.min(Math.max(margin, y), vh - h - margin)
-  w = Math.min(w, vw - x - margin)
+  w = Math.min(w, vw - x - margin - rightInset)
   h = Math.min(h, vh - y - margin)
   return { pos: { x, y }, size: { width: w, height: h } }
 }
@@ -147,10 +158,17 @@ export function clampPosToViewport(
   y: number,
   panelWidth: number,
   panelHeight: number,
+  opts?: { rightInset?: number },
 ): PanelPos {
   const vw = window.innerWidth
   const vh = window.innerHeight
-  const maxX = Math.max(0, vw - panelWidth)
+  const rightInset =
+    typeof opts?.rightInset === 'number' &&
+    Number.isFinite(opts.rightInset) &&
+    opts.rightInset > 0
+      ? opts.rightInset
+      : 0
+  const maxX = Math.max(0, vw - panelWidth - rightInset)
   const maxY = Math.max(0, vh - panelHeight)
   return {
     x: Math.min(Math.max(0, x), maxX),

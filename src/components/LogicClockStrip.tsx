@@ -476,7 +476,7 @@ export default function LogicClockStrip() {
   return (
     <>
       <div
-        className="logic-transport-well logic-preview-screen-well"
+        className="logic-transport-well"
         data-no-drag
         role="group"
         aria-label="Orologio"

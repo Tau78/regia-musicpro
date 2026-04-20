@@ -25,6 +25,8 @@ import {
 } from '../lib/floatingPanelGeometry.ts'
 import {
   buildPeerDimensionTargets,
+  PLANCIA_DOCK_SCREEN_RIGHT_PX,
+  PLANCIA_UNDOCK_DRAG_LEFT_PX,
   queryPlanciaContentRect,
   snapFloatingPanelDragPos,
   snapFloatingPanelResize,
@@ -54,6 +56,9 @@ import {
 import {
   getLaunchpadSampleProgress,
   isLaunchpadSamplePausedWithSrc,
+  launchpadAnyVoiceInSession,
+  launchpadSlotHasAnyVoice,
+  launchpadSlotHasPlayingVoice,
 } from '../lib/launchpadSamplePlayer.ts'
 import {
   normalizePlaylistThemeColor,
@@ -78,9 +83,14 @@ import {
   launchPadCellShownLabel,
   normalizeChalkboardBackgroundHex,
   normalizeChalkboardOutputMode,
+  type ChalkboardPlacedImage,
   type LaunchPadCell,
   type FloatingPlaylistPanelSize,
 } from '../state/floatingPlaylistSession.ts'
+
+/** Evita `?? []` inline: nuovo array a ogni render → useEffect Chalkboard in loop. */
+const FALLBACK_CHALKBOARD_BANK_PATHS: string[] = []
+const FALLBACK_CHALKBOARD_PLACEMENTS: ChalkboardPlacedImage[] = []
 
 const LAUNCHPAD_CATEGORY_SWATCHES = [
   '#e63946',
@@ -615,6 +625,7 @@ type LayoutLs = {
   height?: number
   playlistOutputMuted?: boolean
   playlistOutputVolume?: number
+  planciaDock?: 'none' | 'right'
 }
 
 const MIN_PANEL_W = 220
@@ -630,6 +641,7 @@ function loadLayoutFromLs(sessionId: string): Partial<{
   panelSize: FloatingPlaylistPanelSize
   playlistOutputMuted: boolean
   playlistOutputVolume: number
+  planciaDock: 'none' | 'right'
 }> | null {
   try {
     const raw = localStorage.getItem(lsLayoutKey(sessionId))
@@ -641,6 +653,7 @@ function loadLayoutFromLs(sessionId: string): Partial<{
       panelSize: FloatingPlaylistPanelSize
       playlistOutputMuted: boolean
       playlistOutputVolume: number
+      planciaDock: 'none' | 'right'
     }> = {
       pos: { x: p.x, y: p.y },
     }
@@ -664,6 +677,9 @@ function loadLayoutFromLs(sessionId: string): Partial<{
         Math.max(0, p.playlistOutputVolume),
       )
     }
+    if (p.planciaDock === 'right' || p.planciaDock === 'none') {
+      out.planciaDock = p.planciaDock
+    }
     return out
   } catch {
     /* ignore */
@@ -675,7 +691,7 @@ function persistLayoutToLs(
   sessionId: string,
   pos: PanelPos,
   panelSize: FloatingPlaylistPanelSize,
-  output: { muted: boolean; volume: number },
+  output: { muted: boolean; volume: number; planciaDock?: 'none' | 'right' },
 ): void {
   try {
     localStorage.setItem(
@@ -687,6 +703,9 @@ function persistLayoutToLs(
         height: panelSize.height,
         playlistOutputMuted: output.muted,
         playlistOutputVolume: output.volume,
+        ...(output.planciaDock === 'right' || output.planciaDock === 'none'
+          ? { planciaDock: output.planciaDock }
+          : {}),
       }),
     )
   } catch {
@@ -862,7 +881,7 @@ export default function FloatingPlaylist({
     applyFloatingInternalDrop,
     applyLaunchPadDropFromPaths,
     loadLaunchPadSlotAndPlay,
-    stopLaunchPadCueRelease,
+    releaseLaunchPadCueVoice,
     updateLaunchPadCell,
     setLaunchPadBankIndex,
     updateFloatingPlaylistChrome,
@@ -880,14 +899,22 @@ export default function FloatingPlaylist({
     armPlayNext,
     clearPlaybackArmedNext,
     patchFloatingPlaylistSession,
+    rightPlanciaDockWidthPx,
+    dockFloatingPlaylistToPlanciaRight,
   } = useRegia()
 
   const launchPadCueEnabled = useLaunchPadCueEnabled()
+
+  const panelClampWithDock = useMemo(
+    () => ({ ...PANEL_CLAMP_OPTS, rightInset: rightPlanciaDockWidthPx }),
+    [rightPlanciaDockWidthPx],
+  )
 
   const dragSnapPeerRects = useMemo((): PeerSnapRect[] => {
     const out: PeerSnapRect[] = []
     for (const s of floatingPlaylistSessions) {
       if (s.id === sessionId) continue
+      if (s.planciaDock === 'right') continue
       const h = s.collapsed ? COLLAPSED_FLOAT_PANEL_H_PX : s.panelSize.height
       out.push({
         left: s.pos.x,
@@ -929,13 +956,15 @@ export default function FloatingPlaylist({
       : 1
   const collapsed = session?.collapsed ?? false
   const windowAlwaysOnTopPinned = session?.windowAlwaysOnTopPinned === true
+  const planciaDockRight = session?.planciaDock === 'right'
   const isPlaylistOsFloaterWindow =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('playlistOsFloater') === '1'
   const snapEnabled =
     usePlanciaSnapEnabled() &&
     !isPlaylistOsFloaterWindow &&
-    (!windowAlwaysOnTopPinned || isPlaylistOsFloaterWindow)
+    (!windowAlwaysOnTopPinned || isPlaylistOsFloaterWindow) &&
+    !planciaDockRight
   const launchPadBankIndex = session?.launchPadBankIndex ?? 0
   const pos = session?.pos ?? { x: 24, y: 96 }
   const panelSize =
@@ -966,15 +995,21 @@ export default function FloatingPlaylist({
   } | null>(null)
   /** Slot index in modalità “impara tasto”, o `null`. */
   const [padKeyLearnSlot, setPadKeyLearnSlot] = useState<number | null>(null)
-  const launchPadSampleGestureRef = useRef<{
-    slotIndex: number
-    pointerId: number
-    startX: number
-    startY: number
-    cueActive: boolean
-    cancelled: boolean
-    timer: ReturnType<typeof setTimeout> | null
-  } | null>(null)
+  const launchPadSampleGesturesRef = useRef(
+    new Map<
+      number,
+      {
+        slotIndex: number
+        pointerId: number
+        startX: number
+        startY: number
+        cueActive: boolean
+        cancelled: boolean
+        timer: ReturnType<typeof setTimeout> | null
+        cueVoiceId: number | null
+      }
+    >(),
+  )
   const suppressLaunchPadClickSlotRef = useRef<number | null>(null)
   const suppressLaunchPadClickClearTimeoutRef = useRef<
     ReturnType<typeof setTimeout> | null
@@ -1016,15 +1051,7 @@ export default function FloatingPlaylist({
   const [padProgressTick, setPadProgressTick] = useState(0)
 
   useEffect(() => {
-    if (!isLaunchpad || !launchpadAudioPlaying) {
-      if (padProgressRafRef.current != null) {
-        cancelAnimationFrame(padProgressRafRef.current)
-        padProgressRafRef.current = null
-      }
-      return
-    }
-    const tok = playbackLoadedTrack
-    if (tok?.sessionId !== sessionId) {
+    if (!isLaunchpad || !launchpadAnyVoiceInSession(sessionId)) {
       if (padProgressRafRef.current != null) {
         cancelAnimationFrame(padProgressRafRef.current)
         padProgressRafRef.current = null
@@ -1046,12 +1073,7 @@ export default function FloatingPlaylist({
         padProgressRafRef.current = null
       }
     }
-  }, [
-    isLaunchpad,
-    launchpadAudioPlaying,
-    playbackLoadedTrack,
-    sessionId,
-  ])
+  }, [isLaunchpad, sessionId])
 
   useEffect(() => {
     setPanelHelpOpen(false)
@@ -1153,12 +1175,15 @@ export default function FloatingPlaylist({
     const hasVol =
       typeof fromLs.playlistOutputVolume === 'number' &&
       Number.isFinite(fromLs.playlistOutputVolume)
-    if (!hasPos && !hasSize && !hasMute && !hasVol) return
+    const hasDock =
+      fromLs.planciaDock === 'right' || fromLs.planciaDock === 'none'
+    if (!hasPos && !hasSize && !hasMute && !hasVol && !hasDock) return
     const patch: {
       pos?: PanelPos
       panelSize?: FloatingPlaylistPanelSize
       playlistOutputMuted?: boolean
       playlistOutputVolume?: number
+      planciaDock?: 'none' | 'right'
     } = {}
     if (fromLs.pos) patch.pos = fromLs.pos
     if (fromLs.panelSize) patch.panelSize = fromLs.panelSize
@@ -1169,6 +1194,7 @@ export default function FloatingPlaylist({
         Math.max(0, fromLs.playlistOutputVolume!),
       )
     }
+    if (hasDock) patch.planciaDock = fromLs.planciaDock
     updateFloatingPlaylistChrome(sessionId, patch)
   }, [sessionId, updateFloatingPlaylistChrome])
 
@@ -1225,7 +1251,7 @@ export default function FloatingPlaylist({
   ])
 
   const reclampIntoView = useCallback(() => {
-    if (isPlaylistOsFloaterWindow) return
+    if (isPlaylistOsFloaterWindow || planciaDockRight) return
     const el = panelRef.current
     const vw = window.innerWidth
     const vh = window.innerHeight
@@ -1251,7 +1277,7 @@ export default function FloatingPlaylist({
       panelSize,
       MIN_PANEL_W,
       MIN_PANEL_H,
-      PANEL_CLAMP_OPTS,
+      panelClampWithDock,
     )
     if (
       np.x !== pos.x ||
@@ -1263,7 +1289,9 @@ export default function FloatingPlaylist({
   }, [
     collapsed,
     isPlaylistOsFloaterWindow,
+    panelClampWithDock,
     panelSize,
+    planciaDockRight,
     pos,
     sessionId,
     updateFloatingPlaylistChrome,
@@ -1277,6 +1305,7 @@ export default function FloatingPlaylist({
     isPlaylistOsFloaterWindow,
     paths.length,
     panelSize,
+    planciaDockRight,
     reclampIntoView,
   ])
 
@@ -1302,7 +1331,7 @@ export default function FloatingPlaylist({
         dy,
         MIN_PANEL_W,
         MIN_PANEL_H,
-        PANEL_CLAMP_OPTS,
+        panelClampWithDock,
       )
       if (!snapEnabled) return raw
       const previewDims = previewDetached
@@ -1337,10 +1366,16 @@ export default function FloatingPlaylist({
         sn.size,
         MIN_PANEL_W,
         MIN_PANEL_H,
-        PANEL_CLAMP_OPTS,
+        panelClampWithDock,
       )
     },
-    [floatingPlaylistSessions, previewDetached, sessionId, snapEnabled],
+    [
+      floatingPlaylistSessions,
+      panelClampWithDock,
+      previewDetached,
+      sessionId,
+      snapEnabled,
+    ],
   )
 
   const onPanelChromePointerDownCapture = useCallback(
@@ -1365,6 +1400,7 @@ export default function FloatingPlaylist({
         collapsed,
       )
       if (resizeEdge) {
+        if (planciaDockRight) return
         e.preventDefault()
         setActiveFloatingSession(sessionId)
         resizeStateRef.current = {
@@ -1418,6 +1454,7 @@ export default function FloatingPlaylist({
       isPlaylistOsFloaterWindow,
       panelSize.height,
       panelSize.width,
+      planciaDockRight,
       pos.x,
       pos.y,
       sessionId,
@@ -1493,12 +1530,45 @@ export default function FloatingPlaylist({
         })
         return
       }
+      let undockedThisMove = false
+      if (planciaDockRight) {
+        const plUnd = queryPlanciaContentRect()
+        if (
+          !plUnd ||
+          e.clientX >= plUnd.right - PLANCIA_UNDOCK_DRAG_LEFT_PX
+        ) {
+          return
+        }
+        const elUnd = panelRef.current
+        if (elUnd) {
+          const r = elUnd.getBoundingClientRect()
+          patchFloatingPlaylistSession(sessionId, {
+            planciaDock: 'none',
+            pos: { x: r.left, y: r.top },
+          })
+          drag.current = {
+            active: true,
+            dx: r.left,
+            dy: r.top,
+            startX: e.clientX,
+            startY: e.clientY,
+          }
+          undockedThisMove = true
+        } else {
+          return
+        }
+      }
+      const dWork = drag.current
+      if (!dWork?.active) return
       const el = panelRef.current
       if (!el) return
-      const nx = d.dx + (e.clientX - d.startX)
-      const ny = d.dy + (e.clientY - d.startY)
+      if (planciaDockRight && !undockedThisMove) return
+      const nx = dWork.dx + (e.clientX - dWork.startX)
+      const ny = dWork.dy + (e.clientY - dWork.startY)
       const plancia = snapEnabled ? queryPlanciaContentRect() : null
-      let c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
+      let c = clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight, {
+        rightInset: rightPlanciaDockWidthPx,
+      })
       if (snapEnabled && plancia) {
         const snapped = snapFloatingPanelDragPos(
           c,
@@ -1511,6 +1581,7 @@ export default function FloatingPlaylist({
           snapped.y,
           el.offsetWidth,
           el.offsetHeight,
+          { rightInset: rightPlanciaDockWidthPx },
         )
       }
       updateFloatingPlaylistChrome(sessionId, { pos: c })
@@ -1521,7 +1592,10 @@ export default function FloatingPlaylist({
       dragSnapPeerRects,
       isChalkboard,
       isPlaylistOsFloaterWindow,
+      patchFloatingPlaylistSession,
+      planciaDockRight,
       resizePlaylistWithSnap,
+      rightPlanciaDockWidthPx,
       sessionId,
       snapEnabled,
       updateFloatingPlaylistChrome,
@@ -1561,6 +1635,7 @@ export default function FloatingPlaylist({
         persistLayoutToLs(sessionId, np, ns, {
           muted: playlistOutputMuted,
           volume: playlistOutputVolume,
+          ...(planciaDockRight ? { planciaDock: 'right' as const } : {}),
         })
         resizeStateRef.current = null
         setIsResizing(false)
@@ -1576,6 +1651,19 @@ export default function FloatingPlaylist({
       if (!d?.active) return
       d.active = false
       if (panelRef.current) panelRef.current.style.cursor = ''
+      if (planciaDockRight) {
+        persistLayoutToLs(sessionId, pos, panelSize, {
+          muted: playlistOutputMuted,
+          volume: playlistOutputVolume,
+          planciaDock: 'right',
+        })
+        try {
+          panelRef.current?.releasePointerCapture(e.pointerId)
+        } catch {
+          /* ignore */
+        }
+        return
+      }
       if (d.floater) {
         const f = d.floater
         const nx = Math.round(
@@ -1608,7 +1696,9 @@ export default function FloatingPlaylist({
       const ny = d.dy + (e.clientY - d.startY)
       const plancia = snapEnabled ? queryPlanciaContentRect() : null
       let next = el
-        ? clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight)
+        ? clampPosToViewport(nx, ny, el.offsetWidth, el.offsetHeight, {
+            rightInset: rightPlanciaDockWidthPx,
+          })
         : { x: nx, y: ny }
       if (el && snapEnabled && plancia) {
         const snapped = snapFloatingPanelDragPos(
@@ -1622,12 +1712,44 @@ export default function FloatingPlaylist({
           snapped.y,
           el.offsetWidth,
           el.offsetHeight,
+          { rightInset: rightPlanciaDockWidthPx },
         )
+      }
+      if (
+        snapEnabled &&
+        el &&
+        session?.planciaDock !== 'right'
+      ) {
+        const panelW = el.offsetWidth
+        const panelH = el.offsetHeight
+        const nearScreenRight =
+          window.innerWidth - (next.x + panelW) <=
+          PLANCIA_DOCK_SCREEN_RIGHT_PX
+        const overlapsPlanciaVert =
+          plancia &&
+          next.y + panelH >= plancia.top &&
+          next.y <= plancia.bottom
+        if (nearScreenRight && overlapsPlanciaVert) {
+          updateFloatingPlaylistChrome(sessionId, { pos: next })
+          dockFloatingPlaylistToPlanciaRight(sessionId)
+          persistLayoutToLs(sessionId, next, panelSize, {
+            muted: playlistOutputMuted,
+            volume: playlistOutputVolume,
+            planciaDock: 'right',
+          })
+          try {
+            panelRef.current?.releasePointerCapture(e.pointerId)
+          } catch {
+            /* ignore */
+          }
+          return
+        }
       }
       updateFloatingPlaylistChrome(sessionId, { pos: next })
       persistLayoutToLs(sessionId, next, panelSize, {
         muted: playlistOutputMuted,
         volume: playlistOutputVolume,
+        planciaDock: 'none',
       })
       try {
         panelRef.current?.releasePointerCapture(e.pointerId)
@@ -1636,12 +1758,17 @@ export default function FloatingPlaylist({
       }
     },
     [
+      dockFloatingPlaylistToPlanciaRight,
       dragSnapPeerRects,
       isPlaylistOsFloaterWindow,
       panelSize,
+      planciaDockRight,
       playlistOutputMuted,
       playlistOutputVolume,
+      pos,
       resizePlaylistWithSnap,
+      rightPlanciaDockWidthPx,
+      session,
       sessionId,
       snapEnabled,
       updateFloatingPlaylistChrome,
@@ -1660,12 +1787,16 @@ export default function FloatingPlaylist({
       persistLayoutToLs(sessionId, pos, panelSize, {
         muted: playlistOutputMuted,
         volume: c,
+        ...(session?.planciaDock === 'right'
+          ? { planciaDock: 'right' as const }
+          : {}),
       })
     },
     [
       panelSize,
       playlistOutputMuted,
       pos,
+      session,
       sessionId,
       setPlaylistOutputVolume,
     ],
@@ -1677,12 +1808,16 @@ export default function FloatingPlaylist({
     persistLayoutToLs(sessionId, pos, panelSize, {
       muted: next,
       volume: playlistOutputVolume,
+      ...(session?.planciaDock === 'right'
+        ? { planciaDock: 'right' as const }
+        : {}),
     })
   }, [
     panelSize,
     playlistOutputMuted,
     playlistOutputVolume,
     pos,
+    session,
     sessionId,
     setPlaylistOutputMuted,
   ])
@@ -1946,18 +2081,20 @@ export default function FloatingPlaylist({
       if (e.shiftKey || e.altKey) return
       const cell = launchPadCells?.[slotIndex]
       if (!cell?.samplePath) return
-      if (launchPadSampleGestureRef.current) return
+
+      const pointerId = e.pointerId
+      if (launchPadSampleGesturesRef.current.has(pointerId)) return
 
       setActiveFloatingSession(sessionId)
 
       const el = e.currentTarget
       try {
-        el.setPointerCapture(e.pointerId)
+        el.setPointerCapture(pointerId)
       } catch {
         /* setPointerCapture non disponibile */
       }
 
-      const pointerId = e.pointerId
+      const bi = launchPadBankIndex
       const gesture = {
         slotIndex,
         pointerId,
@@ -1966,11 +2103,12 @@ export default function FloatingPlaylist({
         cueActive: false,
         cancelled: false,
         timer: null as ReturnType<typeof setTimeout> | null,
+        cueVoiceId: null as number | null,
       }
-      launchPadSampleGestureRef.current = gesture
+      launchPadSampleGesturesRef.current.set(pointerId, gesture)
 
       const clearTimer = () => {
-        const g = launchPadSampleGestureRef.current
+        const g = launchPadSampleGesturesRef.current.get(pointerId)
         if (g?.timer != null) {
           clearTimeout(g.timer)
           g.timer = null
@@ -1979,7 +2117,7 @@ export default function FloatingPlaylist({
 
       const onMove = (ev: globalThis.PointerEvent) => {
         if (ev.pointerId !== pointerId) return
-        const g = launchPadSampleGestureRef.current
+        const g = launchPadSampleGesturesRef.current.get(pointerId)
         if (!g || g.slotIndex !== slotIndex || g.cueActive) return
         const dx = ev.clientX - g.startX
         const dy = ev.clientY - g.startY
@@ -1994,7 +2132,7 @@ export default function FloatingPlaylist({
 
       const onUpOrCancel = (ev: globalThis.PointerEvent) => {
         if (ev.pointerId !== pointerId) return
-        const g = launchPadSampleGestureRef.current
+        const g = launchPadSampleGesturesRef.current.get(pointerId)
         if (!g || g.slotIndex !== slotIndex) return
         if (ev.type === 'pointercancel') {
           g.cancelled = true
@@ -2006,7 +2144,12 @@ export default function FloatingPlaylist({
           return
         }
         if (g.cueActive) {
-          stopLaunchPadCueRelease()
+          releaseLaunchPadCueVoice(
+            g.cueVoiceId,
+            sessionId,
+            bi,
+            slotIndex,
+          )
         } else {
           setPadFlashSlot(slotIndex)
           window.setTimeout(() => {
@@ -2026,14 +2169,12 @@ export default function FloatingPlaylist({
         } catch {
           /* */
         }
-        if (launchPadSampleGestureRef.current?.slotIndex === slotIndex) {
-          launchPadSampleGestureRef.current = null
-        }
+        launchPadSampleGesturesRef.current.delete(pointerId)
       }
 
       if (launchPadCueEnabled) {
         gesture.timer = setTimeout(() => {
-          const g = launchPadSampleGestureRef.current
+          const g = launchPadSampleGesturesRef.current.get(pointerId)
           if (!g || g.slotIndex !== slotIndex || g.cancelled) return
           g.cueActive = true
           g.timer = null
@@ -2041,7 +2182,11 @@ export default function FloatingPlaylist({
           window.setTimeout(() => {
             setPadFlashSlot((cur) => (cur === slotIndex ? null : cur))
           }, 200)
-          void loadLaunchPadSlotAndPlay(sessionId, slotIndex)
+          void loadLaunchPadSlotAndPlay(sessionId, slotIndex).then((vid) => {
+            const live = launchPadSampleGesturesRef.current.get(pointerId)
+            if (!live || live.slotIndex !== slotIndex) return
+            if (typeof vid === 'number') live.cueVoiceId = vid
+          })
         }, LAUNCHPAD_CUE_HOLD_MS)
       }
 
@@ -2051,10 +2196,11 @@ export default function FloatingPlaylist({
     },
     [
       sessionId,
+      launchPadBankIndex,
       launchPadCells,
       setActiveFloatingSession,
       loadLaunchPadSlotAndPlay,
-      stopLaunchPadCueRelease,
+      releaseLaunchPadCueVoice,
       armSuppressNextLaunchPadClick,
       launchPadCueEnabled,
     ],
@@ -2507,7 +2653,7 @@ export default function FloatingPlaylist({
     <Fragment>
     <div
       ref={panelRef}
-      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${isChalkboard ? 'is-chalkboard' : ''} ${chalkboardFullscreen ? 'is-chalkboard-fullscreen' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}`}
+      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${isChalkboard ? 'is-chalkboard' : ''} ${chalkboardFullscreen ? 'is-chalkboard-fullscreen' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}${planciaDockRight ? ' floating-playlist--plancia-dock-right' : ''}`}
       style={{
         ...(chalkboardFullscreen
           ? {
@@ -2519,13 +2665,18 @@ export default function FloatingPlaylist({
               maxHeight: collapsed ? undefined : '100vh',
               zIndex: 20000,
             }
-          : {
-              left: pos.x,
-              top: pos.y,
-              zIndex,
-              width: panelSize.width,
-              height: collapsed ? undefined : panelSize.height,
-            }),
+          : planciaDockRight
+            ? {
+                width: '100%',
+                zIndex: 1,
+              }
+            : {
+                left: pos.x,
+                top: pos.y,
+                zIndex,
+                width: panelSize.width,
+                height: collapsed ? undefined : panelSize.height,
+              }),
         ...(themeHex ? { ['--playlist-theme' as string]: themeHex } : {}),
       }}
       onKeyDownCapture={onPanelKeyDownCapture}
@@ -2708,9 +2859,11 @@ export default function FloatingPlaylist({
                         ? ' · tenere premuto il tasto = CUE (senza modificatori)'
                         : ''}{' '}
                       · puntina tra «?» e Riduci: apre questo pannello in una{' '}
-                      <strong>finestra separata</strong> sul desktop (anche fuori
-                      dalla finestra Regia). Chiudendo quella finestra il pannello
-                      torna nella Regia (non evita il Dock se riduci tutta l’app).
+                      <strong>finestra Electron separata</strong> sul desktop (anche
+                      fuori dalla finestra Regia; resta visibile se riduci solo la
+                      regia). Chiudendo quella finestra il pannello torna nella Regia.
+                      Se nascondi <strong>tutta</strong> l’applicazione (es. «Nascondi»
+                      su macOS), il sistema nasconde anche quella finestra.
                     </>
                   ) : (
                     <div className="floating-playlist-panel-help-popover-stack">
@@ -2726,12 +2879,13 @@ export default function FloatingPlaylist({
                       </p>
                       <p className="floating-playlist-panel-help-popover-p">
                         <strong>Puntina (finestra separata)</strong> — Con la puntina
-                        attiva questo pannello passa in una <strong>finestra propria</strong>{' '}
-                        sul desktop, che puoi spostare anche{' '}
-                        <strong>fuori dalla finestra Regia</strong>. Chiudi la finestra
-                        del pannello per riportarlo dentro la Regia. Se mandi tutta
-                        l’app nel Dock / barra delle applicazioni, il sistema nasconde
-                        comunque le finestre.
+                        attiva questo pannello passa in una <strong>finestra Electron
+                        propria</strong> sul desktop: puoi spostarla anche{' '}
+                        <strong>fuori dalla finestra Regia</strong> e resta utilizzabile
+                        anche se <strong>riduci a icona solo la regia principale</strong>.
+                        Chiudi la finestra del pannello per riportarlo dentro la Regia.
+                        Se nascondi <strong>tutta</strong> l’app (Dock / «Nascondi» su
+                        macOS), il sistema nasconde tutte le sue finestre.
                       </p>
                       <p className="floating-playlist-panel-help-popover-p">
                         <strong>Cartella e Aggiungi</strong> — Cartella apre una
@@ -2799,8 +2953,8 @@ export default function FloatingPlaylist({
               }}
               title={
                 windowAlwaysOnTopPinned
-                  ? 'Puntina attiva: pannello in finestra separata sul desktop (trascina l’intestazione per spostarla). Clic per riportarlo nella Regia.'
-                  : 'Puntina: apre questo pannello in una finestra separata sul desktop, spostabile anche fuori dalla Regia. Clic per attivare.'
+                  ? 'Puntina attiva: pannello in una finestra Electron separata (resta visibile anche se riduci la finestra principale Regia). Trascina l’intestazione per spostarla. Clic per chiudere la finestra e riportare il pannello nella regia.'
+                  : 'Puntina: apre questo pannello in una finestra Electron separata sul desktop (resta visibile anche con la regia ridotta a icona). Spostabile fuori dalla regia. Clic per attivare.'
               }
               aria-label={
                 windowAlwaysOnTopPinned
@@ -3263,22 +3417,39 @@ export default function FloatingPlaylist({
               const fileBasename = cell.samplePath
                 ? cell.samplePath.split(/[/\\]/).pop() ?? cell.samplePath
                 : ''
-              const isLoaded =
+              const isPrimarySlot =
                 playbackLoadedTrack != null &&
                 playbackLoadedTrack.sessionId === sessionId &&
                 (playbackLoadedTrack.launchPadBankIndex ?? 0) ===
                   launchPadBankIndex &&
                 playbackLoadedTrack.index === i
-              const padProg = isLoaded
-                ? getLaunchpadSampleProgress()
+              const slotHasVoice = launchpadSlotHasAnyVoice(
+                sessionId,
+                launchPadBankIndex,
+                i,
+              )
+              const slotIsPlaying = launchpadSlotHasPlayingVoice(
+                sessionId,
+                launchPadBankIndex,
+                i,
+              )
+              const padProg = slotHasVoice
+                ? getLaunchpadSampleProgress(
+                    sessionId,
+                    launchPadBankIndex,
+                    i,
+                  )
                 : { currentTime: 0, duration: 0 }
               const padFrac =
                 padProg.duration > 0
                   ? Math.min(1, padProg.currentTime / padProg.duration)
                   : 0
               const padRingActive =
-                isLoaded &&
-                (launchpadAudioPlaying || isLaunchpadSamplePausedWithSrc())
+                slotHasVoice &&
+                (slotIsPlaying || isLaunchpadSamplePausedWithSrc())
+              const showLoadedOutline = slotHasVoice || isPrimarySlot
+              const showPadPlayingAnim =
+                slotIsPlaying && launchpadAudioPlaying
               return (
                 <div
                   key={`${sessionId}-pad-${i}`}
@@ -3299,7 +3470,7 @@ export default function FloatingPlaylist({
                     draggable={Boolean(cell.samplePath)}
                     onDragStart={(ev) => onLaunchPadCellDragStart(i, ev)}
                     onDragEnd={() => setLaunchPadDragSourceSlot(null)}
-                    className={`launchpad-cell ${padFlashSlot === i ? 'is-lit' : ''} ${isLoaded && launchpadAudioPlaying ? 'is-pad-playing' : ''} ${isLoaded ? 'is-loaded' : ''} ${cell.samplePath ? 'has-sample' : 'is-empty'} ${launchPadDragSourceSlot === i ? 'is-dragging-source' : ''}`}
+                    className={`launchpad-cell ${padFlashSlot === i ? 'is-lit' : ''} ${showPadPlayingAnim ? 'is-pad-playing' : ''} ${showLoadedOutline ? 'is-loaded' : ''} ${cell.samplePath ? 'has-sample' : 'is-empty'} ${launchPadDragSourceSlot === i ? 'is-dragging-source' : ''}`}
                     style={
                       {
                         ['--launchpad-pad' as string]: cell.padColor,
@@ -3583,12 +3754,14 @@ export default function FloatingPlaylist({
         ) : isChalkboard ? (
           <ChalkboardPanel
             sessionId={sessionId}
-            bankPaths={session.chalkboardBankPaths ?? []}
+            bankPaths={
+              session.chalkboardBankPaths ?? FALLBACK_CHALKBOARD_BANK_PATHS
+            }
             bankIndex={session.chalkboardBankIndex ?? 0}
             placements={
               session.chalkboardPlacementsByBank?.[
                 session.chalkboardBankIndex ?? 0
-              ] ?? []
+              ] ?? FALLBACK_CHALKBOARD_PLACEMENTS
             }
             onUpdateBankPlacements={(items) => {
               patchFloatingPlaylistSession(sessionId, (s) => {

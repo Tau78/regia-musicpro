@@ -10,6 +10,8 @@ declare global {
       launchpadSfxKitPaths: () => Promise<string[]>
       toFileUrl: (absPath: string) => Promise<string>
       selectFolder: () => Promise<string[] | null>
+      /** Dialog singolo file PNG per watermark playlist in uscita. */
+      selectPlaylistWatermarkPng: () => Promise<string | null>
       /** Dialog multi-file (stesse estensioni della cartella). */
       chalkboardEnsureBanks: (opts: {
         folderBaseName: string
@@ -62,6 +64,8 @@ declare global {
         >
         chalkboardMigrateDraftSessionId?: string | null
         totalDurationSec?: number
+        /** Path assoluto PNG watermark in uscita (opzionale). */
+        watermarkPngPath?: string | null
       }) => Promise<{ id: string }>
       playlistsPatchTotalDuration: (
         id: string,
@@ -97,6 +101,7 @@ declare global {
             h: number
           }>
         >
+        watermarkPngPath: string
       } | null>
       playlistsDelete: (id: string) => Promise<boolean>
       playlistsSetOrder: (orderedIds: string[]) => Promise<boolean>
@@ -123,6 +128,11 @@ declare global {
         color: string
         imagePath: string | null
       }>
+
+      getOutputProgramLogoVisible?: () => Promise<{ visible: boolean }>
+      setOutputProgramLogoVisible?: (
+        visible: boolean,
+      ) => Promise<{ ok: true }>
 
       reportOutputAudioLevel?: (level: number) => void
       onOutputAudioLevel?: (handler: (level: number) => void) => () => void

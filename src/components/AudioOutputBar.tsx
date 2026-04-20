@@ -119,6 +119,7 @@ export default function AudioOutputBar({ variant = 'stack' }: Props) {
         <span className="regia-volume-pct regia-audio-out-inline-pct" aria-hidden>
           {pct}%
         </span>
+        <span className="regia-audio-out-inline-divider" aria-hidden />
         <label className="regia-audio-out-label-inline" htmlFor="regia-output-sink">
           Out
         </label>

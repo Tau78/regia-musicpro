@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectFolder: (): Promise<string[] | null> =>
     ipcRenderer.invoke('dialog:selectFolder'),
 
+  selectPlaylistWatermarkPng: (): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:selectPlaylistWatermarkPng'),
+
   selectMediaFiles: (opts?: {
     context?: 'playlist' | 'launchpad'
   }): Promise<string[] | null> =>
@@ -50,6 +53,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       totalDurationSec?: number
       themeColor?: string
       playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'
+      hasWatermark?: boolean
     }>
   > => ipcRenderer.invoke('playlists:list'),
 
@@ -87,6 +91,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     chalkboardBankPaths?: string[]
     chalkboardMigrateDraftSessionId?: string | null
     totalDurationSec?: number
+    watermarkPngPath?: string | null
   }): Promise<{ id: string }> => ipcRenderer.invoke('playlists:save', opts),
 
   playlistsPatchTotalDuration: (id: string, totalDurationSec: number) =>
@@ -111,6 +116,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       padKeyMode?: 'play' | 'toggle'
     }>
     chalkboardBankPaths: string[]
+    watermarkPngPath: string
   } | null> =>
     ipcRenderer.invoke('playlists:load', id),
 
@@ -156,6 +162,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     color: string
     imagePath: string | null
   }> => ipcRenderer.invoke('output:ensureIdleCap', fallbackFromRegiaLs),
+
+  getOutputProgramLogoVisible: (): Promise<{ visible: boolean }> =>
+    ipcRenderer.invoke('output:getProgramLogoVisible'),
+
+  setOutputProgramLogoVisible: (visible: boolean): Promise<{ ok: true }> =>
+    ipcRenderer.invoke('output:setProgramLogoVisible', visible),
 
   reportOutputAudioLevel: (level: number): void => {
     ipcRenderer.send('output:audio-level', level)

@@ -1,7 +1,8 @@
 import { useRegia } from '../state/RegiaContext.tsx'
+import type { PreviewDisplayMode } from '../lib/previewDetachedStorage.ts'
 
-/** Anteprima in finestra flottante (stacca). */
-function IconPreviewDetach() {
+/** Anteprima agganciata nell’area principale (ciclo: full). */
+function IconEyePreview() {
   return (
     <svg
       width="18"
@@ -14,14 +15,14 @@ function IconPreviewDetach() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <rect x="3" y="6" width="12" height="11" rx="1.5" />
-      <path d="M14 5h6v6M14 5l7 7" />
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   )
 }
 
-/** Riporta l’anteprima nel layout principale. */
-function IconPreviewDockBack() {
+/** Anteprima in finestra separata (ciclo: float). */
+function IconEyePreviewFloating() {
   return (
     <svg
       width="18"
@@ -34,14 +35,14 @@ function IconPreviewDockBack() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <rect x="6" y="7" width="13" height="11" rx="1.5" />
-      <path d="M10 4v4h4M10 4l3.5 3.5" />
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+      <line x1="1" y1="1" x2="23" y2="23" />
     </svg>
   )
 }
 
-/** Secondo schermo: uscita video attiva (due monitor). */
-function IconScreen2On() {
+/** Anteprima nascosta nel layout (ciclo: off). */
+function IconEyePreviewOff() {
   return (
     <svg
       width="18"
@@ -54,72 +55,74 @@ function IconScreen2On() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <rect x="2" y="5" width="8" height="11" rx="1" />
-      <rect x="11" y="4" width="11" height="13" rx="1.5" />
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+      <path d="M1 1l22 22" />
     </svg>
   )
 }
 
-/** Secondo schermo: finestra nascosta (monitor spento / barrato). */
-function IconScreen2Off() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      aria-hidden
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="2" y="5" width="8" height="11" rx="1" />
-      <rect x="11" y="4" width="11" height="13" rx="1.5" />
-      <path d="M11 4.5l12 15" strokeWidth="2.2" />
-    </svg>
-  )
+const PREVIEW_MODE_UI: Record<
+  PreviewDisplayMode,
+  { title: string; aria: string; icon: 'docked' | 'floating' | 'hidden' }
+> = {
+  docked: {
+    title:
+      'Anteprima nel layout: clic per finestra flottante (poi nascosta, poi qui)',
+    aria: 'Anteprima nel layout principale; clic per passare a finestra flottante',
+    icon: 'docked',
+  },
+  floating: {
+    title:
+      'Anteprima in finestra flottante: clic per nasconderla nel layout, poi di nuovo qui',
+    aria: 'Anteprima in finestra flottante; clic per nascondere nel layout',
+    icon: 'floating',
+  },
+  hidden: {
+    title:
+      'Anteprima nascosta nel layout: clic per tornare all’anteprima nel layout',
+    aria: 'Anteprima nascosta; clic per mostrare di nuovo nel layout',
+    icon: 'hidden',
+  },
 }
 
-/** Anteprima (stacca / riaggancia) e Schermo 2 (on/off), solo icone. */
+/** Anteprima (ciclo full / float / off) e uscita secondo schermo come indicatore ON AIR (stile radio). */
 export default function LogicPreviewScreenStrip() {
   const {
-    previewDetached,
-    setPreviewFloating,
-    setPreviewDocked,
+    previewDisplayMode,
+    cyclePreviewDisplayMode,
     secondScreenOn,
     toggleSecondScreen,
   } = useRegia()
 
+  const ui = PREVIEW_MODE_UI[previewDisplayMode]
+  const btnClass = [
+    'logic-tbtn',
+    'logic-tbtn--icon',
+    previewDisplayMode === 'floating' ? 'is-preview-floating' : '',
+    previewDisplayMode === 'hidden' ? 'is-preview-hidden' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
-    <div
-      className="logic-transport-well logic-preview-screen-well"
-      role="group"
-      aria-label="Anteprima e uscita secondo schermo"
-    >
+    <>
       <button
         type="button"
-        className="logic-tbtn logic-tbtn--icon"
-        onClick={() =>
-          previewDetached ? setPreviewDocked() : setPreviewFloating()
-        }
-        title={
-          previewDetached
-            ? 'Riaggancia l’anteprima nell’area principale'
-            : 'Anteprima in finestra flottante (trascina dal titolo della finestra)'
-        }
-        aria-label={
-          previewDetached
-            ? 'Riaggancia anteprima nel layout principale'
-            : 'Stacca anteprima in finestra flottante'
-        }
-        aria-pressed={previewDetached}
+        className={btnClass}
+        onClick={() => cyclePreviewDisplayMode()}
+        title={ui.title}
+        aria-label={ui.aria}
+        aria-pressed={previewDisplayMode !== 'docked'}
       >
-        {previewDetached ? <IconPreviewDockBack /> : <IconPreviewDetach />}
+        {ui.icon === 'floating' ?
+          <IconEyePreviewFloating />
+        : ui.icon === 'hidden' ?
+          <IconEyePreviewOff />
+        : <IconEyePreview />}
       </button>
       <button
         type="button"
-        className={`logic-tbtn logic-tbtn--icon ${!secondScreenOn ? 'is-screen2-off' : ''}`}
+        className={`logic-on-air-btn ${secondScreenOn ? 'is-on-air-live' : 'is-on-air-off'}`}
         onClick={toggleSecondScreen}
         aria-pressed={secondScreenOn}
         title={
@@ -129,12 +132,15 @@ export default function LogicPreviewScreenStrip() {
         }
         aria-label={
           secondScreenOn
-            ? 'Nascondi finestra secondo schermo'
-            : 'Mostra finestra secondo schermo'
+            ? 'Secondo schermo acceso: nascondi finestra uscita'
+            : 'Secondo schermo spento: mostra finestra uscita'
         }
       >
-        {secondScreenOn ? <IconScreen2On /> : <IconScreen2Off />}
+        <span className="logic-on-air-stack">
+          <span className="logic-on-air-line logic-on-air-line--on">ON</span>
+          <span className="logic-on-air-line logic-on-air-line--air">AIR</span>
+        </span>
       </button>
-    </div>
+    </>
   )
 }

@@ -4,6 +4,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import AudioOutputBar from './AudioOutputBar.tsx'
@@ -12,9 +14,74 @@ import LogicPreviewScreenStrip from './LogicPreviewScreenStrip.tsx'
 import LogicSecondaryStrip from './LogicSecondaryStrip.tsx'
 import LogicTransportStrip from './LogicTransportStrip.tsx'
 import {
+  clampAudioBarWidth,
   persistAudioBarLayout,
   readAudioBarLayout,
+  type LogicBarCollapsibleSegId,
 } from '../lib/audioBarLayoutStorage.ts'
+
+const LOGIC_BAR_COLLAPSE_UI: Record<
+  LogicBarCollapsibleSegId,
+  { hideTitle: string; showTitle: string }
+> = {
+  preview: {
+    hideTitle: 'Nascondi anteprima schermo',
+    showTitle: 'Mostra anteprima schermo',
+  },
+  secondary: {
+    hideTitle: 'Nascondi strumenti secondari',
+    showTitle: 'Mostra strumenti secondari',
+  },
+  clock: {
+    hideTitle: 'Nascondi orologio',
+    showTitle: 'Mostra orologio',
+  },
+  audio: {
+    hideTitle: 'Nascondi uscita audio',
+    showTitle: 'Mostra uscita audio',
+  },
+}
+
+function LogicBarCollapsibleSeg({
+  segId,
+  collapsed,
+  onToggle,
+  className,
+  children,
+}: {
+  segId: LogicBarCollapsibleSegId
+  collapsed: boolean
+  onToggle: () => void
+  className?: string
+  children: ReactNode
+}) {
+  const ui = LOGIC_BAR_COLLAPSE_UI[segId]
+  const panelId = `regia-logic-bar-panel-${segId}`
+  const segClass = [
+    'regia-logic-bar-seg',
+    'regia-logic-bar-seg--split',
+    collapsed ? 'is-collapsed' : '',
+    className ?? '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+  return (
+    <div className={segClass}>
+      <button
+        type="button"
+        className={`logic-bar-divider-btn ${collapsed ? 'is-collapsed' : ''}`}
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        aria-controls={panelId}
+        title={collapsed ? ui.showTitle : ui.hideTitle}
+        aria-label={collapsed ? ui.showTitle : ui.hideTitle}
+      />
+      <div id={panelId} className="regia-logic-bar-seg-panel" hidden={collapsed}>
+        {children}
+      </div>
+    </div>
+  )
+}
 
 function clampWindowPos(x: number, y: number, w: number, h: number) {
   const maxX = Math.max(8, window.innerWidth - w - 8)
@@ -57,16 +124,43 @@ export default function DraggableAudioOutputBar() {
   const init = useMemo(() => readAudioBarLayout(), [])
   const [docked, setDocked] = useState(init.docked)
   const [pos, setPos] = useState(() => ({ x: init.x, y: init.y }))
+  const [barWidthPx, setBarWidthPx] = useState(() => init.widthPx)
+  const [collapsedLogicBarSegs, setCollapsedLogicBarSegs] = useState<
+    LogicBarCollapsibleSegId[]
+  >(() => init.collapsedLogicBarSegs)
+  const [barResizeActive, setBarResizeActive] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{
     pointerId: number
     originX: number
     originY: number
   } | null>(null)
+  const barResizeDragRef = useRef<{
+    pointerId: number
+    startX: number
+    startW: number
+  } | null>(null)
+
+  const collapsedSegSet = useMemo(
+    () => new Set(collapsedLogicBarSegs),
+    [collapsedLogicBarSegs],
+  )
+
+  const toggleLogicBarSeg = useCallback((id: LogicBarCollapsibleSegId) => {
+    setCollapsedLogicBarSegs((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
+  }, [])
 
   useEffect(() => {
-    persistAudioBarLayout({ docked, x: pos.x, y: pos.y })
-  }, [docked, pos.x, pos.y])
+    persistAudioBarLayout({
+      docked,
+      x: pos.x,
+      y: pos.y,
+      widthPx: barWidthPx,
+      collapsedLogicBarSegs,
+    })
+  }, [docked, pos.x, pos.y, barWidthPx, collapsedLogicBarSegs])
 
   const clampToViewport = useCallback(() => {
     const el = wrapRef.current
@@ -84,6 +178,67 @@ export default function DraggableAudioOutputBar() {
     window.addEventListener('resize', clampToViewport)
     return () => window.removeEventListener('resize', clampToViewport)
   }, [clampToViewport])
+
+  useEffect(() => {
+    const onWin = () => {
+      setBarWidthPx((w) => clampAudioBarWidth(w))
+    }
+    window.addEventListener('resize', onWin)
+    return () => window.removeEventListener('resize', onWin)
+  }, [])
+
+  const onBarResizePointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      barResizeDragRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startW: barWidthPx,
+      }
+      setBarResizeActive(true)
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+    },
+    [barWidthPx],
+  )
+
+  const onBarResizePointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const d = barResizeDragRef.current
+      if (!d || e.pointerId !== d.pointerId) return
+      const dx = e.clientX - d.startX
+      setBarWidthPx(clampAudioBarWidth(d.startW + dx))
+    },
+    [],
+  )
+
+  const endBarResize = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = barResizeDragRef.current
+    if (!d || e.pointerId !== d.pointerId) return
+    barResizeDragRef.current = null
+    setBarResizeActive(false)
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const onBarResizeKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      e.preventDefault()
+      const step = 16
+      const delta = e.key === 'ArrowRight' ? step : -step
+      setBarWidthPx((w) => clampAudioBarWidth(w + delta))
+    },
+    [],
+  )
 
   const undock = useCallback(() => {
     const el = wrapRef.current
@@ -152,11 +307,17 @@ export default function DraggableAudioOutputBar() {
       }
     : undefined
 
+  const wrapStyle = {
+    ...floatingStyle,
+    width: barWidthPx,
+    maxWidth: '100%',
+  } as const
+
   return (
     <div
       ref={wrapRef}
       className={`regia-audio-dock-wrap ${!docked ? 'is-floating' : ''}`}
-      style={floatingStyle}
+      style={wrapStyle}
     >
       <div
         className={`regia-audio-dock-inner regia-audio-dock-inner--single-row ${!docked ? 'is-drag-surface' : ''}`}
@@ -165,32 +326,70 @@ export default function DraggableAudioOutputBar() {
         onPointerUp={onRowPointerUp}
         onPointerCancel={onRowPointerUp}
       >
-        <LogicTransportStrip />
-        <span className="logic-bar-divider" aria-hidden />
-        <LogicSecondaryStrip />
-        <span className="logic-bar-divider" aria-hidden />
-        <LogicPreviewScreenStrip />
-        <span className="logic-bar-divider" aria-hidden />
-        <LogicClockStrip />
-        <span className="logic-bar-divider" aria-hidden />
-        <div className="regia-audio-dock-audio">
-          <AudioOutputBar variant="inline" />
+        <div className="regia-logic-bar-seg">
+          <LogicTransportStrip />
         </div>
-        <button
-          type="button"
-          className="regia-audio-dock-pin-icon"
-          onClick={() => {
-            if (docked) undock()
-            else setDocked(true)
-          }}
-          title={docked ? 'Stacca barra (trascina da zone vuote)' : 'Aggancia nell’header'}
-          aria-label={
-            docked ? 'Stacca barra dalla barra superiore' : 'Aggancia barra nell’header'
-          }
+        <LogicBarCollapsibleSeg
+          segId="preview"
+          collapsed={collapsedSegSet.has('preview')}
+          onToggle={() => toggleLogicBarSeg('preview')}
         >
-          {docked ? <IconPinFloat /> : <IconPinDock />}
-        </button>
+          <LogicPreviewScreenStrip />
+        </LogicBarCollapsibleSeg>
+        <LogicBarCollapsibleSeg
+          segId="secondary"
+          collapsed={collapsedSegSet.has('secondary')}
+          onToggle={() => toggleLogicBarSeg('secondary')}
+        >
+          <LogicSecondaryStrip />
+        </LogicBarCollapsibleSeg>
+        <LogicBarCollapsibleSeg
+          segId="clock"
+          collapsed={collapsedSegSet.has('clock')}
+          onToggle={() => toggleLogicBarSeg('clock')}
+        >
+          <LogicClockStrip />
+        </LogicBarCollapsibleSeg>
+        <LogicBarCollapsibleSeg
+          segId="audio"
+          className="regia-logic-bar-seg--audio"
+          collapsed={collapsedSegSet.has('audio')}
+          onToggle={() => toggleLogicBarSeg('audio')}
+        >
+          <div className="regia-audio-dock-audio">
+            <AudioOutputBar variant="inline" />
+          </div>
+        </LogicBarCollapsibleSeg>
+        <div className="regia-logic-bar-seg regia-logic-bar-seg--split regia-logic-bar-seg--pin">
+          <span className="logic-bar-divider" aria-hidden />
+          <button
+            type="button"
+            className="regia-audio-dock-pin-icon"
+            onClick={() => {
+              if (docked) undock()
+              else setDocked(true)
+            }}
+            title={docked ? 'Stacca barra (trascina da zone vuote)' : 'Aggancia nell’header'}
+            aria-label={
+              docked ? 'Stacca barra dalla barra superiore' : 'Aggancia barra nell’header'
+            }
+          >
+            {docked ? <IconPinFloat /> : <IconPinDock />}
+          </button>
+        </div>
       </div>
+      <div
+        className={`regia-audio-dock-resize-handle-e ${barResizeActive ? 'is-active' : ''}`}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Trascina per ridimensionare la barra di trasporto in larghezza"
+        tabIndex={0}
+        onPointerDown={onBarResizePointerDown}
+        onPointerMove={onBarResizePointerMove}
+        onPointerUp={endBarResize}
+        onPointerCancel={endBarResize}
+        onKeyDown={onBarResizeKeyDown}
+      />
     </div>
   )
 }

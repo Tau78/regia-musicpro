@@ -17,6 +17,10 @@ import {
   normalizeOutputIdleCap,
   type OutputIdleCapPersist,
 } from './lib/outputIdleCapStorage.ts'
+import {
+  OUTPUT_PROGRAM_LOGO_LS_KEY,
+  readOutputProgramLogoVisibleFromLs,
+} from './lib/outputProgramLogoStorage.ts'
 
 const CROSSFADE_MS = 480
 const DEFAULT_STILL_IMAGE_DURATION_MS = 8000
@@ -110,10 +114,18 @@ export default function OutputApp() {
     boardBackgroundColor: null,
   })
 
+  const [playlistWatermark, setPlaylistWatermark] = useState<{
+    visible: boolean
+    src: string | null
+  }>({ visible: false, src: null })
+
   const [idleCap, setIdleCap] = useState<OutputIdleCapPersist>(() =>
     readOutputIdleCapFromLs(),
   )
   const [idleCapImageUrl, setIdleCapImageUrl] = useState<string | null>(null)
+  const [programLogoVisible, setProgramLogoVisible] = useState(() =>
+    readOutputProgramLogoVisibleFromLs(),
+  )
 
   const applySinkToVideo = useCallback((el: HTMLVideoElement) => {
     const setSink = (
@@ -533,6 +545,16 @@ export default function OutputApp() {
           setStillDurationEpoch((n) => n + 1)
           break
         }
+        case 'playlistWatermark': {
+          if (!cmd.visible) {
+            setPlaylistWatermark({ visible: false, src: null })
+            break
+          }
+          const ws =
+            cmd.src && cmd.src.length > 0 ? cmd.src : null
+          setPlaylistWatermark({ visible: true, src: ws })
+          break
+        }
         case 'chalkboardLayer': {
           if (!cmd.visible) {
             setChalkboardLayer((p) => ({
@@ -571,6 +593,9 @@ export default function OutputApp() {
           setIdleCap(next)
           break
         }
+        case 'setOutputProgramLogoVisible':
+          setProgramLogoVisible(cmd.visible === true)
+          break
         default:
           break
       }
@@ -593,14 +618,19 @@ export default function OutputApp() {
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key !== OUTPUT_IDLE_CAP_LS_KEY) return
-      try {
-        const next = e.newValue
-          ? normalizeOutputIdleCap(JSON.parse(e.newValue) as unknown)
-          : readOutputIdleCapFromLs()
-        setIdleCap(next)
-      } catch {
-        setIdleCap(readOutputIdleCapFromLs())
+      if (e.key === OUTPUT_IDLE_CAP_LS_KEY) {
+        try {
+          const next = e.newValue
+            ? normalizeOutputIdleCap(JSON.parse(e.newValue) as unknown)
+            : readOutputIdleCapFromLs()
+          setIdleCap(next)
+        } catch {
+          setIdleCap(readOutputIdleCapFromLs())
+        }
+        return
+      }
+      if (e.key === OUTPUT_PROGRAM_LOGO_LS_KEY) {
+        setProgramLogoVisible(readOutputProgramLogoVisibleFromLs())
       }
     }
     window.addEventListener('storage', onStorage)
@@ -619,6 +649,22 @@ export default function OutputApp() {
       .catch(() => setIdleCap(readOutputIdleCapFromLs()))
   }, [])
 
+  const pullProgramLogoFromMain = useCallback(() => {
+    const api = window.electronAPI
+    if (!api?.getOutputProgramLogoVisible) {
+      setProgramLogoVisible(readOutputProgramLogoVisibleFromLs())
+      return
+    }
+    void api
+      .getOutputProgramLogoVisible()
+      .then((r) => {
+        if (r && typeof r.visible === 'boolean') {
+          setProgramLogoVisible(r.visible)
+        }
+      })
+      .catch(() => setProgramLogoVisible(readOutputProgramLogoVisibleFromLs()))
+  }, [])
+
   /**
    * Disco + IPC possono arrivare dopo il primo paint; la regia scrive il JSON in un tick successivo.
    * Ripetiamo il pull e usiamo localStorage come fallback se l’invoke fallisce (preload vecchio).
@@ -634,6 +680,18 @@ export default function OutputApp() {
       clearTimeout(t3)
     }
   }, [pullIdleCapFromMain])
+
+  useEffect(() => {
+    pullProgramLogoFromMain()
+    const t1 = window.setTimeout(pullProgramLogoFromMain, 100)
+    const t2 = window.setTimeout(pullProgramLogoFromMain, 450)
+    const t3 = window.setTimeout(pullProgramLogoFromMain, 1200)
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+      clearTimeout(t3)
+    }
+  }, [pullProgramLogoFromMain])
 
   useEffect(() => {
     if (idleCap.mode !== 'image' || !idleCap.imagePath) {
@@ -988,6 +1046,16 @@ export default function OutputApp() {
           />
         </div>
       ) : null}
+      {playlistWatermark.visible && playlistWatermark.src ? (
+        <div className="output-playlist-watermark" aria-hidden>
+          <img
+            src={playlistWatermark.src}
+            alt=""
+            className="output-playlist-watermark-img"
+            draggable={false}
+          />
+        </div>
+      ) : null}
       {showIdleCapLayer ? (
         <div
           className={`output-idle-cap output-idle-cap--${idleCap.mode}`}
@@ -1013,14 +1081,23 @@ export default function OutputApp() {
           )}
         </div>
       ) : null}
-      <div
-        className="output-program-badge"
-        role="status"
-        aria-label="Solo programma al pubblico. Nessuna anteprima «prossimo» in questa finestra."
-      >
-        <span className="output-program-badge-kicker">Uscita</span>
-        <span className="output-program-badge-main">Programma</span>
-      </div>
+      {programLogoVisible ? (
+        <div
+          className="output-program-badge"
+          role="img"
+          aria-label="REGIA MUSICPRO — uscita programma al pubblico. Nessuna anteprima «prossimo» in questa finestra."
+        >
+          <img
+            className="output-program-badge-logo"
+            src={`${import.meta.env.BASE_URL}app-icon.png`}
+            alt=""
+            width={64}
+            height={64}
+            decoding="async"
+            draggable={false}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }

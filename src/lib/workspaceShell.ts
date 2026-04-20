@@ -1,6 +1,7 @@
 import {
-  persistPreviewDetached,
-  readPreviewDetached,
+  persistPreviewDisplayMode,
+  readPreviewDisplayMode,
+  type PreviewDisplayMode,
 } from './previewDetachedStorage.ts'
 import {
   dispatchPreviewLayoutApplied,
@@ -47,7 +48,8 @@ function parseStillImageDurationSec(raw: unknown): number {
 }
 
 export type WorkspaceShellPersist = {
-  previewDetached: boolean
+  /** Anteprima: nel layout, finestra OS separata, o nascosta (solo pulsante occhio cicla hidden). */
+  previewDisplayMode: PreviewDisplayMode
   previewLayout: PreviewLayoutPersist
   sidebarOpen: boolean
   sidebarWidthPx: number
@@ -117,7 +119,7 @@ export function dispatchSidebarMainTab(tab: SidebarMainTabPersist): void {
 
 export function readStandaloneWorkspaceShell(): WorkspaceShellPersist {
   return {
-    previewDetached: readPreviewDetached(),
+    previewDisplayMode: readPreviewDisplayMode(),
     previewLayout: readPreviewLayoutFromLs(),
     sidebarOpen: readSidebarOpen(),
     sidebarWidthPx: readSidebarWidthPx(),
@@ -162,8 +164,9 @@ export function parseWorkspaceShell(raw: unknown): WorkspaceShellPersist | null 
     previewLayout = readPreviewLayoutFromLs()
   }
   const sw = Number(s.sidebarWidthPx)
+  const previewDisplayMode = parsePreviewDisplayModeFromShell(s)
   return {
-    previewDetached: Boolean(s.previewDetached),
+    previewDisplayMode,
     previewLayout,
     sidebarOpen: Boolean(s.sidebarOpen),
     sidebarWidthPx: Number.isFinite(sw)
@@ -198,8 +201,17 @@ export function parseWorkspaceShell(raw: unknown): WorkspaceShellPersist | null 
   }
 }
 
+function parsePreviewDisplayModeFromShell(
+  s: Record<string, unknown>,
+): PreviewDisplayMode {
+  const m = s.previewDisplayMode
+  if (m === 'docked' || m === 'floating' || m === 'hidden') return m
+  if (Boolean(s.previewDetached)) return 'floating'
+  return 'docked'
+}
+
 export function persistShellToLocalStorage(shell: WorkspaceShellPersist): void {
-  persistPreviewDetached(shell.previewDetached)
+  persistPreviewDisplayMode(shell.previewDisplayMode)
   writePreviewLayoutToLs(shell.previewLayout)
   persistSidebarOpen(shell.sidebarOpen)
   persistSidebarWidthPx(shell.sidebarWidthPx)

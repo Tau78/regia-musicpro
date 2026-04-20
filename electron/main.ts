@@ -29,6 +29,8 @@ type SavedPlaylistMeta = {
   themeColor?: string
   /** Assente = elenco brani; `launchpad` = griglia 4×4; `chalkboard` = lavagna. */
   playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'
+  /** True se è impostato un PNG watermark in uscita. */
+  hasWatermark?: boolean
 }
 
 type LaunchPadCellStored = {
@@ -121,16 +123,18 @@ function ensureChalkboardBankPngFiles(
   const { r, g, b } = parseHexRgb(
     normalizeChalkboardBackgroundStored(backgroundHex),
   )
-  const png = encodeSolidPngRgba(width, height, r, g, b, 255)
+  /** Composito: anteprima / ON. Tratto: solo alpha (TRANSP = niente “tinta” lavagna sul canvas). */
+  const pngComposite = encodeSolidPngRgba(width, height, r, g, b, 255)
+  const pngDrawTransparent = encodeSolidPngRgba(width, height, 0, 0, 0, 0)
   const paths: string[] = []
   for (let i = 0; i < CHALKBOARD_BANK_COUNT; i++) {
     const fp = path.join(base, `bank-${i}.png`)
     if (!fs.existsSync(fp)) {
-      fs.writeFileSync(fp, png)
+      fs.writeFileSync(fp, pngComposite)
     }
     const fd = path.join(base, `bank-${i}-draw.png`)
     if (!fs.existsSync(fd)) {
-      fs.writeFileSync(fd, png)
+      fs.writeFileSync(fd, pngDrawTransparent)
     }
     paths.push(fp)
   }
@@ -224,6 +228,8 @@ type StoredPlaylistEntry = {
   chalkboardBackgroundColor?: string
   /** Immagini posizionabili per banco (accanto a PNG tratto-only `-draw`). */
   chalkboardPlacementsByBank?: ChalkboardPlacedImageStored[][]
+  /** Path assoluto a PNG overlay in uscita (opzionale). */
+  watermarkPngPath?: string
 }
 
 function normalizeStoredLoopMode(
@@ -295,6 +301,41 @@ function normalizeStoredThemeColor(v: unknown): string | undefined {
   return undefined
 }
 
+function normalizeWatermarkPngPathStored(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const t = raw.trim()
+  if (!t || !t.toLowerCase().endsWith('.png')) return undefined
+  if (!path.isAbsolute(t)) return undefined
+  return t
+}
+
+function playlistWatermarkAssetsRoot(): string {
+  return path.join(app.getPath('userData'), 'playlist-watermarks')
+}
+
+function removeWatermarkAssetDir(playlistId: string): void {
+  const root = path.join(playlistWatermarkAssetsRoot(), playlistId)
+  try {
+    fs.rmSync(root, { recursive: true, force: true })
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Copia un PNG nella cartella gestita `userData/playlist-watermarks/<playlistId>/watermark.png`. */
+function copyWatermarkIntoManagedPlaylistDir(
+  srcAbs: string,
+  playlistId: string,
+): string | undefined {
+  const norm = normalizeWatermarkPngPathStored(srcAbs)
+  if (!norm || !fs.existsSync(norm)) return undefined
+  const destDir = path.join(playlistWatermarkAssetsRoot(), playlistId)
+  fs.mkdirSync(destDir, { recursive: true })
+  const dest = path.join(destDir, 'watermark.png')
+  fs.copyFileSync(norm, dest)
+  return dest
+}
+
 type PlaylistsStoreFile = {
   version: 1
   items: Record<string, StoredPlaylistEntry>
@@ -326,10 +367,20 @@ function writePlaylistsStore(s: PlaylistsStoreFile): void {
   fs.writeFileSync(playlistsFilePath(), JSON.stringify(s, null, 2), 'utf8')
 }
 
+/** True se la voce è una lavagna (anche se `playlistMode` manca nel JSON). */
+function storedEntryIsChalkboard(e: StoredPlaylistEntry): boolean {
+  if (e.playlistMode === 'launchpad') return false
+  if (e.playlistMode === 'chalkboard') return true
+  if (e.playlistMode === 'tracks') return false
+  return normalizeChalkboardBankPathsStored(e.chalkboardBankPaths) !== undefined
+}
+
 function savedEntryToMeta(id: string, v: StoredPlaylistEntry): SavedPlaylistMeta {
   const tc = normalizeStoredThemeColor(v.themeColor)
   const modeLp = v.playlistMode === 'launchpad' ? ('launchpad' as const) : undefined
-  const modeCb = v.playlistMode === 'chalkboard' ? ('chalkboard' as const) : undefined
+  const modeCb = storedEntryIsChalkboard(v)
+    ? ('chalkboard' as const)
+    : undefined
   const cells =
     modeLp === 'launchpad'
       ? normalizeLaunchPadCellsStored(v.launchPadCells)
@@ -358,6 +409,9 @@ function savedEntryToMeta(id: string, v: StoredPlaylistEntry): SavedPlaylistMeta
   if (modeLp) meta.playlistMode = modeLp
   else if (modeCb) meta.playlistMode = modeCb
   else meta.playlistMode = 'tracks'
+  if (normalizeWatermarkPngPathStored(v.watermarkPngPath)) {
+    meta.hasWatermark = true
+  }
   return meta
 }
 
@@ -401,6 +455,7 @@ function saveSavedPlaylist(opts: {
   /** Se i PNG sono ancora in chalkboard-drafts/<id>/, sposta in chalkboard-assets/<playlistId>/. */
   chalkboardMigrateDraftSessionId?: string | null
   totalDurationSec?: number
+  watermarkPngPath?: string | null
 }): { id: string } {
   const id = opts.id ?? `pl_${Date.now()}`
   const label = opts.label.trim().slice(0, 120) || 'Senza titolo'
@@ -471,6 +526,12 @@ function saveSavedPlaylist(opts: {
   } else {
     delete entry.totalDurationSec
   }
+  const wm =
+    opts.watermarkPngPath === '' || opts.watermarkPngPath == null
+      ? undefined
+      : normalizeWatermarkPngPathStored(opts.watermarkPngPath)
+  if (wm) entry.watermarkPngPath = wm
+  else delete entry.watermarkPngPath
   const isNewEntry = !Object.prototype.hasOwnProperty.call(s.items, id)
   s.items[id] = entry
   if (isNewEntry) {
@@ -511,13 +572,14 @@ function getSavedPlaylist(
   chalkboardBankPaths: string[]
   chalkboardBackgroundColor: string
   chalkboardPlacementsByBank: ChalkboardPlacedImageStored[][]
+  watermarkPngPath: string
 } | null {
   const s = readPlaylistsStore()
   const e = s.items[id]
   if (!e) return null
   const tc = normalizeStoredThemeColor(e.themeColor)
   const isLp = e.playlistMode === 'launchpad'
-  const isCb = e.playlistMode === 'chalkboard'
+  const isCb = storedEntryIsChalkboard(e)
   const cells = isLp
     ? normalizeLaunchPadCellsStored(e.launchPadCells) ?? []
     : []
@@ -530,6 +592,7 @@ function getSavedPlaylist(
   const cbBg = isCb
     ? normalizeChalkboardBackgroundStored(e.chalkboardBackgroundColor)
     : '#2d3436'
+  const wm = normalizeWatermarkPngPathStored(e.watermarkPngPath) ?? ''
   return {
     id,
     label: e.label,
@@ -543,6 +606,7 @@ function getSavedPlaylist(
     chalkboardBankPaths: cbPaths,
     chalkboardBackgroundColor: cbBg,
     chalkboardPlacementsByBank: cbPlacements,
+    watermarkPngPath: wm,
   }
 }
 
@@ -550,9 +614,10 @@ function deleteSavedPlaylist(id: string): boolean {
   const s = readPlaylistsStore()
   const prev = s.items[id]
   if (!prev) return false
-  if (prev.playlistMode === 'chalkboard') {
+  if (storedEntryIsChalkboard(prev)) {
     removeChalkboardAssetDir(id)
   }
+  removeWatermarkAssetDir(id)
   delete s.items[id]
   if (Array.isArray(s.listOrder)) {
     s.listOrder = s.listOrder.filter((x) => x !== id)
@@ -603,8 +668,15 @@ function duplicateSavedPlaylist(id: string): { id: string } | null {
   const maxBase = Math.max(0, 120 - suffix.length)
   const label = `${raw.slice(0, maxBase)}${suffix}`.slice(0, 120)
   const dupTheme = normalizeStoredThemeColor(src.themeColor)
+  const newId = `pl_${Date.now()}`
+  const wmSrc = src.watermarkPngPath.trim()
+  const wmDest =
+    wmSrc.length > 0
+      ? copyWatermarkIntoManagedPlaylistDir(wmSrc, newId)
+      : undefined
   if (src.playlistMode === 'launchpad') {
     return saveSavedPlaylist({
+      id: newId,
       label,
       paths: [],
       crossfade: false,
@@ -612,10 +684,10 @@ function duplicateSavedPlaylist(id: string): { id: string } | null {
       playlistMode: 'launchpad',
       launchPadCells: src.launchPadCells.map((c) => ({ ...c })),
       totalDurationSec: copyTd,
+      watermarkPngPath: wmDest ?? null,
     })
   }
   if (src.playlistMode === 'chalkboard') {
-    const newId = `pl_${Date.now()}`
     copyChalkboardAssetDir(id, newId)
     const nextPaths = Array.from({ length: CHALKBOARD_BANK_COUNT }, (_, i) =>
       path.join(chalkboardAssetsDir(), newId, `bank-${i}.png`),
@@ -640,9 +712,11 @@ function duplicateSavedPlaylist(id: string): { id: string } | null {
           }
         : {}),
       totalDurationSec: copyTd,
+      watermarkPngPath: wmDest ?? null,
     })
   }
   return saveSavedPlaylist({
+    id: newId,
     label,
     paths: [...src.paths],
     crossfade: src.crossfade,
@@ -650,6 +724,7 @@ function duplicateSavedPlaylist(id: string): { id: string } | null {
     themeColor: dupTheme ?? null,
     playlistMode: 'tracks',
     totalDurationSec: copyTd,
+    watermarkPngPath: wmDest ?? null,
   })
 }
 
@@ -662,6 +737,10 @@ let outputWindow: BrowserWindow | null = null
 let lastChalkboardLayerForOutput: Extract<
   PlaybackCommand,
   { type: 'chalkboardLayer' }
+> | null = null
+let lastPlaylistWatermarkForOutput: Extract<
+  PlaybackCommand,
+  { type: 'playlistWatermark' }
 > | null = null
 /** Playlist / launchpad in finestra OS separata (puntina). */
 const playlistFloaterWindows = new Map<string, BrowserWindow>()
@@ -773,6 +852,30 @@ function getPlaylistPublicDetailForRemote(id: string): unknown | null {
     }
   }
   return null
+}
+
+function readChalkboardBankPngForRemote(
+  playlistId: string,
+  bankIndex: number,
+): Buffer | null {
+  if (
+    !Number.isInteger(bankIndex) ||
+    bankIndex < 0 ||
+    bankIndex >= CHALKBOARD_BANK_COUNT
+  ) {
+    return null
+  }
+  const pl = getSavedPlaylist(playlistId)
+  if (!pl || pl.playlistMode !== 'chalkboard') return null
+  const absPath = pl.chalkboardBankPaths[bankIndex]
+  if (!absPath || typeof absPath !== 'string') return null
+  try {
+    if (!fs.existsSync(absPath)) return null
+    const buf = fs.readFileSync(absPath)
+    return buf.length > 0 ? buf : null
+  } catch {
+    return null
+  }
 }
 
 function dispatchRemotePayloadToRegia(
@@ -928,6 +1031,42 @@ function writeOutputIdleCapToDisk(cap: OutputIdleCapDisk): void {
   const p = outputIdleCapPath()
   fs.mkdirSync(path.dirname(p), { recursive: true })
   fs.writeFileSync(p, JSON.stringify(cap, null, 2), 'utf8')
+}
+
+const DEFAULT_OUTPUT_PROGRAM_LOGO_VISIBLE = true
+
+function outputProgramLogoVisiblePath(): string {
+  return path.join(app.getPath('userData'), 'output-program-logo-visible.json')
+}
+
+function readOutputProgramLogoVisibleFromDisk(): boolean {
+  try {
+    const raw = fs.readFileSync(outputProgramLogoVisiblePath(), 'utf8')
+    const o = JSON.parse(raw) as unknown
+    if (typeof o === 'object' && o && 'visible' in o) {
+      return (o as { visible: unknown }).visible === true
+    }
+  } catch {
+    /* file assente o JSON non valido */
+  }
+  return DEFAULT_OUTPUT_PROGRAM_LOGO_VISIBLE
+}
+
+function writeOutputProgramLogoVisibleToDisk(visible: boolean): void {
+  const p = outputProgramLogoVisiblePath()
+  fs.mkdirSync(path.dirname(p), { recursive: true })
+  fs.writeFileSync(
+    p,
+    JSON.stringify({ visible }, null, 2),
+    'utf8',
+  )
+}
+
+function forwardOutputProgramLogoFromDiskToOutput(): void {
+  forwardToOutput({
+    type: 'setOutputProgramLogoVisible',
+    visible: readOutputProgramLogoVisibleFromDisk(),
+  })
 }
 
 function placeOutputWindowOnSecondaryDisplay(w: BrowserWindow): void {
@@ -1217,7 +1356,9 @@ function createOutputWindow(): BrowserWindow {
     /* Ritarda un tick così il renderer ha montato `onPlaybackCommand`. */
     setImmediate(() => {
       forwardOutputIdleCapFromDiskToOutput()
+      forwardOutputProgramLogoFromDiskToOutput()
       flushLastChalkboardLayerToOutput()
+      flushLastPlaylistWatermarkToOutput()
     })
   })
 
@@ -1260,6 +1401,12 @@ function flushLastChalkboardLayerToOutput() {
   forwardToOutput(c)
 }
 
+function flushLastPlaylistWatermarkToOutput() {
+  const c = lastPlaylistWatermarkForOutput
+  if (!c || c.type !== 'playlistWatermark') return
+  forwardToOutput(c)
+}
+
 function forwardOutputIdleCapFromDiskToOutput(): void {
   const cap = readOutputIdleCapFromDisk()
   forwardToOutput({
@@ -1280,7 +1427,9 @@ function setOutputPresentationVisible(visible: boolean): void {
     /* Dopo show: riallinea tappo (race con caricamento regia / disco). */
     setImmediate(() => {
       forwardOutputIdleCapFromDiskToOutput()
+      forwardOutputProgramLogoFromDiskToOutput()
       flushLastChalkboardLayerToOutput()
+      flushLastPlaylistWatermarkToOutput()
     })
   } else {
     /* Non inviare pause: la regia comanda play/pause; con finestra nascosta
@@ -1363,6 +1512,24 @@ function setupIpc() {
     return paths
   })
 
+  ipcMain.handle('dialog:selectPlaylistWatermarkPng', async () => {
+    const owner = regiaWindow ?? BrowserWindow.getFocusedWindow()
+    const dirs = readDialogLastDirs()
+    const defaultPath =
+      existingDir(dirs.playlistMediaDir) ?? existingDir(dirs.playlistFolder)
+    const { canceled, filePaths } = await dialog.showOpenDialog(owner!, {
+      title: 'Watermark PNG (uscita)',
+      properties: ['openFile'],
+      filters: [{ name: 'PNG', extensions: ['png'] }],
+      ...(defaultPath ? { defaultPath } : {}),
+    })
+    if (canceled || !filePaths[0]) return null
+    const p = filePaths[0]
+    if (!normalizeWatermarkPngPathStored(p)) return null
+    writeDialogLastDirs({ playlistMediaDir: path.dirname(p) })
+    return p
+  })
+
   ipcMain.handle(
     'dialog:selectMediaFiles',
     async (
@@ -1437,12 +1604,16 @@ function setupIpc() {
       return
     }
     if (cmd.type === 'chalkboardLayer') {
+      const raw = cmd.src
       const src =
-        cmd.src &&
-        !cmd.src.startsWith('file:') &&
-        !cmd.src.startsWith('http')
-          ? pathToMediaUrl(cmd.src)
-          : cmd.src
+        typeof raw === 'string' && raw.length > 0
+          ? raw.startsWith('file:') ||
+              raw.startsWith('http:') ||
+              raw.startsWith('https:') ||
+              raw.startsWith('data:')
+            ? raw
+            : pathToMediaUrl(raw)
+          : raw
       const composite: 'solid' | 'transparent' | undefined =
         cmd.visible && cmd.composite === 'transparent'
           ? 'transparent'
@@ -1462,6 +1633,35 @@ function setupIpc() {
         ...(bg ? { boardBackgroundColor: bg } : {}),
       }
       lastChalkboardLayerForOutput = out
+      forwardToOutput(out)
+      return
+    }
+    if (cmd.type === 'playlistWatermark') {
+      if (!cmd.visible) {
+        const out: Extract<PlaybackCommand, { type: 'playlistWatermark' }> = {
+          type: 'playlistWatermark',
+          visible: false,
+        }
+        lastPlaylistWatermarkForOutput = out
+        forwardToOutput(out)
+        return
+      }
+      const raw = cmd.src
+      const src =
+        typeof raw === 'string' && raw.length > 0
+          ? raw.startsWith('file:') ||
+              raw.startsWith('http:') ||
+              raw.startsWith('https:') ||
+              raw.startsWith('data:')
+            ? raw
+            : pathToMediaUrl(raw)
+          : raw
+      const out: Extract<PlaybackCommand, { type: 'playlistWatermark' }> = {
+        type: 'playlistWatermark',
+        visible: true,
+        src,
+      }
+      lastPlaylistWatermarkForOutput = out
       forwardToOutput(out)
       return
     }
@@ -1502,6 +1702,7 @@ function setupIpc() {
         chalkboardPlacementsByBank?: ChalkboardPlacedImageStored[][]
         chalkboardMigrateDraftSessionId?: string | null
         totalDurationSec?: number
+        watermarkPngPath?: string | null
       },
     ): { id: string } => saveSavedPlaylist(opts),
   )
@@ -1586,6 +1787,17 @@ function setupIpc() {
     return { ok: true as const }
   })
 
+  ipcMain.handle('output:getProgramLogoVisible', () => ({
+    visible: readOutputProgramLogoVisibleFromDisk(),
+  }))
+
+  ipcMain.handle('output:setProgramLogoVisible', (_e, raw: unknown) => {
+    const visible = raw === true
+    writeOutputProgramLogoVisibleToDisk(visible)
+    forwardToOutput({ type: 'setOutputProgramLogoVisible', visible })
+    return { ok: true as const }
+  })
+
   ipcMain.handle('output:ensureIdleCap', (_e, fallbackFromRegia: unknown) => {
     const p = outputIdleCapPath()
     let fromDisk: OutputIdleCapDisk | null = null
@@ -1651,6 +1863,7 @@ function setupIpc() {
         y: Math.round(y),
         width: Math.max(220, Math.round(width)),
         height: Math.max(180, Math.round(height)),
+        title: 'Pannello playlist — Regia',
         frame: false,
         show: false,
         backgroundColor: '#13151a',
@@ -1664,6 +1877,12 @@ function setupIpc() {
         },
       })
       w.setMenuBarVisibility(false)
+      /** Finestra indipendente dalla main: resta visibile se riduci la regia; sempre davanti alle altre app. */
+      if (process.platform === 'darwin') {
+        w.setAlwaysOnTop(true, 'floating')
+      } else {
+        w.setAlwaysOnTop(true)
+      }
       if (isDev) {
         void w.loadURL(
           `${getDevServerUrl()}/?playlistOsFloater=1&session=${encodeURIComponent(sessionId)}`,
@@ -1838,6 +2057,8 @@ function setupIpc() {
         listPlaylists: async () => listSavedPlaylists(),
         getPlaylistPublicDetail: async (id) =>
           getPlaylistPublicDetailForRemote(id),
+        readChalkboardBankPng: async (playlistId, bankIndex) =>
+          readChalkboardBankPngForRemote(playlistId, bankIndex),
         dispatchToRegia: dispatchRemotePayloadToRegia,
         getPlaybackSnapshot: () => remotePlaybackSnapshot,
       })
