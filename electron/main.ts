@@ -8,6 +8,7 @@ import {
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import fs from 'node:fs'
+import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import type { PlaybackCommand } from './types'
 import { encodeSolidPngRgba, parseHexRgb } from './chalkboardPng'
@@ -2340,6 +2341,66 @@ function setupIpc() {
   })
 }
 
+/**
+ * Windows + NSIS silenzioso: dopo `quitAndInstall` non resta alcuna finestra Electron finché
+ * l'installer non ha finito. Apriamo una HTA con `mshta` (processo separato) così l'utente
+ * vede ancora qualcosa durante l'attesa; si può chiudere a mano dopo la riapertura dell'app.
+ */
+function spawnDetachedWindowsUpdateWaitWindow(): void {
+  if (process.platform !== 'win32') return
+  const root = process.env.SystemRoot
+  const winDir =
+    typeof root === 'string' && root.length > 0 ? root.replace(/[/\\]+$/, '') : 'C:\\Windows'
+  const mshta = path.join(winDir, 'System32', 'mshta.exe')
+  if (!fs.existsSync(mshta)) return
+
+  const htaPath = path.join(app.getPath('temp'), 'REGIA-MUSICPRO-update-wait.hta')
+  const hta = `<html>
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<title>REGIA MUSICPRO — aggiornamento</title>
+<HTA:APPLICATION ID="htaUpd" APPLICATIONNAME="REGIAMUSICPROUpdateWait" BORDER="dialog" CAPTION="yes" MAXIMIZEBUTTON="no" MINIMIZEBUTTON="yes" SHOWINTASKBAR="yes" SINGLEINSTANCE="yes" SYSMENU="yes" SCROLL="no" WINDOWSTATE="normal" />
+<style type="text/css">
+  body { font: 15px "Segoe UI", system-ui, sans-serif; margin: 18px 20px; color: #111; }
+  h1 { font-size: 17px; margin: 0 0 10px; font-weight: 600; }
+  p { margin: 8px 0; line-height: 1.45; }
+  .muted { color: #444; font-size: 13px; }
+  button { margin-top: 14px; padding: 6px 14px; font: 13px "Segoe UI", sans-serif; cursor: pointer; }
+</style>
+</head>
+<body>
+  <h1>Installazione aggiornamento</h1>
+  <p>L'installer sta aggiornando REGIA MUSICPRO in secondo piano. L'app si riaprirà da sola al termine.</p>
+  <p class="muted">Se compare il consenso di Windows (UAC), confermalo. Puoi chiudere questa finestra dopo che l'app è tornata.</p>
+  <button onclick="self.close()">Chiudi</button>
+<script language="JScript">
+  try {
+    window.resizeTo(460, 280);
+    window.moveTo(Math.max(0, (screen.availWidth - 460) / 2), Math.max(0, (screen.availHeight - 280) / 2));
+  } catch (e) {}
+</script>
+</body>
+</html>`
+
+  try {
+    fs.writeFileSync(htaPath, hta, 'utf8')
+  } catch {
+    return
+  }
+
+  try {
+    const child = spawn(mshta, [htaPath], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    })
+    child.unref()
+  } catch {
+    /* mshta non avviabile (policy, ecc.) */
+  }
+}
+
 /** Aggiornamenti da GitHub Releases (config `publish` in electron-builder.yml). */
 function setupAutoUpdater(): void {
   if (isDev) return
@@ -2354,12 +2415,15 @@ function setupAutoUpdater(): void {
   autoUpdater.on('update-downloaded', (info) => {
     // NSIS: `true` = `/S` (nessuna procedura guidata in aggiornamento); `true` = `--force-run` riapre l'app.
     // Può restare un solo prompt UAC di Windows se serve elevazione (non controllabile dall'app).
+    const detailWin =
+      "Si aprirà anche una piccola finestra «Installazione aggiornamento» che resta visibile mentre l'installer lavora: l'app si chiude e si riapre da sola al termine. Se compare Windows (UAC), confermalo."
+    const detailDefault =
+      "L'app si chiude, l'installazione avviene in secondo piano e si riapre da sola. Se compare il consenso di Windows (UAC), confermalo una volta."
     const opts = {
       type: 'info' as const,
       title: 'Aggiornamento',
       message: `È pronta la versione ${info.version}.`,
-      detail:
-        "L'app si chiude, l'installazione avviene in secondo piano e si riapre da sola. Se compare il consenso di Windows (UAC), confermalo una volta.",
+      detail: process.platform === 'win32' ? detailWin : detailDefault,
       buttons: ['Installa e riapri'],
       defaultId: 0,
     }
@@ -2372,6 +2436,15 @@ function setupAutoUpdater(): void {
         ? dialog.showMessageBox(owner, opts)
         : dialog.showMessageBox(opts)
     void finished.then(() => {
+      if (process.platform === 'win32') {
+        spawnDetachedWindowsUpdateWaitWindow()
+        setTimeout(() => {
+          setImmediate(() => {
+            autoUpdater.quitAndInstall(true, true)
+          })
+        }, 450)
+        return
+      }
       setImmediate(() => {
         autoUpdater.quitAndInstall(true, true)
       })
