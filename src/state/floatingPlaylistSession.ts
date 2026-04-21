@@ -323,6 +323,11 @@ export type FloatingPlaylistSession = {
   regiaVideoCloudSourceFile?: string | null
   /** Se true, blocca modifiche accidentali (drag, drop, ecc. dove supportato). */
   panelLocked?: boolean
+  /**
+   * Cartella il cui elenco file media viene riletto automaticamente (impostata con «Apri cartella»).
+   * Si azzera se modifichi l’elenco a mano (aggiungi, rimuovi, riordina, …).
+   */
+  playlistWatchFolder?: string
 }
 
 function newSessionId(): string {
@@ -456,6 +461,7 @@ export function cloneFloatingSession(
     ...s,
     id: newSessionId(),
     pos: pos ?? { x: s.pos.x + 28, y: s.pos.y + 28 },
+    playlistWatchFolder: undefined,
     paths: [...s.paths],
     launchPadCells: s.launchPadCells?.map((c) => ({ ...c })),
     launchPadBanks: s.launchPadBanks

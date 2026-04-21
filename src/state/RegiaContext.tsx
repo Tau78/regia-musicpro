@@ -852,6 +852,15 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
     }
   }
 
+  let playlistWatchFolder: string | undefined
+  if (isTracksPlaylistMode(playlistMode)) {
+    const rawWf = (r as Record<string, unknown>).playlistWatchFolder
+    if (typeof rawWf === 'string') {
+      const t = rawWf.trim()
+      if (t) playlistWatchFolder = t
+    }
+  }
+
   return {
     id,
     pos,
@@ -921,6 +930,7 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
           : null
       return cf != null ? { regiaVideoCloudSourceFile: cf } : {}
     })(),
+    ...(playlistWatchFolder ? { playlistWatchFolder } : {}),
     ...(r.panelLocked === true ? { panelLocked: true as const } : {}),
   }
 }
@@ -1098,6 +1108,10 @@ function folderBasenameFromPaths(paths: string[]): string {
   const parentSlash = dir.lastIndexOf('/')
   const base = parentSlash >= 0 ? dir.slice(parentSlash + 1) : dir
   return base.trim() || 'Playlist'
+}
+
+const CLEAR_PLAYLIST_WATCH_FOLDER: Partial<FloatingPlaylistSession> = {
+  playlistWatchFolder: undefined,
 }
 
 function pathsEqual(a: string[], b: string[] | null): boolean {
@@ -1813,6 +1827,95 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const playlistFolderWatchPrevRef = useRef<Map<string, string>>(new Map())
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.playlistFolderWatchStart || !api?.playlistFolderWatchStop)
+      return
+    const desired = new Map<string, string>()
+    for (const s of floatingSessions) {
+      if (!isTracksPlaylistMode(s.playlistMode)) continue
+      const f = s.playlistWatchFolder?.trim()
+      if (f) desired.set(s.id, f)
+    }
+    const prev = playlistFolderWatchPrevRef.current
+    for (const [id, folder] of desired) {
+      if (prev.get(id) !== folder) {
+        void api.playlistFolderWatchStart(id, folder)
+      }
+    }
+    for (const id of prev.keys()) {
+      if (!desired.has(id)) void api.playlistFolderWatchStop(id)
+    }
+    playlistFolderWatchPrevRef.current = desired
+  }, [floatingSessions])
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.onPlaylistFolderMediaPathsUpdated) return
+    return api.onPlaylistFolderMediaPathsUpdated((msg) => {
+      const { sessionId, folder, paths } = msg
+      const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
+      if (!s0 || !isTracksPlaylistMode(s0.playlistMode)) return
+      if ((s0.playlistWatchFolder ?? '').trim() !== folder.trim()) return
+      if (
+        paths.length === s0.paths.length &&
+        paths.every((p, i) => p === s0.paths[i])
+      )
+        return
+
+      patchFloatingSession(sessionId, (cur) => {
+        if ((cur.playlistWatchFolder ?? '').trim() !== folder.trim()) return cur
+        const prevPaths = cur.paths
+        const selPath = prevPaths[cur.currentIndex]
+        const playbackSid = videoOutputSessionIdRef.current
+        const li = loadedIndexRef.current
+        const loadedPath =
+          playbackSid === sessionId &&
+          li != null &&
+          li >= 0 &&
+          li < prevPaths.length
+            ? prevPaths[li]!
+            : null
+
+        let nextCi = cur.currentIndex
+        if (selPath) {
+          const ni = paths.findIndex((p) => p === selPath)
+          if (ni >= 0) nextCi = ni
+          else
+            nextCi = Math.min(
+              cur.currentIndex,
+              Math.max(0, paths.length - 1),
+            )
+        } else {
+          nextCi = Math.min(cur.currentIndex, Math.max(0, paths.length - 1))
+        }
+
+        if (playbackSid === sessionId && loadedPath != null) {
+          const newLi = paths.findIndex((p) => p === loadedPath)
+          if (newLi >= 0) {
+            loadedIndexRef.current = newLi
+            setPlaybackLoadedTrack({ sessionId, index: newLi })
+          } else {
+            loadedIndexRef.current = null
+            setPlaybackLoadedTrack(null)
+            setVideoPlaying(false)
+            setPreviewSrc(null)
+            setPreviewSyncKey((k) => k + 1)
+            void send({ type: 'programVacant' })
+          }
+        }
+
+        return {
+          ...cur,
+          paths,
+          currentIndex: Math.max(0, nextCi),
+        }
+      })
+    })
+  }, [patchFloatingSession, send])
+
   const takeHistorySnapshot = useCallback((): RegiaHistorySnapshot => {
     return {
       floatingSessions: deepCloneFloatingSessions(floatingSessionsRef.current),
@@ -1903,7 +2006,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     async (
       list: string[],
       sessionId: string,
-      opts?: { skipHistory?: boolean },
+      opts?: { skipHistory?: boolean; playlistWatchFolder?: string },
     ) => {
       if (!list.length) return
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
@@ -1915,14 +2018,25 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (!opts?.skipHistory) {
         recordUndoPoint()
       }
+      const wf =
+        typeof opts?.playlistWatchFolder === 'string' &&
+        opts.playlistWatchFolder.trim()
+          ? opts.playlistWatchFolder.trim()
+          : undefined
+      const watchPatch =
+        wf != null
+          ? { playlistWatchFolder: wf }
+          : CLEAR_PLAYLIST_WATCH_FOLDER
       const preserveSavedEdit = s0 != null && sessionHasLinkedPersistTarget(s0)
       if (preserveSavedEdit) {
         patchFloatingSession(sessionId, {
+          ...watchPatch,
           paths: list,
           currentIndex: 0,
         })
       } else {
         patchFloatingSession(sessionId, {
+          ...watchPatch,
           paths: list,
           currentIndex: 0,
           editingSavedPlaylistId: null,
@@ -4525,14 +4639,17 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     async (sessionId: string) => {
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
       if (s0?.playlistMode === 'launchpad') return
-      const list = await window.electronAPI.selectFolder()
-      if (!list?.length) return
+      const picked = await window.electronAPI.selectFolder()
+      if (!picked?.paths.length) return
       recordUndoPoint()
       const preserveTitle = s0 != null && sessionHasLinkedPersistTarget(s0)
-      await applyPathsList(list, sessionId, { skipHistory: true })
+      await applyPathsList(picked.paths, sessionId, {
+        skipHistory: true,
+        playlistWatchFolder: picked.folder,
+      })
       if (!preserveTitle) {
         patchFloatingSession(sessionId, {
-          playlistTitle: folderBasenameFromPaths(list),
+          playlistTitle: folderBasenameFromPaths(picked.paths),
         })
       }
     },
@@ -4562,7 +4679,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           }
           if (s.paths.length === 0 && merged.length > 0)
             titleFromFirstFolder = folderBasenameFromPaths(merged)
-          return { ...s, paths: merged }
+          return { ...s, ...CLEAR_PLAYLIST_WATCH_FOLDER, paths: merged }
         }),
       )
       if (titleFromFirstFolder)
@@ -4629,6 +4746,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         titleFromFirstFolder = folderBasenameFromPaths(next)
 
       patchFloatingSession(sessionId, {
+        ...CLEAR_PLAYLIST_WATCH_FOLDER,
         paths: next,
         currentIndex: nextCi,
         ...(titleFromFirstFolder
@@ -4696,7 +4814,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const next = [...prev.slice(0, index), ...prev.slice(index + 1)]
 
       if (next.length === 0) {
-        patchFloatingSession(sessionId, { paths: [], currentIndex: 0 })
+        patchFloatingSession(sessionId, {
+          ...CLEAR_PLAYLIST_WATCH_FOLDER,
+          paths: [],
+          currentIndex: 0,
+        })
         if (affectsPlayback) {
           setPreviewSrc(null)
           setPreviewSyncKey((k) => k + 1)
@@ -4729,6 +4851,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       }
 
       patchFloatingSession(sessionId, {
+        ...CLEAR_PLAYLIST_WATCH_FOLDER,
         paths: next,
         currentIndex: Math.max(0, nextCi),
       })
@@ -4802,7 +4925,12 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           loadedIndexRef.current = nli
           setPlaybackLoadedTrack({ sessionId: playbackSid, index: nli })
         }
-        return { ...s, paths: next, currentIndex: newCi }
+        return {
+          ...s,
+          ...CLEAR_PLAYLIST_WATCH_FOLDER,
+          paths: next,
+          currentIndex: newCi,
+        }
       })
     },
     [patchFloatingSession, recordUndoPoint],
@@ -4930,6 +5058,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           }
 
           const extraTo: Partial<FloatingPlaylistSession> = {
+            ...CLEAR_PLAYLIST_WATCH_FOLDER,
             paths: toPaths,
             currentIndex: Math.max(0, toCi),
           }
@@ -4941,9 +5070,15 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             const next = prev.map((s) => {
               if (s.id === srcSid) {
                 if (fromPaths.length === 0)
-                  return { ...s, paths: [], currentIndex: 0 }
+                  return {
+                    ...s,
+                    ...CLEAR_PLAYLIST_WATCH_FOLDER,
+                    paths: [],
+                    currentIndex: 0,
+                  }
                 return {
                   ...s,
+                  ...CLEAR_PLAYLIST_WATCH_FOLDER,
                   paths: fromPaths,
                   currentIndex: Math.max(0, fromCi),
                 }
@@ -5020,9 +5155,15 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           const next = prev.map((s) => {
             if (s.id === srcSid) {
               if (fromPaths.length === 0)
-                return { ...s, paths: [], currentIndex: 0 }
+                return {
+                  ...s,
+                  ...CLEAR_PLAYLIST_WATCH_FOLDER,
+                  paths: [],
+                  currentIndex: 0,
+                }
               return {
                 ...s,
+                ...CLEAR_PLAYLIST_WATCH_FOLDER,
                 paths: fromPaths,
                 currentIndex: Math.max(0, fromCi),
               }
@@ -5090,6 +5231,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           }
 
           const extraTo: Partial<FloatingPlaylistSession> = {
+            ...CLEAR_PLAYLIST_WATCH_FOLDER,
             paths: toPaths,
             currentIndex: Math.max(0, toCi),
           }

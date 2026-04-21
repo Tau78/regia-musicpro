@@ -13,8 +13,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toFileUrl: (absPath: string): Promise<string> =>
     ipcRenderer.invoke('util:toFileUrl', absPath),
 
-  selectFolder: (): Promise<string[] | null> =>
-    ipcRenderer.invoke('dialog:selectFolder'),
+  selectFolder: (): Promise<
+    { folder: string; paths: string[] } | null
+  > => ipcRenderer.invoke('dialog:selectFolder'),
+
+  playlistFolderWatchStart: (
+    sessionId: string,
+    folderPath: string,
+  ): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('playlist-folder-watch:start', sessionId, folderPath),
+
+  playlistFolderWatchStop: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('playlist-folder-watch:stop', sessionId),
+
+  onPlaylistFolderMediaPathsUpdated: (
+    handler: (msg: {
+      sessionId: string
+      folder: string
+      paths: string[]
+    }) => void,
+  ): (() => void) => {
+    const listener = (
+      _: Electron.IpcRendererEvent,
+      msg: { sessionId: string; folder: string; paths: string[] },
+    ) => handler(msg)
+    ipcRenderer.on('playlist-folder-watch:updated', listener)
+    return () =>
+      ipcRenderer.removeListener('playlist-folder-watch:updated', listener)
+  },
 
   selectPlaylistWatermarkPng: (): Promise<string | null> =>
     ipcRenderer.invoke('dialog:selectPlaylistWatermarkPng'),

@@ -9,7 +9,23 @@ declare global {
       launchpadBaseKitPaths: () => Promise<string[]>
       launchpadSfxKitPaths: () => Promise<string[]>
       toFileUrl: (absPath: string) => Promise<string>
-      selectFolder: () => Promise<string[] | null>
+      selectFolder: () => Promise<{
+        folder: string
+        paths: string[]
+      } | null>
+      /** Aggiorna l’elenco file quando cambia il contenuto della cartella (solo cartella aperta con «Apri cartella»). */
+      playlistFolderWatchStart: (
+        sessionId: string,
+        folderPath: string,
+      ) => Promise<{ ok: boolean }>
+      playlistFolderWatchStop: (sessionId: string) => Promise<void>
+      onPlaylistFolderMediaPathsUpdated: (
+        handler: (msg: {
+          sessionId: string
+          folder: string
+          paths: string[]
+        }) => void,
+      ) => () => void
       /** Dialog singolo file PNG per watermark playlist in uscita. */
       selectPlaylistWatermarkPng: () => Promise<string | null>
       /** Dialog multi-file (stesse estensioni della cartella). */
