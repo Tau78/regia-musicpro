@@ -2378,7 +2378,8 @@ function dismissDetachedWindowsUpdateWaitWindow(): void {
 /**
  * Windows + NSIS silenzioso: dopo `quitAndInstall` non resta alcuna finestra Electron finché
  * l'installer non ha finito. HTA + `mshta` (processo separato): barra a 3 fasi basata sul processo
- * REGIA MUSICPRO.exe (chiusura → installazione → riavvio). Non riflette byte copiati (NSIS non lo espone).
+ * REGIA MUSICPRO.exe (chiusura → installazione → riavvio) via WMI, senza cmd/tasklist (niente console in loop).
+ * Non riflette byte copiati (NSIS non lo espone).
  */
 function spawnDetachedWindowsUpdateWaitWindow(): void {
   if (process.platform !== 'win32') return
@@ -2425,22 +2426,27 @@ var stage = 0;
 var done = false;
 var t0 = new Date().getTime();
 var img = "${exeImage.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}";
+var wmiSvc = null;
+function wmiRootService() {
+  if (wmiSvc != null) return wmiSvc;
+  var loc = new ActiveXObject("WbemScripting.SWbemLocator");
+  wmiSvc = loc.ConnectServer(".", "root\\\\cimv2");
+  return wmiSvc;
+}
 
 function regiaRunning() {
   try {
-    var sh = new ActiveXObject("WScript.Shell");
-    var fso = new ActiveXObject("Scripting.FileSystemObject");
-    var tmp = sh.ExpandEnvironmentStrings("%TEMP%") + "\\\\REGIA-MUSICPRO-tl.txt";
-    var cmd = 'cmd /c tasklist /FI "IMAGENAME eq ' + img + '" /NH > "' + tmp + '" 2>&1';
-    // 0 = finestra nascosta; Exec+tasklist apriva una console a ogni poll (loop di finestre).
-    sh.Run(cmd, 0, true);
-    if (!fso.FileExists(tmp)) return false;
-    var ts = fso.OpenTextFile(tmp, 1);
-    var out = ts.ReadAll();
-    ts.Close();
-    try { fso.DeleteFile(tmp); } catch (edx) {}
-    return out.indexOf(img) >= 0;
-  } catch (e) { return false; }
+    var safe = img.split("'").join("''");
+    var q = "SELECT Name FROM Win32_Process WHERE Name='" + safe + "'";
+    var coll = wmiRootService().ExecQuery(q);
+    var e = new Enumerator(coll);
+    for (; !e.atEnd(); e.moveNext()) {
+      return true;
+    }
+    return false;
+  } catch (ex) {
+    return false;
+  }
 }
 
 function setBar(pct, line) {
