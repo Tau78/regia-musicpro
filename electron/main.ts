@@ -2343,8 +2343,8 @@ function setupIpc() {
 
 /**
  * Windows + NSIS silenzioso: dopo `quitAndInstall` non resta alcuna finestra Electron finché
- * l'installer non ha finito. Apriamo una HTA con `mshta` (processo separato) così l'utente
- * vede ancora qualcosa durante l'attesa; si può chiudere a mano dopo la riapertura dell'app.
+ * l'installer non ha finito. HTA + `mshta` (processo separato): card, barra animata e messaggi leggeri
+ * (indeterminati, non riflettono il vero avanzamento NSIS). Chiudibile a mano dopo la riapertura dell'app.
  */
 function spawnDetachedWindowsUpdateWaitWindow(): void {
   if (process.platform !== 'win32') return
@@ -2359,26 +2359,60 @@ function spawnDetachedWindowsUpdateWaitWindow(): void {
 <head>
 <meta charset="utf-8" />
 <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-<title>REGIA MUSICPRO — aggiornamento</title>
+<title>REGIA MUSICPRO</title>
 <HTA:APPLICATION ID="htaUpd" APPLICATIONNAME="REGIAMUSICPROUpdateWait" BORDER="dialog" CAPTION="yes" MAXIMIZEBUTTON="no" MINIMIZEBUTTON="yes" SHOWINTASKBAR="yes" SINGLEINSTANCE="yes" SYSMENU="yes" SCROLL="no" WINDOWSTATE="normal" />
 <style type="text/css">
-  body { font: 15px "Segoe UI", system-ui, sans-serif; margin: 18px 20px; color: #111; }
-  h1 { font-size: 17px; margin: 0 0 10px; font-weight: 600; }
-  p { margin: 8px 0; line-height: 1.45; }
-  .muted { color: #444; font-size: 13px; }
-  button { margin-top: 14px; padding: 6px 14px; font: 13px "Segoe UI", sans-serif; cursor: pointer; }
+  body { margin: 0; padding: 18px 20px 16px; font: 15px "Segoe UI", Tahoma, sans-serif; color: #1e1b4b; background: #eef2ff; }
+  #card { background: #fff; border: 1px solid #c7d2fe; border-radius: 16px; padding: 22px 22px 18px; box-shadow: 0 8px 24px rgba(99,102,241,0.12); }
+  h1 { font-size: 18px; margin: 0 0 6px; font-weight: 600; color: #312e81; letter-spacing: -0.02em; }
+  .tagline { font-size: 13px; color: #6366f1; margin: 0 0 14px; font-weight: 600; }
+  p { margin: 10px 0 0; line-height: 1.5; color: #334155; }
+  .muted { font-size: 12px; color: #64748b; margin-top: 12px; }
+  .track { position: relative; height: 14px; margin: 18px 0 6px; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
+  #progFill { position: absolute; top: 0; left: -40%; width: 38%; height: 100%; border-radius: 999px; background: #6366f1; }
+  .dots { margin-top: 4px; font-size: 12px; color: #818cf8; height: 16px; }
+  button { margin-top: 16px; padding: 8px 18px; font: 13px "Segoe UI", sans-serif; cursor: pointer;
+    background: #4f46e5; color: #fff; border: none; border-radius: 10px; }
+  button:hover { background: #4338ca; }
 </style>
 </head>
 <body>
-  <h1>Installazione aggiornamento</h1>
-  <p>L'installer sta aggiornando REGIA MUSICPRO in secondo piano. L'app si riaprirà da sola al termine.</p>
-  <p class="muted">Se compare il consenso di Windows (UAC), confermalo. Puoi chiudere questa finestra dopo che l'app è tornata.</p>
-  <button onclick="self.close()">Chiudi</button>
+  <div id="card">
+    <h1>Un attimo in cabina di regia</h1>
+    <p class="tagline">Stiamo sistemando la nuova versione</p>
+    <div class="track"><div id="progFill"></div></div>
+    <p class="dots" id="dots">Preparo il palco</p>
+    <p>Tra poco sei di nuovo on air. Resta qui: questa finestrella ti tiene compagnia mentre Windows fa il resto.</p>
+    <p class="muted">Se Windows chiede un permesso in più, va bene dire sì. Puoi chiudere questa finestra quando il programma è tornato.</p>
+    <button onclick="self.close()">Va bene</button>
+  </div>
 <script language="JScript">
+var pos = -42;
+var dotStep = 0;
+var dotMsgs = new Array("Preparo il palco", "Sintonizzo i riflettori", "Quasi in onda…");
+function animProgress() {
   try {
-    window.resizeTo(460, 280);
-    window.moveTo(Math.max(0, (screen.availWidth - 460) / 2), Math.max(0, (screen.availHeight - 280) / 2));
-  } catch (e) {}
+    var el = document.getElementById("progFill");
+    if (el) {
+      pos += 1.05;
+      if (pos > 108) pos = -42;
+      el.style.left = pos + "%";
+    }
+    dotStep++;
+    if (dotStep % 28 == 0) {
+      var d = document.getElementById("dots");
+      if (d) {
+        var idx = Math.floor((dotStep / 28) % 3);
+        d.innerText = dotMsgs[idx];
+      }
+    }
+  } catch (ex) {}
+}
+try {
+  window.resizeTo(520, 360);
+  window.moveTo(Math.max(0, (screen.availWidth - 520) / 2), Math.max(0, (screen.availHeight - 360) / 2));
+} catch (e0) {}
+window.setInterval(animProgress, 42);
 </script>
 </body>
 </html>`
@@ -2416,15 +2450,15 @@ function setupAutoUpdater(): void {
     // NSIS: `true` = `/S` (nessuna procedura guidata in aggiornamento); `true` = `--force-run` riapre l'app.
     // Può restare un solo prompt UAC di Windows se serve elevazione (non controllabile dall'app).
     const detailWin =
-      "Si aprirà anche una piccola finestra «Installazione aggiornamento» che resta visibile mentre l'installer lavora: l'app si chiude e si riapre da sola al termine. Se compare Windows (UAC), confermalo."
+      'REGIA MUSICPRO si chiude solo per qualche secondo mentre si aggiorna, poi riparte da solo. Si aprirà una piccola finestra allegra con una barra colorata che balla mentre aspetti. Se Windows chiede conferma, accetta pure.'
     const detailDefault =
-      "L'app si chiude, l'installazione avviene in secondo piano e si riapre da sola. Se compare il consenso di Windows (UAC), confermalo una volta."
+      "Questa finestra si chiude un attimo, l'aggiornamento fa il suo lavoro e poi tutto riparte. Se il sistema chiede conferma, va bene dire sì."
     const opts = {
       type: 'info' as const,
-      title: 'Aggiornamento',
-      message: `È pronta la versione ${info.version}.`,
+      title: 'Novità in arrivo',
+      message: `La versione ${info.version} è pronta.`,
       detail: process.platform === 'win32' ? detailWin : detailDefault,
-      buttons: ['Installa e riapri'],
+      buttons: ['Ok, aggiorna!'],
       defaultId: 0,
     }
     const owner =
