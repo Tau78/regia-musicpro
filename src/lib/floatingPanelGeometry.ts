@@ -5,7 +5,7 @@ export type PanelSize = { width: number; height: number }
 export type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
 /** Hit invisibile sul bordo del pannello (px), senza elementi dedicati in layout. */
-export const PANEL_RESIZE_BORDER_HIT_PX = 6
+export const PANEL_RESIZE_BORDER_HIT_PX = 12
 
 /**
  * Rileva se il puntatore è sul bordo del pannello per il ridimensionamento.

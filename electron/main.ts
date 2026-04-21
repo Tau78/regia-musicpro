@@ -8,7 +8,7 @@ import {
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import fs from 'node:fs'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import type { PlaybackCommand } from './types'
 import { encodeSolidPngRgba, parseHexRgb } from './chalkboardPng'
@@ -1526,7 +1526,7 @@ function setupIpc() {
       ...(defaultPath ? { defaultPath } : {}),
     })
     if (canceled || !filePaths[0]) return null
-    const dir = filePaths[0]
+    const dir = path.resolve(filePaths[0])
     const entries = fs.readdirSync(dir, { withFileTypes: true })
     const paths = entries
       .filter((e) => e.isFile() && MEDIA_EXT.test(e.name))
@@ -1538,7 +1538,7 @@ function setupIpc() {
         }),
       )
     writeDialogLastDirs({ playlistFolder: dir })
-    return paths
+    return { folder: dir, paths }
   })
 
   ipcMain.handle('dialog:selectPlaylistWatermarkPng', async () => {
@@ -2341,10 +2341,44 @@ function setupIpc() {
   })
 }
 
+const WINDOWS_UPDATE_WAIT_PID_FILE = 'update-wait-mshta.pid'
+/** Nome immagine processo in `tasklist` (deve coincidere con productName + .exe in electron-builder). */
+const WINDOWS_REGIA_TASKLIST_IMAGE = 'REGIA MUSICPRO.exe'
+
+/**
+ * Chiude la finestra HTA di attesa aggiornamento (se ancora viva) e rimuove il file PID.
+ * Chiamare all'avvio dell'app dopo un aggiornamento; l'HTA può anche chiudersi da sola quando rileva il nuovo processo.
+ */
+function dismissDetachedWindowsUpdateWaitWindow(): void {
+  if (process.platform !== 'win32') return
+  const pidPath = path.join(app.getPath('userData'), WINDOWS_UPDATE_WAIT_PID_FILE)
+  let raw = ''
+  try {
+    raw = fs.readFileSync(pidPath, 'utf8').trim()
+  } catch {
+    return
+  }
+  try {
+    fs.unlinkSync(pidPath)
+  } catch {
+    /* assente o bloccato */
+  }
+  const pid = parseInt(raw, 10)
+  if (!Number.isFinite(pid) || pid <= 0) return
+  try {
+    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+  } catch {
+    /* processo già terminato */
+  }
+}
+
 /**
  * Windows + NSIS silenzioso: dopo `quitAndInstall` non resta alcuna finestra Electron finché
- * l'installer non ha finito. HTA + `mshta` (processo separato): card, barra animata e messaggi leggeri
- * (indeterminati, non riflettono il vero avanzamento NSIS). Chiudibile a mano dopo la riapertura dell'app.
+ * l'installer non ha finito. HTA + `mshta` (processo separato): barra a 3 fasi basata sul processo
+ * REGIA MUSICPRO.exe (chiusura → installazione → riavvio). Non riflette byte copiati (NSIS non lo espone).
  */
 function spawnDetachedWindowsUpdateWaitWindow(): void {
   if (process.platform !== 'win32') return
@@ -2355,6 +2389,7 @@ function spawnDetachedWindowsUpdateWaitWindow(): void {
   if (!fs.existsSync(mshta)) return
 
   const htaPath = path.join(app.getPath('temp'), 'REGIA-MUSICPRO-update-wait.hta')
+  const exeImage = WINDOWS_REGIA_TASKLIST_IMAGE
   const hta = `<html>
 <head>
 <meta charset="utf-8" />
@@ -2362,57 +2397,89 @@ function spawnDetachedWindowsUpdateWaitWindow(): void {
 <title>REGIA MUSICPRO</title>
 <HTA:APPLICATION ID="htaUpd" APPLICATIONNAME="REGIAMUSICPROUpdateWait" BORDER="dialog" CAPTION="yes" MAXIMIZEBUTTON="no" MINIMIZEBUTTON="yes" SHOWINTASKBAR="yes" SINGLEINSTANCE="yes" SYSMENU="yes" SCROLL="no" WINDOWSTATE="normal" />
 <style type="text/css">
-  body { margin: 0; padding: 18px 20px 16px; font: 15px "Segoe UI", Tahoma, sans-serif; color: #1e1b4b; background: #eef2ff; }
-  #card { background: #fff; border: 1px solid #c7d2fe; border-radius: 16px; padding: 22px 22px 18px; box-shadow: 0 8px 24px rgba(99,102,241,0.12); }
-  h1 { font-size: 18px; margin: 0 0 6px; font-weight: 600; color: #312e81; letter-spacing: -0.02em; }
-  .tagline { font-size: 13px; color: #6366f1; margin: 0 0 14px; font-weight: 600; }
-  p { margin: 10px 0 0; line-height: 1.5; color: #334155; }
-  .muted { font-size: 12px; color: #64748b; margin-top: 12px; }
-  .track { position: relative; height: 14px; margin: 18px 0 6px; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
-  #progFill { position: absolute; top: 0; left: -40%; width: 38%; height: 100%; border-radius: 999px; background: #6366f1; }
-  .dots { margin-top: 4px; font-size: 12px; color: #818cf8; height: 16px; }
-  button { margin-top: 16px; padding: 8px 18px; font: 13px "Segoe UI", sans-serif; cursor: pointer;
+  html { overflow: hidden !important; height: 100%; }
+  body { margin: 0; padding: 16px 18px 14px; font: 14px "Segoe UI", Tahoma, sans-serif; color: #1e1b4b; background: #eef2ff; overflow: hidden !important; height: 100%; }
+  #card { width: 418px; background: #fff; border: 1px solid #c7d2fe; border-radius: 16px; padding: 18px 18px 14px; box-shadow: 0 8px 24px rgba(99,102,241,0.12); }
+  h1 { font-size: 17px; margin: 0 0 4px; font-weight: 600; color: #312e81; letter-spacing: -0.02em; }
+  .tagline { font-size: 12px; color: #6366f1; margin: 0 0 12px; font-weight: 600; }
+  .steptxt { font-size: 12px; color: #475569; margin: 10px 0 0; line-height: 1.45; }
+  .track { height: 12px; margin: 12px 0 0; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
+  #barFill { height: 100%; width: 33%; border-radius: 999px; background: #6366f1; }
+  .muted { font-size: 11px; color: #64748b; margin-top: 10px; line-height: 1.4; }
+  button { margin-top: 12px; padding: 7px 16px; font: 12px "Segoe UI", sans-serif; cursor: pointer;
     background: #4f46e5; color: #fff; border: none; border-radius: 10px; }
   button:hover { background: #4338ca; }
 </style>
 </head>
-<body>
+<body scroll="no">
   <div id="card">
     <h1>Un attimo in cabina di regia</h1>
-    <p class="tagline">Stiamo sistemando la nuova versione</p>
-    <div class="track"><div id="progFill"></div></div>
-    <p class="dots" id="dots">Preparo il palco</p>
-    <p>Tra poco sei di nuovo on air. Resta qui: questa finestrella ti tiene compagnia mentre Windows fa il resto.</p>
-    <p class="muted">Se Windows chiede un permesso in più, va bene dire sì. Puoi chiudere questa finestra quando il programma è tornato.</p>
-    <button onclick="self.close()">Va bene</button>
+    <p class="tagline">Aggiornamento in corso</p>
+    <div class="track"><div id="barFill"></div></div>
+    <p class="steptxt" id="stepLine">—</p>
+    <p class="muted">La barra segue tre fasi reali (chiusura, installazione, riavvio), non la quantità di file copiati. Si chiude da sola quando il programma torna. Puoi chiuderla anche a mano.</p>
+    <button onclick="self.close()">Chiudi</button>
   </div>
 <script language="JScript">
-var pos = -42;
-var dotStep = 0;
-var dotMsgs = new Array("Preparo il palco", "Sintonizzo i riflettori", "Quasi in onda…");
-function animProgress() {
+var stage = 0;
+var done = false;
+var t0 = new Date().getTime();
+var img = "${exeImage.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}";
+
+function regiaRunning() {
   try {
-    var el = document.getElementById("progFill");
-    if (el) {
-      pos += 1.05;
-      if (pos > 108) pos = -42;
-      el.style.left = pos + "%";
-    }
-    dotStep++;
-    if (dotStep % 28 == 0) {
-      var d = document.getElementById("dots");
-      if (d) {
-        var idx = Math.floor((dotStep / 28) % 3);
-        d.innerText = dotMsgs[idx];
+    var sh = new ActiveXObject("WScript.Shell");
+    var cmd = 'cmd /c tasklist /FI "IMAGENAME eq ' + img + '" /NH';
+    var ex = sh.Exec(cmd);
+    while (ex.Status == 0) { WScript.Sleep(80); }
+    var out = ex.StdOut.ReadAll();
+    return out.indexOf(img) >= 0;
+  } catch (e) { return false; }
+}
+
+function setBar(pct, line) {
+  try {
+    var b = document.getElementById("barFill");
+    var t = document.getElementById("stepLine");
+    if (b) b.style.width = pct + "%";
+    if (t) t.innerText = line;
+  } catch (e2) {}
+}
+
+function tick() {
+  try {
+    if (done) return;
+    var run = regiaRunning();
+    if (stage == 0) {
+      if (run) {
+        setBar(33, "1 di 3 · Chiusura del programma in corso…");
+      } else {
+        stage = 1;
+        setBar(66, "2 di 3 · Installazione e riavvio…");
       }
+    } else if (stage == 1) {
+      if (run) {
+        stage = 2;
+        done = true;
+        setBar(100, "3 di 3 · Programma di nuovo in esecuzione.");
+        window.setTimeout(function() { try { self.close(); } catch (e3) {} }, 900);
+        return;
+      }
+      setBar(66, "2 di 3 · Installazione e riavvio…");
+    }
+    if (new Date().getTime() - t0 > 600000) {
+      done = true;
+      try { self.close(); } catch (e4) {}
     }
   } catch (ex) {}
 }
+
 try {
-  window.resizeTo(520, 360);
-  window.moveTo(Math.max(0, (screen.availWidth - 520) / 2), Math.max(0, (screen.availHeight - 360) / 2));
+  window.resizeTo(468, 302);
+  window.moveTo(Math.max(0, (screen.availWidth - 468) / 2), Math.max(0, (screen.availHeight - 302) / 2));
 } catch (e0) {}
-window.setInterval(animProgress, 42);
+tick();
+window.setInterval(tick, 450);
 </script>
 </body>
 </html>`
@@ -2423,12 +2490,20 @@ window.setInterval(animProgress, 42);
     return
   }
 
+  const pidPath = path.join(app.getPath('userData'), WINDOWS_UPDATE_WAIT_PID_FILE)
   try {
     const child = spawn(mshta, [htaPath], {
       detached: true,
       stdio: 'ignore',
       windowsHide: false,
     })
+    if (typeof child.pid === 'number' && child.pid > 0) {
+      try {
+        fs.writeFileSync(pidPath, String(child.pid), 'utf8')
+      } catch {
+        /* userData non scrivibile: niente chiusura automatica da main al prossimo avvio */
+      }
+    }
     child.unref()
   } catch {
     /* mshta non avviabile (policy, ecc.) */
@@ -2450,7 +2525,7 @@ function setupAutoUpdater(): void {
     // NSIS: `true` = `/S` (nessuna procedura guidata in aggiornamento); `true` = `--force-run` riapre l'app.
     // Può restare un solo prompt UAC di Windows se serve elevazione (non controllabile dall'app).
     const detailWin =
-      'REGIA MUSICPRO si chiude solo per qualche secondo mentre si aggiorna, poi riparte da solo. Si aprirà una piccola finestra allegra con una barra colorata che balla mentre aspetti. Se Windows chiede conferma, accetta pure.'
+      "REGIA MUSICPRO si chiude un attimo mentre si aggiorna. Si aprirà una finestrina con una barra che segue tre fasi reali (chiusura, installazione, riavvio del programma), poi si chiude da sola quando sei di nuovo in esecuzione. Se Windows chiede conferma, accetta pure."
     const detailDefault =
       "Questa finestra si chiude un attimo, l'aggiornamento fa il suo lavoro e poi tutto riparte. Se il sistema chiede conferma, va bene dire sì."
     const opts = {
@@ -2491,6 +2566,7 @@ function setupAutoUpdater(): void {
 }
 
 app.whenReady().then(() => {
+  dismissDetachedWindowsUpdateWaitWindow()
   setupIpc()
   /* Regia prima: `ensureOutputIdleCap` scrive su disco prima che l’uscita faccia il primo pull. */
   regiaWindow = createRegiaWindow()

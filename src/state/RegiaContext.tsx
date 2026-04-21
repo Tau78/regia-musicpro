@@ -4640,7 +4640,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
       if (s0?.playlistMode === 'launchpad') return
       const picked = await window.electronAPI.selectFolder()
-      if (!picked?.paths.length) return
+      if (!picked?.paths?.length) return
       recordUndoPoint()
       const preserveTitle = s0 != null && sessionHasLinkedPersistTarget(s0)
       await applyPathsList(picked.paths, sessionId, {

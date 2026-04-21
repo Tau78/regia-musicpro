@@ -14,6 +14,7 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from 'react'
+import { createPortal } from 'react-dom'
 import {
   applyResizeDelta,
   clampPanelInViewport,
@@ -76,6 +77,7 @@ import { useRegia, type LoopMode } from '../state/RegiaContext.tsx'
 import MediaDurationRing from './MediaDurationRing.tsx'
 import RegiaPanelHintHost from './RegiaPanelHintHost.tsx'
 import ChalkboardPanel from './ChalkboardPanel.tsx'
+import { PlaylistChromeOverflowRow } from './PlaylistChromeOverflowRow.tsx'
 import {
   cloneChalkboardPlacementsByBank,
   DEFAULT_FLOATING_PANEL_SIZE,
@@ -571,7 +573,7 @@ function IconOutputSpeaker({ muted }: { muted: boolean }) {
  *
  * IMPORTANTE: in `onPanelChromePointerDownCapture` questa funzione va valutata
  * **prima** di `hitTestPanelResizeEdge`. Altrimenti un clic sulla lista che cade
- * nella fascia resize (es. ultima riga nei 6px inferiori) cattura il pointer sul
+ * nella fascia resize (es. ultima riga nei 12px inferiori) cattura il pointer sul
  * root e il riordino righe (long-press + document pointer listeners) smette di funzionare.
  */
 function isFloatingPlaylistPanelDragBlockedTarget(
@@ -698,6 +700,20 @@ function computePanelHelpPopoverLayout(
   }
   if (left + maxW > bounds.right) {
     left = Math.max(bounds.left, bounds.right - maxW)
+  }
+
+  /** Ancoraggio viewport reale (il popover è in `document.body`). */
+  const vvPad = 8
+  const vv = globalThis.visualViewport
+  const screenRight = vv
+    ? vv.offsetLeft + (vv.width > 0 ? vv.width : globalThis.innerWidth) - vvPad
+    : globalThis.innerWidth - vvPad
+  const screenLeft = vv ? vv.offsetLeft + vvPad : vvPad
+  if (left + maxW > screenRight) {
+    left = Math.max(screenLeft, screenRight - maxW)
+  }
+  if (left < screenLeft) {
+    left = screenLeft
   }
 
   return {
@@ -1104,6 +1120,20 @@ export default function FloatingPlaylist({
     session?.panelSize ?? DEFAULT_FLOATING_PANEL_SIZE
   const chalkboardFullscreen = session?.chalkboardFullscreen === true
   const panelLocked = session?.panelLocked === true
+  /** Cartella osservata: elenco ancora allineato alla cartella (si spegne se modifichi l’elenco a mano). */
+  const folderWatchLinked = Boolean(
+    session &&
+      !isLaunchpad &&
+      !isChalkboard &&
+      session.playlistWatchFolder?.trim(),
+  )
+  const folderOpenBtnClass = `floating-playlist-icon-btn floating-playlist-folder-open-btn${folderWatchLinked ? ' is-folder-watch-linked' : ''}`
+  const folderOpenBtnTitle = folderWatchLinked
+    ? 'Cartella collegata: l’elenco si aggiorna automaticamente dal disco. Clic per aprire un’altra cartella.'
+    : 'Apri cartella'
+  const folderOpenBtnAriaLabel = folderWatchLinked
+    ? 'Cartella collegata: aggiornamento automatico dal disco. Scegli un’altra cartella'
+    : 'Apri cartella'
 
   const chalkboardPreFullscreenRef = useRef<{
     pos: { x: number; y: number }
@@ -2992,146 +3022,149 @@ export default function FloatingPlaylist({
               >
                 ?
               </button>
-              {panelHelpOpen ? (
-                <div
-                  ref={panelHelpPopoverRef}
-                  id={panelHelpPanelId}
-                  className="floating-playlist-panel-help-popover"
-                  role="dialog"
-                  aria-label={
-                    isLaunchpad
-                      ? 'Istruzioni Launchpad'
-                      : isChalkboard
-                        ? 'Istruzioni Chalkboard'
-                        : 'Istruzioni playlist'
-                  }
-                  onMouseDown={(ev) => ev.stopPropagation()}
-                  style={
-                    panelHelpLayout
-                      ? ({
-                          position: 'fixed',
-                          top: panelHelpLayout.top,
-                          left: panelHelpLayout.left,
-                          width: panelHelpLayout.width,
-                          maxHeight: panelHelpLayout.maxHeight,
-                          zIndex: zIndex + 30,
-                        } satisfies CSSProperties)
-                      : ({
-                          position: 'fixed',
-                          left: 0,
-                          top: 0,
-                          width: panelHelpMeasureWidth,
-                          maxHeight: 'none',
-                          zIndex: zIndex + 30,
-                          opacity: 0,
-                          pointerEvents: 'none',
-                        } satisfies CSSProperties)
-                  }
-                >
-                  {isChalkboard ? (
-                    <>
-                      Quattro banchi (tab 1–4) con lavagna alla risoluzione uscita:
-                      pennello, gomma, testo, immagine da file. «In uscita» sovrappone
-                      il banco corrente al video sul monitor 2. Il pulsante con angoli
-                      accanto a «Riduci» apre la lavagna a tutto schermo (Esc per
-                      uscire, tranne mentre scrivi nel campo testo). Salva su disco con
-                      il pulsante disco in barra (come playlist e launchpad).
-                    </>
-                  ) : isLaunchpad ? (
-                    <>
-                      Griglia 4×4 (pagine 1–{LAUNCHPAD_BANK_COUNT}, 16 pad ciascuna):
-                      slot vuoto → dialog file · trascina file su slot o griglia ·
-                      Maiusc+clic file · Alt+clic colore ·{' '}
-                      {launchPadCueEnabled
-                        ? 'tap breve = play intero · tenere premuto = CUE (audio fino al rilascio)'
-                        : 'clic = play intero (CUE disattivato in Impostazioni)'}
-                      {' '}
-                      · tasto destro: gain / tasto / svuota · tasto: Play sempre play,
-                      Toggle play/stop
-                      {launchPadCueEnabled
-                        ? ' · tenere premuto il tasto = CUE (senza modificatori)'
-                        : ''}{' '}
-                      · puntina tra «?» e Riduci: apre questo pannello in una{' '}
-                      <strong>finestra Electron separata</strong> sul desktop (anche
-                      fuori dalla finestra Regia; resta visibile se riduci solo la
-                      regia). Chiudendo quella finestra il pannello torna nella Regia.
-                      Se nascondi <strong>tutta</strong> l’applicazione (es. «Nascondi»
-                      su macOS), il sistema nasconde anche quella finestra.
-                    </>
-                  ) : (
-                    <div className="floating-playlist-panel-help-popover-stack">
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Titolo</strong> — Modifica il nome nel campo in alto;
-                        uscendo dal campo o premendo Invio il titolo viene aggiornato
-                        nello stato del pannello.
-                      </p>
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Riduci / Chiudi</strong> — Riduci mostra solo la barra
-                        compatta con i comandi principali. Chiudi rimuove questo
-                        pannello dalla plancia.
-                      </p>
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Puntina (finestra separata)</strong> — Con la puntina
-                        attiva questo pannello passa in una <strong>finestra Electron
-                        propria</strong> sul desktop: puoi spostarla anche{' '}
-                        <strong>fuori dalla finestra Regia</strong> e resta utilizzabile
-                        anche se <strong>riduci a icona solo la regia principale</strong>.
-                        Chiudi la finestra del pannello per riportarlo dentro la Regia.
-                        Se nascondi <strong>tutta</strong> l’app (Dock / «Nascondi» su
-                        macOS), il sistema nasconde tutte le sue finestre.
-                      </p>
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Cartella e Aggiungi</strong> — Cartella apre una
-                        cartella sul disco per caricare i file. Aggiungi apre il
-                        dialog per scegliere singoli media. Puoi anche{' '}
-                        <strong>trascinare file</strong> (audio, video, immagini)
-                        sull&apos;area dell&apos;elenco.
-                      </p>
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Colore tema</strong> — Clic sul pulsante colore per
-                        il selettore. <strong>Alt+clic</strong> ripristina il tema
-                        predefinito del pannello.
-                      </p>
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Salva (disco)</strong> — Sovrascrive la voce in
-                        PLAYLIST che hai aperto con Carica; il pulsante si accende
-                        solo se ci sono modifiche non ancora salvate su quel file.
-                      </p>
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Annulla / Ripristina</strong> — Come in plancia:{' '}
-                        <kbd>⌘Z</kbd> / <kbd>Ctrl+Z</kbd> e{' '}
-                        <kbd>⌘⇧Z</kbd> / <kbd>Ctrl+⇧Z</kbd>.
-                      </p>
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Crossfade</strong> — Dissolvenza incrociata in uscita
-                        tra due brani <em>dello stesso tipo</em> (solo video↔video
-                        o immagine↔immagine). Passando il mouse sul pulsante crossfade
-                        compare il promemoria sui tipi ammessi.
-                      </p>
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Volume e mute pannello</strong> — Il cursore
-                        moltiplica il volume globale in alto. Il mute silenzia solo
-                        l&apos;uscita sul secondo schermo per i brani avviati da{' '}
-                        <em>questa</em> playlist (si somma al mute globale).
-                      </p>
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Loop</strong> — <em>Off</em>: a fine brano segue la
-                        logica di riproduzione corrente. <em>File</em>: ripete il clip
-                        selezionato. <em>Lista</em>: dall&apos;ultimo brano torna al
-                        primo.
-                      </p>
-                      <p className="floating-playlist-panel-help-popover-p">
-                        <strong>Elenco brani</strong> — Clic su una riga per
-                        caricare/riprodurre quel file. <strong>Tieni premuto</strong>{' '}
-                        su una riga e trascina per <strong>riordinare</strong>. Le
-                        icone sulla riga servono a rimuovere il brano dalla playlist.
-                        Con la lista a fuoco puoi usare le <strong>frecce</strong> per
-                        spostarti tra le righe.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              ) : null}
+              {panelHelpOpen
+                ? createPortal(
+                    <div
+                      ref={panelHelpPopoverRef}
+                      id={panelHelpPanelId}
+                      className="floating-playlist-panel-help-popover"
+                      role="dialog"
+                      aria-label={
+                        isLaunchpad
+                          ? 'Istruzioni Launchpad'
+                          : isChalkboard
+                            ? 'Istruzioni Chalkboard'
+                            : 'Istruzioni playlist'
+                      }
+                      onMouseDown={(ev) => ev.stopPropagation()}
+                      style={
+                        panelHelpLayout
+                          ? ({
+                              position: 'fixed',
+                              top: panelHelpLayout.top,
+                              left: panelHelpLayout.left,
+                              width: panelHelpLayout.width,
+                              maxHeight: panelHelpLayout.maxHeight,
+                              zIndex: zIndex + 30,
+                            } satisfies CSSProperties)
+                          : ({
+                              position: 'fixed',
+                              left: 0,
+                              top: 0,
+                              width: panelHelpMeasureWidth,
+                              maxHeight: 'none',
+                              zIndex: zIndex + 30,
+                              opacity: 0,
+                              pointerEvents: 'none',
+                            } satisfies CSSProperties)
+                      }
+                    >
+                      {isChalkboard ? (
+                        <>
+                          Quattro banchi (tab 1–4) con lavagna alla risoluzione uscita:
+                          pennello, gomma, testo, immagine da file. «In uscita» sovrappone
+                          il banco corrente al video sul monitor 2. Il pulsante con angoli
+                          accanto a «Riduci» apre la lavagna a tutto schermo (Esc per
+                          uscire, tranne mentre scrivi nel campo testo). Salva su disco con
+                          il pulsante disco in barra (come playlist e launchpad).
+                        </>
+                      ) : isLaunchpad ? (
+                        <>
+                          Griglia 4×4 (pagine 1–{LAUNCHPAD_BANK_COUNT}, 16 pad ciascuna):
+                          slot vuoto → dialog file · trascina file su slot o griglia ·
+                          Maiusc+clic file · Alt+clic colore ·{' '}
+                          {launchPadCueEnabled
+                            ? 'tap breve = play intero · tenere premuto = CUE (audio fino al rilascio)'
+                            : 'clic = play intero (CUE disattivato in Impostazioni)'}
+                          {' '}
+                          · tasto destro: gain / tasto / svuota · tasto: Play sempre play,
+                          Toggle play/stop
+                          {launchPadCueEnabled
+                            ? ' · tenere premuto il tasto = CUE (senza modificatori)'
+                            : ''}{' '}
+                          · puntina tra «?» e Riduci: apre questo pannello in una{' '}
+                          <strong>finestra Electron separata</strong> sul desktop (anche
+                          fuori dalla finestra Regia; resta visibile se riduci solo la
+                          regia). Chiudendo quella finestra il pannello torna nella Regia.
+                          Se nascondi <strong>tutta</strong> l’applicazione (es. «Nascondi»
+                          su macOS), il sistema nasconde anche quella finestra.
+                        </>
+                      ) : (
+                        <div className="floating-playlist-panel-help-popover-stack">
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Titolo</strong> — Modifica il nome nel campo in alto;
+                            uscendo dal campo o premendo Invio il titolo viene aggiornato
+                            nello stato del pannello.
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Riduci / Chiudi</strong> — Riduci mostra solo la barra
+                            compatta con i comandi principali. Chiudi rimuove questo
+                            pannello dalla plancia.
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Puntina (finestra separata)</strong> — Con la puntina
+                            attiva questo pannello passa in una <strong>finestra Electron
+                            propria</strong> sul desktop: puoi spostarla anche{' '}
+                            <strong>fuori dalla finestra Regia</strong> e resta utilizzabile
+                            anche se <strong>riduci a icona solo la regia principale</strong>.
+                            Chiudi la finestra del pannello per riportarlo dentro la Regia.
+                            Se nascondi <strong>tutta</strong> l’app (Dock / «Nascondi» su
+                            macOS), il sistema nasconde tutte le sue finestre.
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Cartella e Aggiungi</strong> — Cartella apre una
+                            cartella sul disco per caricare i file. Aggiungi apre il
+                            dialog per scegliere singoli media. Puoi anche{' '}
+                            <strong>trascinare file</strong> (audio, video, immagini)
+                            sull&apos;area dell&apos;elenco.
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Colore tema</strong> — Clic sul pulsante colore per
+                            il selettore. <strong>Alt+clic</strong> ripristina il tema
+                            predefinito del pannello.
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Salva (disco)</strong> — Sovrascrive la voce in
+                            PLAYLIST che hai aperto con Carica; il pulsante si accende
+                            solo se ci sono modifiche non ancora salvate su quel file.
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Annulla / Ripristina</strong> — Come in plancia:{' '}
+                            <kbd>⌘Z</kbd> / <kbd>Ctrl+Z</kbd> e{' '}
+                            <kbd>⌘⇧Z</kbd> / <kbd>Ctrl+⇧Z</kbd>.
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Crossfade</strong> — Dissolvenza incrociata in uscita
+                            tra due brani <em>dello stesso tipo</em> (solo video↔video
+                            o immagine↔immagine). Passando il mouse sul pulsante crossfade
+                            compare il promemoria sui tipi ammessi.
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Volume e mute pannello</strong> — Il cursore
+                            moltiplica il volume globale in alto. Il mute silenzia solo
+                            l&apos;uscita sul secondo schermo per i brani avviati da{' '}
+                            <em>questa</em> playlist (si somma al mute globale).
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Loop</strong> — <em>Off</em>: a fine brano segue la
+                            logica di riproduzione corrente. <em>File</em>: ripete il clip
+                            selezionato. <em>Lista</em>: dall&apos;ultimo brano torna al
+                            primo.
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Elenco brani</strong> — Clic su una riga per
+                            caricare/riprodurre quel file. <strong>Tieni premuto</strong>{' '}
+                            su una riga e trascina per <strong>riordinare</strong>. Le
+                            icone sulla riga servono a rimuovere il brano dalla playlist.
+                            Con la lista a fuoco puoi usare le <strong>frecce</strong> per
+                            spostarti tra le righe.
+                          </p>
+                        </div>
+                      )}
+                    </div>,
+                    document.body,
+                  )
+                : null}
             </div>
             {floatingFloaterExperimental ? (
               <button
@@ -3222,41 +3255,56 @@ export default function FloatingPlaylist({
         </div>
         {collapsed ? (
           <div className="floating-playlist-toolbar">
-            <div className="floating-playlist-toolbar-chrome floating-playlist-chrome-actions">
+            <PlaylistChromeOverflowRow
+              className="floating-playlist-toolbar-chrome floating-playlist-chrome-actions"
+              zIndexBase={zIndex}
+              menuAppearanceRootClassName={
+                themeHex ? 'floating-playlist has-theme' : undefined
+              }
+              menuAppearanceRootStyle={
+                themeHex
+                  ? ({
+                      ['--playlist-theme' as string]: themeHex,
+                    } satisfies CSSProperties)
+                  : undefined
+              }
+            >
               {!isLaunchpad && !isChalkboard ? (
-                <div
-                  className="floating-playlist-chrome-group floating-playlist-chrome-group--media"
-                  role="group"
-                  aria-label="File e cartella"
-                >
-                  <button
-                    type="button"
-                    className="floating-playlist-icon-btn"
-                    disabled={panelLocked}
-                    onClick={() => void openFolder(sessionId)}
-                    title="Apri cartella"
-                    aria-label="Apri cartella"
+                <Fragment key="chrome-slot-media">
+                  <div
+                    className="floating-playlist-chrome-group floating-playlist-chrome-group--media"
+                    role="group"
+                    aria-label="File e cartella"
                   >
-                    <IconFolder />
-                  </button>
-                  <button
-                    type="button"
-                    className="floating-playlist-icon-btn"
-                    disabled={panelLocked}
-                    onClick={() => void addMediaToPlaylist(sessionId)}
-                    title="Aggiungi file alla playlist"
-                    aria-label="Aggiungi file alla playlist"
-                  >
-                    <IconAddFiles />
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      className={folderOpenBtnClass}
+                      disabled={panelLocked}
+                      onClick={() => void openFolder(sessionId)}
+                      title={folderOpenBtnTitle}
+                      aria-label={folderOpenBtnAriaLabel}
+                      aria-pressed={folderWatchLinked}
+                    >
+                      <IconFolder />
+                    </button>
+                    <button
+                      type="button"
+                      className="floating-playlist-icon-btn"
+                      disabled={panelLocked}
+                      onClick={() => void addMediaToPlaylist(sessionId)}
+                      title="Aggiungi file alla playlist"
+                      aria-label="Aggiungi file alla playlist"
+                    >
+                      <IconAddFiles />
+                    </button>
+                  </div>
+                  <span
+                    className="floating-playlist-chrome-sep"
+                    aria-hidden
+                  />
+                </Fragment>
               ) : null}
-              {!isLaunchpad && !isChalkboard ? (
-                <span
-                  className="floating-playlist-chrome-sep"
-                  aria-hidden
-                />
-              ) : null}
+              <Fragment key="chrome-slot-doc">
               <div
                 className="floating-playlist-chrome-group floating-playlist-chrome-group--doc"
                 role="group"
@@ -3352,6 +3400,8 @@ export default function FloatingPlaylist({
                 </button>
               </div>
               <span className="floating-playlist-chrome-sep" aria-hidden />
+              </Fragment>
+              <Fragment key="chrome-slot-history">
               <div
                 className="floating-playlist-chrome-group floating-playlist-chrome-group--history"
                 role="group"
@@ -3384,7 +3434,8 @@ export default function FloatingPlaylist({
                   <IconRedo />
                 </button>
               </div>
-            </div>
+              </Fragment>
+            </PlaylistChromeOverflowRow>
           </div>
         ) : null}
       </div>
@@ -3399,167 +3450,229 @@ export default function FloatingPlaylist({
         {/* Menu tasto destro Launchpad: stesso wrapper della griglia, non dentro crossfade (pannello overflow:hidden). */}
         <div className="floating-playlist-crossfade">
           <div className="floating-playlist-crossfade-row">
-            <div className="floating-playlist-chrome-row-left floating-playlist-chrome-actions">
-              {!isLaunchpad && !isChalkboard ? (
+            <PlaylistChromeOverflowRow
+              zIndexBase={zIndex}
+              className="floating-playlist-chrome-row-left floating-playlist-chrome-actions"
+              menuAppearanceRootClassName={
+                themeHex ? 'floating-playlist has-theme' : undefined
+              }
+              menuAppearanceRootStyle={
+                themeHex
+                  ? ({
+                      ['--playlist-theme' as string]: themeHex,
+                    } satisfies CSSProperties)
+                  : undefined
+              }
+              trailing={
                 <div
-                  className="floating-playlist-chrome-group floating-playlist-chrome-group--media"
+                  className="floating-playlist-chrome-row-right"
                   role="group"
-                  aria-label="File e cartella"
+                  aria-label="Volume e mute uscita"
                 >
+                  <div
+                    className="floating-playlist-panel-volume"
+                    title="Volume uscita per questo pannello (moltiplicato con il volume globale in alto)"
+                  >
+                    <input
+                      type="range"
+                      className="regia-volume-slider floating-playlist-panel-volume-slider"
+                      min={0}
+                      max={100}
+                      value={Math.round(playlistOutputVolume * 100)}
+                      onPointerDown={onPlaylistPanelVolumePointerDown}
+                      onChange={onPlaylistPanelVolumeChange}
+                      aria-label={
+                        isLaunchpad
+                          ? 'Volume uscita Launchpad sul secondo schermo'
+                          : isChalkboard
+                            ? 'Volume uscita Chalkboard sul secondo schermo'
+                            : 'Volume uscita playlist sul secondo schermo'
+                      }
+                      aria-valuetext={`${Math.round(playlistOutputVolume * 100)}% sul pannello`}
+                    />
+                  </div>
                   <button
                     type="button"
-                    className="floating-playlist-icon-btn"
-                    disabled={panelLocked}
-                    onClick={() => void openFolder(sessionId)}
-                    title="Apri cartella"
-                    aria-label="Apri cartella"
+                    className={`floating-playlist-icon-btn floating-playlist-mute-output ${playlistOutputMuted ? 'is-on' : ''}`}
+                    onClick={onTogglePlaylistOutputMute}
+                    aria-pressed={playlistOutputMuted}
+                    title="Silenzia solo l'uscita sul secondo schermo per i brani avviati da questa playlist (si somma al Mute globale in alto). Valore salvato per questo pannello."
+                    aria-label={
+                      playlistOutputMuted
+                        ? 'Mute uscita attivo per questo pannello: clic per disattivare'
+                        : 'Silenzia uscita sul secondo schermo per questo pannello'
+                    }
                   >
-                    <IconFolder />
-                  </button>
-                  <button
-                    type="button"
-                    className="floating-playlist-icon-btn"
-                    disabled={panelLocked}
-                    onClick={() => void addMediaToPlaylist(sessionId)}
-                    title="Aggiungi file alla playlist"
-                    aria-label="Aggiungi file alla playlist"
-                  >
-                    <IconAddFiles />
+                    <IconOutputSpeaker muted={playlistOutputMuted} />
                   </button>
                 </div>
-              ) : null}
+              }
+            >
               {!isLaunchpad && !isChalkboard ? (
+                <Fragment key="chrome-slot-media">
+                  <div
+                    className="floating-playlist-chrome-group floating-playlist-chrome-group--media"
+                    role="group"
+                    aria-label="File e cartella"
+                  >
+                    <button
+                      type="button"
+                      className={folderOpenBtnClass}
+                      disabled={panelLocked}
+                      onClick={() => void openFolder(sessionId)}
+                      title={folderOpenBtnTitle}
+                      aria-label={folderOpenBtnAriaLabel}
+                      aria-pressed={folderWatchLinked}
+                    >
+                      <IconFolder />
+                    </button>
+                    <button
+                      type="button"
+                      className="floating-playlist-icon-btn"
+                      disabled={panelLocked}
+                      onClick={() => void addMediaToPlaylist(sessionId)}
+                      title="Aggiungi file alla playlist"
+                      aria-label="Aggiungi file alla playlist"
+                    >
+                      <IconAddFiles />
+                    </button>
+                  </div>
+                  <span className="floating-playlist-chrome-sep" aria-hidden />
+                </Fragment>
+              ) : null}
+              <Fragment key="chrome-slot-doc">
+                <div
+                  className="floating-playlist-chrome-group floating-playlist-chrome-group--doc"
+                  role="group"
+                  aria-label="Tema e salva"
+                >
+                  <button
+                    type="button"
+                    className="floating-playlist-icon-btn floating-playlist-theme-picker-btn"
+                    onClick={(ev) => {
+                      if (ev.altKey) {
+                        ev.preventDefault()
+                        setPlaylistThemeColor(null, sessionId)
+                        return
+                      }
+                      playlistColorInputRef.current?.click()
+                    }}
+                    title="Colore tema (Alt+clic: predefinito)"
+                    aria-label="Scegli colore tema pannello. Alt e clic per tema predefinito."
+                  >
+                    <IconColorWheel />
+                  </button>
+                  <button
+                    type="button"
+                    className={`floating-playlist-icon-btn${
+                      normalizePlaylistWatermarkAbsPath(
+                        session.playlistWatermarkPngPath,
+                      )
+                        ? ' is-watermark-on'
+                        : ''
+                    }`}
+                    onClick={async (ev) => {
+                      if (ev.altKey) {
+                        ev.preventDefault()
+                        setPlaylistWatermarkPngPath(sessionId, null)
+                        return
+                      }
+                      const api = window.electronAPI
+                      if (!api?.selectPlaylistWatermarkPng) return
+                      const p = await api.selectPlaylistWatermarkPng()
+                      if (p) setPlaylistWatermarkPngPath(sessionId, p)
+                    }}
+                    title="Watermark PNG in uscita (Alt+clic: rimuovi)"
+                    aria-label="Scegli watermark PNG. Alt e clic per rimuovere."
+                  >
+                    <IconWatermark />
+                  </button>
+                  <button
+                    type="button"
+                    className={`floating-playlist-icon-btn${panelLocked ? ' is-active' : ''}`}
+                    aria-pressed={panelLocked}
+                    title={
+                      panelLocked
+                        ? 'Sblocca modifiche (drag, titolo, ecc.)'
+                        : 'Blocca modifiche accidentali'
+                    }
+                    aria-label={
+                      panelLocked ? 'Sblocca pannello' : 'Blocca pannello'
+                    }
+                    onClick={() =>
+                      setFloatingPlaylistPanelLocked(sessionId, !panelLocked)
+                    }
+                  >
+                    <IconPanelLock locked={panelLocked} />
+                  </button>
+                  <button
+                    type="button"
+                    className="floating-playlist-icon-btn"
+                    disabled={panelLocked}
+                    onClick={() =>
+                      void saveFloatingPlaylistCopyToRegiaVideoCloud(sessionId)
+                    }
+                    title="Salva una copia come nuovo file JSON in Regia Video/Playlist (app desktop)"
+                    aria-label="Salva copia cloud Regia Video"
+                  >
+                    <IconRegiaCloudCopy />
+                  </button>
+                  <button
+                    type="button"
+                    className="floating-playlist-icon-btn floating-playlist-save-disk"
+                    disabled={!savedPlaylistDirty(sessionId) || panelLocked}
+                    onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
+                    title={
+                      savedPlaylistDirty(sessionId)
+                        ? typeof session.regiaVideoCloudSourceFile === 'string' &&
+                          session.regiaVideoCloudSourceFile.trim() !== ''
+                          ? 'Sovrascrive il file JSON cloud collegato'
+                          : 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
+                        : 'Nessuna modifica da salvare sul file collegato'
+                    }
+                    aria-label="Salva sovrascrivendo la voce caricata da PLAYLIST"
+                  >
+                    <IconSaveDisk />
+                  </button>
+                </div>
                 <span className="floating-playlist-chrome-sep" aria-hidden />
-              ) : null}
-              <div
-                className="floating-playlist-chrome-group floating-playlist-chrome-group--doc"
-                role="group"
-                aria-label="Tema e salva"
-              >
-                <button
-                  type="button"
-                  className="floating-playlist-icon-btn floating-playlist-theme-picker-btn"
-                  onClick={(ev) => {
-                    if (ev.altKey) {
-                      ev.preventDefault()
-                      setPlaylistThemeColor(null, sessionId)
-                      return
-                    }
-                    playlistColorInputRef.current?.click()
-                  }}
-                  title="Colore tema (Alt+clic: predefinito)"
-                  aria-label="Scegli colore tema pannello. Alt e clic per tema predefinito."
+              </Fragment>
+              <Fragment key="chrome-slot-history">
+                <div
+                  className="floating-playlist-chrome-group floating-playlist-chrome-group--history"
+                  role="group"
+                  aria-label="Annulla e ripristina"
                 >
-                  <IconColorWheel />
-                </button>
-                <button
-                  type="button"
-                  className={`floating-playlist-icon-btn${
-                    normalizePlaylistWatermarkAbsPath(
-                      session.playlistWatermarkPngPath,
-                    )
-                      ? ' is-watermark-on'
-                      : ''
-                  }`}
-                  onClick={async (ev) => {
-                    if (ev.altKey) {
-                      ev.preventDefault()
-                      setPlaylistWatermarkPngPath(sessionId, null)
-                      return
-                    }
-                    const api = window.electronAPI
-                    if (!api?.selectPlaylistWatermarkPng) return
-                    const p = await api.selectPlaylistWatermarkPng()
-                    if (p) setPlaylistWatermarkPngPath(sessionId, p)
-                  }}
-                  title="Watermark PNG in uscita (Alt+clic: rimuovi)"
-                  aria-label="Scegli watermark PNG. Alt e clic per rimuovere."
-                >
-                  <IconWatermark />
-                </button>
-                <button
-                  type="button"
-                  className={`floating-playlist-icon-btn${panelLocked ? ' is-active' : ''}`}
-                  aria-pressed={panelLocked}
-                  title={
-                    panelLocked
-                      ? 'Sblocca modifiche (drag, titolo, ecc.)'
-                      : 'Blocca modifiche accidentali'
-                  }
-                  aria-label={
-                    panelLocked ? 'Sblocca pannello' : 'Blocca pannello'
-                  }
-                  onClick={() =>
-                    setFloatingPlaylistPanelLocked(sessionId, !panelLocked)
-                  }
-                >
-                  <IconPanelLock locked={panelLocked} />
-                </button>
-                <button
-                  type="button"
-                  className="floating-playlist-icon-btn"
-                  disabled={panelLocked}
-                  onClick={() =>
-                    void saveFloatingPlaylistCopyToRegiaVideoCloud(sessionId)
-                  }
-                  title="Salva una copia come nuovo file JSON in Regia Video/Playlist (app desktop)"
-                  aria-label="Salva copia cloud Regia Video"
-                >
-                  <IconRegiaCloudCopy />
-                </button>
-                <button
-                  type="button"
-                  className="floating-playlist-icon-btn floating-playlist-save-disk"
-                  disabled={!savedPlaylistDirty(sessionId) || panelLocked}
-                  onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
-                  title={
-                    savedPlaylistDirty(sessionId)
-                      ? typeof session.regiaVideoCloudSourceFile === 'string' &&
-                        session.regiaVideoCloudSourceFile.trim() !== ''
-                        ? 'Sovrascrive il file JSON cloud collegato'
-                        : 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
-                      : 'Nessuna modifica da salvare sul file collegato'
-                  }
-                  aria-label="Salva sovrascrivendo la voce caricata da PLAYLIST"
-                >
-                  <IconSaveDisk />
-                </button>
-              </div>
-              <span className="floating-playlist-chrome-sep" aria-hidden />
-              <div
-                className="floating-playlist-chrome-group floating-playlist-chrome-group--history"
-                role="group"
-                aria-label="Annulla e ripristina"
-              >
-                <button
-                  type="button"
-                  className="floating-playlist-icon-btn"
-                  disabled={!canUndo}
-                  onClick={() => {
-                    setActiveFloatingSession(sessionId)
-                    undo()
-                  }}
-                  title="Annulla (⌘Z / Ctrl+Z)"
-                  aria-label="Annulla"
-                >
-                  <IconUndo />
-                </button>
-                <button
-                  type="button"
-                  className="floating-playlist-icon-btn"
-                  disabled={!canRedo}
-                  onClick={() => {
-                    setActiveFloatingSession(sessionId)
-                    redo()
-                  }}
-                  title="Ripristina (⌘⇧Z / Ctrl+⇧Z)"
-                  aria-label="Ripristina"
-                >
-                  <IconRedo />
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    className="floating-playlist-icon-btn"
+                    disabled={!canUndo}
+                    onClick={() => {
+                      setActiveFloatingSession(sessionId)
+                      undo()
+                    }}
+                    title="Annulla (⌘Z / Ctrl+Z)"
+                    aria-label="Annulla"
+                  >
+                    <IconUndo />
+                  </button>
+                  <button
+                    type="button"
+                    className="floating-playlist-icon-btn"
+                    disabled={!canRedo}
+                    onClick={() => {
+                      setActiveFloatingSession(sessionId)
+                      redo()
+                    }}
+                    title="Ripristina (⌘⇧Z / Ctrl+⇧Z)"
+                    aria-label="Ripristina"
+                  >
+                    <IconRedo />
+                  </button>
+                </div>
+              </Fragment>
               {!isLaunchpad && !isChalkboard ? (
-                <>
+                <Fragment key="chrome-slot-xfade">
                   <span className="floating-playlist-chrome-sep" aria-hidden />
                   <div
                     className="floating-playlist-chrome-group floating-playlist-chrome-group--xfade"
@@ -3587,51 +3700,9 @@ export default function FloatingPlaylist({
                       </span>
                     </button>
                   </div>
-                </>
+                </Fragment>
               ) : null}
-            </div>
-            <div
-              className="floating-playlist-chrome-row-right"
-              role="group"
-              aria-label="Volume e mute uscita"
-            >
-              <div
-                className="floating-playlist-panel-volume"
-                title="Volume uscita per questo pannello (moltiplicato con il volume globale in alto)"
-              >
-                <input
-                  type="range"
-                  className="regia-volume-slider floating-playlist-panel-volume-slider"
-                  min={0}
-                  max={100}
-                  value={Math.round(playlistOutputVolume * 100)}
-                  onPointerDown={onPlaylistPanelVolumePointerDown}
-                  onChange={onPlaylistPanelVolumeChange}
-                  aria-label={
-                    isLaunchpad
-                      ? 'Volume uscita Launchpad sul secondo schermo'
-                      : isChalkboard
-                        ? 'Volume uscita Chalkboard sul secondo schermo'
-                        : 'Volume uscita playlist sul secondo schermo'
-                  }
-                  aria-valuetext={`${Math.round(playlistOutputVolume * 100)}% sul pannello`}
-                />
-              </div>
-              <button
-                type="button"
-                className={`floating-playlist-icon-btn floating-playlist-mute-output ${playlistOutputMuted ? 'is-on' : ''}`}
-                onClick={onTogglePlaylistOutputMute}
-                aria-pressed={playlistOutputMuted}
-                title="Silenzia solo l'uscita sul secondo schermo per i brani avviati da questa playlist (si somma al Mute globale in alto). Valore salvato per questo pannello."
-                aria-label={
-                  playlistOutputMuted
-                    ? 'Mute uscita attivo per questo pannello: clic per disattivare'
-                    : 'Silenzia uscita sul secondo schermo per questo pannello'
-                }
-              >
-                <IconOutputSpeaker muted={playlistOutputMuted} />
-              </button>
-            </div>
+            </PlaylistChromeOverflowRow>
           </div>
           {!isLaunchpad && !isChalkboard ? (
             <div

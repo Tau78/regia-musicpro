@@ -3612,6 +3612,9 @@ button {
   .floating-playlist-chrome-actions
   .floating-playlist-icon-btn:hover:not(:disabled):not(.floating-playlist-theme-picker-btn),
 .floating-playlist.has-theme
+  .playlist-chrome-overflow-menu
+  .floating-playlist-icon-btn:hover:not(:disabled):not(.floating-playlist-theme-picker-btn),
+.floating-playlist.has-theme
   .floating-playlist-title-strip-chrome
   .floating-playlist-icon-btn:hover:not(:disabled):not(.floating-playlist-theme-picker-btn) {
   border: none;
@@ -3624,6 +3627,7 @@ button {
   .floating-playlist-crossfade-row
   .floating-playlist-chrome-actions
   .floating-playlist-theme-picker-btn:hover:not(:disabled),
+.floating-playlist.has-theme .playlist-chrome-overflow-menu .floating-playlist-theme-picker-btn:hover:not(:disabled),
 .floating-playlist.has-theme
   .floating-playlist-title-strip-chrome
   .floating-playlist-theme-picker-btn:hover:not(:disabled) {
@@ -3644,6 +3648,7 @@ button {
 }
 
 .floating-playlist.has-theme .floating-playlist-crossfade-row .floating-playlist-crossfade-toggle:hover:not(:disabled),
+.floating-playlist.has-theme .playlist-chrome-overflow-menu .floating-playlist-crossfade-toggle:hover:not(:disabled),
 .floating-playlist.has-theme
   .floating-playlist-crossfade-row
   .floating-playlist-mute-output.floating-playlist-icon-btn:hover:not(:disabled) {
@@ -3654,6 +3659,9 @@ button {
 
 .floating-playlist.has-theme
   .floating-playlist-crossfade-row
+  .floating-playlist-crossfade-toggle.is-active:hover:not(:disabled),
+.floating-playlist.has-theme
+  .playlist-chrome-overflow-menu
   .floating-playlist-crossfade-toggle.is-active:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--playlist-theme) 30%, rgba(255, 255, 255, 0.12));
@@ -3809,31 +3817,14 @@ button {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--muted) 38%, transparent) transparent;
-  -webkit-overflow-scrolling: touch;
+  overflow: visible;
   padding-bottom: 1px;
-}
-
-.floating-playlist-toolbar-chrome::-webkit-scrollbar {
-  height: 4px;
-}
-
-.floating-playlist-toolbar-chrome::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.22);
-}
-
-.floating-playlist-toolbar-chrome::-webkit-scrollbar-track {
-  background: transparent;
 }
 
 /** Gruppi nella toolbar ridotta e nella riga sotto il titolo (playlist espansa). */
 .floating-playlist-chrome-row-left.floating-playlist-chrome-actions,
-.floating-playlist-toolbar-chrome.floating-playlist-chrome-actions {
+.floating-playlist-toolbar-chrome.floating-playlist-chrome-actions,
+.playlist-chrome-overflow-split.floating-playlist-chrome-actions {
   gap: 0.45rem 0.55rem;
 }
 
@@ -3844,26 +3835,95 @@ button {
   flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--muted) 38%, transparent) transparent;
-  -webkit-overflow-scrolling: touch;
+  overflow: hidden;
   padding-bottom: 1px;
 }
 
-.floating-playlist-chrome-row-left::-webkit-scrollbar {
-  height: 4px;
+/** Riga comandi playlist: niente scroll orizzontale; overflow in menu (vedi PlaylistChromeOverflowRow). */
+.playlist-chrome-overflow-split {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem 0.55rem;
 }
 
-.floating-playlist-chrome-row-left::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.22);
+.playlist-chrome-overflow-leading-host {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
-.floating-playlist-chrome-row-left::-webkit-scrollbar-track {
-  background: transparent;
+.playlist-chrome-overflow-measure {
+  position: absolute;
+  left: -99999px;
+  top: 0;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.45rem 0.55rem;
+  pointer-events: none;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.playlist-chrome-overflow-slot-wrap {
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.45rem 0.55rem;
+}
+
+.playlist-chrome-overflow-visible-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem 0.55rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.playlist-chrome-overflow-chevron {
+  flex-shrink: 0;
+}
+
+.playlist-chrome-overflow-menu {
+  box-sizing: border-box;
+  padding: 0.35rem 0.4rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  cursor: default;
+}
+
+.playlist-chrome-overflow-menu-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.45rem;
+  max-height: min(70vh, 22rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.playlist-chrome-overflow-menu-slot {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.45rem;
+  justify-content: flex-start;
 }
 
 .floating-playlist-chrome-row-right {
@@ -3893,6 +3953,8 @@ button {
 .floating-playlist-title-strip-chrome .floating-playlist-icon-btn,
 .floating-playlist-toolbar-chrome .floating-playlist-icon-btn,
 .floating-playlist-crossfade-row .floating-playlist-chrome-actions .floating-playlist-icon-btn,
+.playlist-chrome-overflow-visible-row.floating-playlist-chrome-actions .floating-playlist-icon-btn,
+.playlist-chrome-overflow-menu .floating-playlist-icon-btn,
 .floating-playlist-chrome-row-right .floating-playlist-icon-btn {
   box-sizing: border-box;
   min-width: 1.65rem;
@@ -3910,15 +3972,20 @@ button {
 .floating-playlist-title-strip-chrome .floating-playlist-icon-btn:hover:not(:disabled),
 .floating-playlist-toolbar-chrome .floating-playlist-icon-btn:hover:not(:disabled),
 .floating-playlist-crossfade-row .floating-playlist-chrome-actions .floating-playlist-icon-btn:hover:not(:disabled),
+.playlist-chrome-overflow-visible-row.floating-playlist-chrome-actions
+  .floating-playlist-icon-btn:hover:not(:disabled),
+.playlist-chrome-overflow-menu .floating-playlist-icon-btn:hover:not(:disabled),
 .floating-playlist-chrome-row-right .floating-playlist-icon-btn:hover:not(:disabled),
 .floating-playlist-crossfade-row .floating-playlist-crossfade-toggle:hover:not(:disabled),
-.floating-playlist-crossfade-row .floating-playlist-mute-output.floating-playlist-icon-btn:hover:not(:disabled) {
+.floating-playlist-crossfade-row .floating-playlist-mute-output.floating-playlist-icon-btn:hover:not(:disabled),
+.playlist-chrome-overflow-menu .floating-playlist-crossfade-toggle:hover:not(:disabled) {
   color: var(--text);
   background: rgba(255, 255, 255, 0.08);
 }
 
 .floating-playlist-crossfade-row
-  .floating-playlist-crossfade-toggle.is-active:hover:not(:disabled) {
+  .floating-playlist-crossfade-toggle.is-active:hover:not(:disabled),
+.playlist-chrome-overflow-menu .floating-playlist-crossfade-toggle.is-active:hover:not(:disabled) {
   color: #f4f7ff;
   background: color-mix(in srgb, var(--accent) 44%, rgba(255, 255, 255, 0.08));
   box-shadow:
@@ -3930,7 +3997,8 @@ button {
 .floating-playlist-toolbar-chrome .floating-playlist-theme-picker-btn:hover:not(:disabled),
 .floating-playlist-crossfade-row
   .floating-playlist-chrome-actions
-  .floating-playlist-theme-picker-btn:hover:not(:disabled) {
+  .floating-playlist-theme-picker-btn:hover:not(:disabled),
+.playlist-chrome-overflow-menu .floating-playlist-theme-picker-btn:hover:not(:disabled) {
   background: transparent;
   filter: brightness(1.12);
 }
@@ -3939,12 +4007,34 @@ button {
   color: #7dd3fc;
 }
 
+/* Cartella con aggiornamento automatico dall’elenco su disco (stesso criterio del crossfade «attivo»). */
+.floating-playlist-folder-open-btn.floating-playlist-icon-btn.is-folder-watch-linked {
+  color: #f4f7ff;
+  background: color-mix(in srgb, var(--accent) 38%, rgba(255, 255, 255, 0.06));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 58%, transparent),
+    0 1px 4px rgba(0, 0, 0, 0.28);
+}
+
+.floating-playlist-folder-open-btn.floating-playlist-icon-btn.is-folder-watch-linked:hover:not(:disabled) {
+  color: #fff;
+  filter: brightness(1.05);
+}
+
+.floating-playlist-folder-open-btn.floating-playlist-icon-btn.is-folder-watch-linked:disabled {
+  opacity: 0.55;
+}
+
 .floating-playlist-title-strip-chrome .floating-playlist-icon-btn:focus-visible,
 .floating-playlist-toolbar-chrome .floating-playlist-icon-btn:focus-visible,
 .floating-playlist-crossfade-row .floating-playlist-chrome-actions .floating-playlist-icon-btn:focus-visible,
+.playlist-chrome-overflow-visible-row.floating-playlist-chrome-actions
+  .floating-playlist-icon-btn:focus-visible,
+.playlist-chrome-overflow-menu .floating-playlist-icon-btn:focus-visible,
 .floating-playlist-chrome-row-right .floating-playlist-icon-btn:focus-visible,
 .floating-playlist-crossfade-row .floating-playlist-crossfade-toggle:focus-visible,
-.floating-playlist-crossfade-row .floating-playlist-mute-output.floating-playlist-icon-btn:focus-visible {
+.floating-playlist-crossfade-row .floating-playlist-mute-output.floating-playlist-icon-btn:focus-visible,
+.playlist-chrome-overflow-menu .floating-playlist-crossfade-toggle:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 85%, transparent);
   outline-offset: 2px;
 }
@@ -3953,14 +4043,16 @@ button {
 .floating-playlist-crossfade-row
   .floating-playlist-chrome-actions
   .floating-playlist-theme-picker-btn
-  .floating-playlist-color-wheel-pinwheel {
+  .floating-playlist-color-wheel-pinwheel,
+.playlist-chrome-overflow-menu .floating-playlist-theme-picker-btn .floating-playlist-color-wheel-pinwheel {
   width: 1.55rem;
   height: 1.55rem;
   display: block;
 }
 
 .floating-playlist-toolbar-chrome .floating-playlist-header-icon,
-.floating-playlist-crossfade-row .floating-playlist-chrome-actions .floating-playlist-header-icon {
+.floating-playlist-crossfade-row .floating-playlist-chrome-actions .floating-playlist-header-icon,
+.playlist-chrome-overflow-menu .floating-playlist-header-icon {
   width: 14px;
   height: 14px;
 }
@@ -4460,7 +4552,8 @@ button {
 /** Pannello stretto: meno gap e slider più corto così serve meno scroll orizzontale. */
 @container floating-pl (max-width: 400px) {
   .floating-playlist-chrome-row-left.floating-playlist-chrome-actions,
-  .floating-playlist-toolbar-chrome.floating-playlist-chrome-actions {
+  .floating-playlist-toolbar-chrome.floating-playlist-chrome-actions,
+  .playlist-chrome-overflow-split.floating-playlist-chrome-actions {
     gap: 0.22rem 0.32rem;
   }
 
@@ -4591,7 +4684,9 @@ button {
 
 .floating-playlist-panel-help-popover {
   box-sizing: border-box;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-width: min(22rem, calc(100vw - 16px));
   padding: 0.55rem 0.65rem 0.6rem;
   font-size: 0.68rem;
   line-height: 1.4;
@@ -4602,12 +4697,15 @@ button {
   background: var(--bg-elevated);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
   cursor: default;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .floating-playlist-panel-help-popover-stack {
   display: flex;
   flex-direction: column;
   gap: 0;
+  min-width: 0;
 }
 
 .floating-playlist-panel-help-popover-p {
