@@ -2429,10 +2429,16 @@ var img = "${exeImage.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}";
 function regiaRunning() {
   try {
     var sh = new ActiveXObject("WScript.Shell");
-    var cmd = 'cmd /c tasklist /FI "IMAGENAME eq ' + img + '" /NH';
-    var ex = sh.Exec(cmd);
-    while (ex.Status == 0) { WScript.Sleep(80); }
-    var out = ex.StdOut.ReadAll();
+    var fso = new ActiveXObject("Scripting.FileSystemObject");
+    var tmp = sh.ExpandEnvironmentStrings("%TEMP%") + "\\\\REGIA-MUSICPRO-tl.txt";
+    var cmd = 'cmd /c tasklist /FI "IMAGENAME eq ' + img + '" /NH > "' + tmp + '" 2>&1';
+    // 0 = finestra nascosta; Exec+tasklist apriva una console a ogni poll (loop di finestre).
+    sh.Run(cmd, 0, true);
+    if (!fso.FileExists(tmp)) return false;
+    var ts = fso.OpenTextFile(tmp, 1);
+    var out = ts.ReadAll();
+    ts.Close();
+    try { fso.DeleteFile(tmp); } catch (edx) {}
     return out.indexOf(img) >= 0;
   } catch (e) { return false; }
 }
