@@ -2,7 +2,7 @@
   "name": "regia-video",
   "description": "REGIA MUSICPRO — regia video / playlist",
   "private": true,
-  "version": "0.0.19",
+  "version": "0.0.20",
   "regiaProgramCreatedOn": "2026-04-18",
   "type": "module",
   "main": "dist-electron/main.cjs",

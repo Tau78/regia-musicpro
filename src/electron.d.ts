@@ -9,10 +9,12 @@ declare global {
       launchpadBaseKitPaths: () => Promise<string[]>
       launchpadSfxKitPaths: () => Promise<string[]>
       toFileUrl: (absPath: string) => Promise<string>
-      selectFolder: () => Promise<{
-        folder: string
-        paths: string[]
-      } | null>
+      /** Oggetto consigliato; in alternativa solo `paths` (retrocompatibilità). */
+      selectFolder: () => Promise<
+        | { folder: string; paths: string[] }
+        | string[]
+        | null
+      >
       /** Aggiorna l’elenco file quando cambia il contenuto della cartella (solo cartella aperta con «Apri cartella»). */
       playlistFolderWatchStart: (
         sessionId: string,

@@ -363,13 +363,14 @@ export function createEmptyFloatingSession(
   }
 }
 
-const LAUNCHPAD_PANEL_SIZE: FloatingPlaylistPanelSize = {
+/** Dimensioni predefinite pannello Launchpad (anche per posizionamento iniziale). */
+export const LAUNCHPAD_PANEL_SIZE: FloatingPlaylistPanelSize = {
   width: 348,
   height: 448,
 }
 
 /** Pannello più largo dell’elenco brani: serve spazio per area lavagna proporzionata all’uscita. */
-const CHALKBOARD_PANEL_SIZE: FloatingPlaylistPanelSize = {
+export const CHALKBOARD_PANEL_SIZE: FloatingPlaylistPanelSize = {
   width: 560,
   height: 520,
 }

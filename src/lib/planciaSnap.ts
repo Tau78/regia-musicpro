@@ -1,4 +1,9 @@
-import type { PanelPos, PanelSize, ResizeEdge } from './floatingPanelGeometry.ts'
+import {
+  clampPanelInViewport,
+  type PanelPos,
+  type PanelSize,
+  type ResizeEdge,
+} from './floatingPanelGeometry.ts'
 
 /** Allineamento a larghezze/altezze di altri pannelli sulla plancia. */
 export const SNAP_PEER_DIMENSION_PX = 12
@@ -59,6 +64,55 @@ export function queryPlanciaContentRect(): PlanciaRect | null {
   const r = el.getBoundingClientRect()
   if (r.width <= 0 || r.height <= 0) return null
   return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+}
+
+const NEW_FLOAT_PANEL_MIN_W = 220
+const NEW_FLOAT_PANEL_MIN_H = 180
+const NEW_FLOAT_PANEL_MAX_W = 960
+const NEW_FLOAT_PANEL_MAX_H = 780
+
+/**
+ * Posizione iniziale (top-left) per un nuovo pannello flottante: centrata sull’area
+ * `.regia-main-content` (plancia). `cascadeIndex` sposta leggermente in diagonale
+ * aperture successive così non restano perfettamente sovrapposte.
+ */
+export function computeNewFloatingPanelPos(
+  panelSize: PanelSize,
+  cascadeIndex: number,
+  sessionsForDockInset: readonly {
+    planciaDock?: 'none' | 'right'
+    panelSize: { width: number }
+  }[],
+): PanelPos {
+  const w = panelSize.width
+  const h = panelSize.height
+  const pl = queryPlanciaContentRect()
+  const step = 24
+  const k = Math.max(0, Math.floor(cascadeIndex)) % 8
+  let x: number
+  let y: number
+  if (pl) {
+    const cw = pl.right - pl.left
+    const ch = pl.bottom - pl.top
+    x = pl.left + cw / 2 - w / 2 + k * step
+    y = pl.top + ch / 2 - h / 2 + k * step
+  } else {
+    x = window.innerWidth / 2 - w / 2 + k * step
+    y = window.innerHeight / 2 - h / 2 + k * step
+  }
+  const dockInset = computeRightPlanciaDockColumnWidthPx(sessionsForDockInset)
+  const { pos } = clampPanelInViewport(
+    { x, y },
+    { width: w, height: h },
+    NEW_FLOAT_PANEL_MIN_W,
+    NEW_FLOAT_PANEL_MIN_H,
+    {
+      maxW: NEW_FLOAT_PANEL_MAX_W,
+      maxH: NEW_FLOAT_PANEL_MAX_H,
+      rightInset: dockInset,
+    },
+  )
+  return pos
 }
 
 export type SessionSnapDims = { id: string; width: number; height: number }

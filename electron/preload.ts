@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('util:toFileUrl', absPath),
 
   selectFolder: (): Promise<
-    { folder: string; paths: string[] } | null
+    { folder: string; paths: string[] } | string[] | null
   > => ipcRenderer.invoke('dialog:selectFolder'),
 
   playlistFolderWatchStart: (

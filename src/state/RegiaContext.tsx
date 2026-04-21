@@ -49,6 +49,7 @@ import { totalDurationSecForPlaylistSave } from '../lib/sumMediaDurationsSec.ts'
 import type { SavedPlaylistMeta } from '../playlistTypes.ts'
 import { clampPanelInViewport } from '../lib/floatingPanelGeometry.ts'
 import {
+  computeNewFloatingPanelPos,
   computeRightPlanciaDockColumnWidthPx,
   queryPlanciaContentRect,
 } from '../lib/planciaSnap.ts'
@@ -101,11 +102,14 @@ import {
   type ChalkboardOutputMode,
   type ChalkboardPlacedImage,
   CHALKBOARD_DEFAULT_BG,
+  CHALKBOARD_PANEL_SIZE,
   createChalkboardFloatingSession,
   normalizeChalkboardBackgroundHex,
   createEmptyFloatingSession,
   createLaunchPadFloatingSession,
   createLaunchPadFloatingSessionWithKit,
+  DEFAULT_FLOATING_PANEL_SIZE,
+  LAUNCHPAD_PANEL_SIZE,
   chalkboardPathsEqual,
   chalkboardPlacementsEqual,
   cloneChalkboardPlacementsByBank,
@@ -1110,6 +1114,47 @@ function folderBasenameFromPaths(paths: string[]): string {
   return base.trim() || 'Playlist'
 }
 
+/** Directory padre dal path assoluto di un file (slash normalizzati). */
+function parentDirFromAbsFilePath(absPath: string): string | undefined {
+  const norm = absPath.replace(/\\/g, '/')
+  const lastSlash = norm.lastIndexOf('/')
+  if (lastSlash <= 0) return undefined
+  return norm.slice(0, lastSlash)
+}
+
+/**
+ * Risposta di `selectFolder`: oggetto `{ folder, paths }` oppure solo l’array
+ * `paths` (main Electron più vecchio). Senza normalizzazione, `picked.paths` su
+ * un array è `undefined` e la playlist non si aggiorna.
+ */
+function normalizeSelectFolderPayload(raw: unknown): {
+  paths: string[]
+  folder: string | undefined
+} | null {
+  if (raw == null) return null
+  if (Array.isArray(raw)) {
+    const paths = raw.filter((p): p is string => typeof p === 'string')
+    if (!paths.length) return null
+    return {
+      paths,
+      folder: parentDirFromAbsFilePath(paths[0]!),
+    }
+  }
+  if (typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  const pathsRaw = o.paths
+  const paths = Array.isArray(pathsRaw)
+    ? pathsRaw.filter((p): p is string => typeof p === 'string')
+    : []
+  if (!paths.length) return null
+  const folderFromField =
+    typeof o.folder === 'string' && o.folder.trim() ? o.folder.trim() : ''
+  return {
+    paths,
+    folder: folderFromField || parentDirFromAbsFilePath(paths[0]!),
+  }
+}
+
 const CLEAR_PLAYLIST_WATCH_FOLDER: Partial<FloatingPlaylistSession> = {
   playlistWatchFolder: undefined,
 }
@@ -2087,7 +2132,12 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     }
     setFloatingSessions((prev) => {
       if (prev.length > 0) return prev
-      const s = createEmptyFloatingSession()
+      const pos = computeNewFloatingPanelPos(
+        DEFAULT_FLOATING_PANEL_SIZE,
+        0,
+        prev,
+      )
+      const s = createEmptyFloatingSession(pos)
       setActiveFloatingSessionId(s.id)
       return [s]
     })
@@ -2462,10 +2512,12 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const addFloatingPlaylist = useCallback(() => {
     recordUndoPoint()
     setFloatingSessions((prev) => {
-      const last = prev[prev.length - 1]
-      const pos = last
-        ? { x: last.pos.x + 28, y: last.pos.y + 28 }
-        : { x: 24, y: 96 }
+      const k = prev.filter((s) => s.planciaDock !== 'right').length
+      const pos = computeNewFloatingPanelPos(
+        DEFAULT_FLOATING_PANEL_SIZE,
+        k,
+        prev,
+      )
       const s = createEmptyFloatingSession(pos)
       setActiveFloatingSessionId(s.id)
       return [...prev, s]
@@ -2486,10 +2538,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     const kitTitle =
       kit === 'sfx' ? 'Launchpad SFX (reazioni)' : 'Launchpad base'
     setFloatingSessions((prev) => {
-      const last = prev[prev.length - 1]
-      const pos = last
-        ? { x: last.pos.x + 28, y: last.pos.y + 28 }
-        : { x: 24, y: 96 }
+      const k = prev.filter((s) => s.planciaDock !== 'right').length
+      const pos = computeNewFloatingPanelPos(LAUNCHPAD_PANEL_SIZE, k, prev)
       const s =
         kitPaths.length > 0
           ? createLaunchPadFloatingSessionWithKit(kitPaths, pos, kitTitle)
@@ -2502,10 +2552,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const addFloatingChalkboard = useCallback(async () => {
     recordUndoPoint()
     setFloatingSessions((prev) => {
-      const last = prev[prev.length - 1]
-      const pos = last
-        ? { x: last.pos.x + 28, y: last.pos.y + 28 }
-        : { x: 24, y: 96 }
+      const k = prev.filter((s) => s.planciaDock !== 'right').length
+      const pos = computeNewFloatingPanelPos(CHALKBOARD_PANEL_SIZE, k, prev)
       const s = createChalkboardFloatingSession(pos)
       setActiveFloatingSessionId(s.id)
       return [...prev, s]
@@ -3341,10 +3389,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         return null
       recordUndoPoint()
       const prev = floatingSessionsRef.current
-      const last = prev[prev.length - 1]
-      const pos = last
-        ? { x: last.pos.x + 28, y: last.pos.y + 28 }
-        : { x: 24, y: 96 }
+      const k = prev.filter((s) => s.planciaDock !== 'right').length
+      const panelSizeForPos = isLaunchpad
+        ? LAUNCHPAD_PANEL_SIZE
+        : isChalkboard
+          ? CHALKBOARD_PANEL_SIZE
+          : DEFAULT_FLOATING_PANEL_SIZE
+      const pos = computeNewFloatingPanelPos(panelSizeForPos, k, prev)
       const label = data.label.trim() || 'Senza titolo'
       const loadedTheme = normalizePlaylistThemeColor(data.themeColor)
       const loadedWm = normalizePlaylistWatermarkAbsPath(data.watermarkPngPath)
@@ -3479,10 +3530,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         return null
       recordUndoPoint()
       const prev = floatingSessionsRef.current
-      const last = prev[prev.length - 1]
-      const pos = last
-        ? { x: last.pos.x + 28, y: last.pos.y + 28 }
-        : { x: 24, y: 96 }
+      const k = prev.filter((s) => s.planciaDock !== 'right').length
+      const panelSizeForPos = isLaunchpad
+        ? LAUNCHPAD_PANEL_SIZE
+        : isChalkboard
+          ? CHALKBOARD_PANEL_SIZE
+          : DEFAULT_FLOATING_PANEL_SIZE
+      const pos = computeNewFloatingPanelPos(panelSizeForPos, k, prev)
       const label = data.label.trim() || 'Senza titolo'
       const loadedTheme = normalizePlaylistThemeColor(data.themeColor)
       const loadedWm = normalizePlaylistWatermarkAbsPath(data.watermarkPngPath)
@@ -4638,14 +4692,16 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const openFolder = useCallback(
     async (sessionId: string) => {
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
-      if (s0?.playlistMode === 'launchpad') return
-      const picked = await window.electronAPI.selectFolder()
-      if (!picked?.paths?.length) return
+      if (s0?.playlistMode === 'launchpad' || s0?.playlistMode === 'chalkboard')
+        return
+      const raw = await window.electronAPI.selectFolder()
+      const picked = normalizeSelectFolderPayload(raw)
+      if (!picked) return
       recordUndoPoint()
       const preserveTitle = s0 != null && sessionHasLinkedPersistTarget(s0)
       await applyPathsList(picked.paths, sessionId, {
         skipHistory: true,
-        playlistWatchFolder: picked.folder,
+        ...(picked.folder ? { playlistWatchFolder: picked.folder } : {}),
       })
       if (!preserveTitle) {
         patchFloatingSession(sessionId, {
