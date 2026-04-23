@@ -216,8 +216,10 @@ type StoredPlaylistEntry = {
   updatedAt: string
   /** Somma durate file in secondi (opzionale; calcolata lato renderer). */
   totalDurationSec?: number
-  /** Dissolvenza incrociata tra brani (solo stesso tipo: video/video o immagine/immagine). */
+  /** Legacy boolean; preferire `crossfadeSec`. */
   crossfade?: boolean
+  /** Dissolvenza tra brani: 0, 3 o 6 secondi. */
+  crossfadeSec?: 0 | 3 | 6
   /** Loop elenco brani (solo `playlistMode: 'tracks'`). */
   loopMode?: StoredPlaylistLoopMode
   /** Hex #rrggbb tema playlist (opzionale). */
@@ -239,6 +241,14 @@ function normalizeStoredLoopMode(
 ): StoredPlaylistLoopMode | undefined {
   if (v === 'off' || v === 'one' || v === 'all') return v
   return undefined
+}
+
+function normalizedEntryCrossfadeSec(e: StoredPlaylistEntry): 0 | 3 | 6 {
+  const cs = (e as { crossfadeSec?: unknown }).crossfadeSec
+  if (cs === 0 || cs === 3 || cs === 6) return cs
+  if (e.crossfade === true) return 3
+  if (e.crossfade === false) return 0
+  return 3
 }
 
 function normalizeLaunchPadCellsStored(
@@ -447,6 +457,7 @@ function saveSavedPlaylist(opts: {
   label: string
   paths: string[]
   crossfade?: boolean
+  crossfadeSec?: 0 | 3 | 6
   loopMode?: StoredPlaylistLoopMode
   themeColor?: string | null
   playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'
@@ -488,13 +499,13 @@ function saveSavedPlaylist(opts: {
     label,
     paths: isLaunchpad || isChalkboard ? [] : [...opts.paths],
     updatedAt: new Date().toISOString(),
-    crossfade: Boolean(opts.crossfade),
   }
   if (tc) entry.themeColor = tc
   if (isLaunchpad) {
     entry.playlistMode = 'launchpad'
     entry.launchPadCells = cellsNorm ?? []
     delete entry.crossfade
+    delete entry.crossfadeSec
     delete entry.loopMode
     delete entry.chalkboardBankPaths
     delete entry.chalkboardPlacementsByBank
@@ -513,6 +524,7 @@ function saveSavedPlaylist(opts: {
     )
     delete entry.launchPadCells
     delete entry.crossfade
+    delete entry.crossfadeSec
     delete entry.loopMode
   } else {
     entry.playlistMode = 'tracks'
@@ -521,6 +533,16 @@ function saveSavedPlaylist(opts: {
     delete entry.chalkboardPlacementsByBank
     delete entry.chalkboardBackgroundColor
     entry.loopMode = normalizeStoredLoopMode(opts.loopMode) ?? 'off'
+    const sec: 0 | 3 | 6 =
+      opts.crossfadeSec === 0 || opts.crossfadeSec === 3 || opts.crossfadeSec === 6
+        ? opts.crossfadeSec
+        : opts.crossfade === true
+          ? 3
+          : opts.crossfade === false
+            ? 0
+            : 3
+    entry.crossfadeSec = sec
+    delete entry.crossfade
   }
   const tds = opts.totalDurationSec
   if (typeof tds === 'number' && Number.isFinite(tds) && tds >= 0) {
@@ -566,7 +588,7 @@ function getSavedPlaylist(
   id: string
   label: string
   paths: string[]
-  crossfade: boolean
+  crossfadeSec: 0 | 3 | 6
   loopMode: StoredPlaylistLoopMode
   themeColor: string
   playlistMode: 'tracks' | 'launchpad' | 'chalkboard'
@@ -599,7 +621,7 @@ function getSavedPlaylist(
     id,
     label: e.label,
     paths: isLp || isCb ? [] : [...e.paths],
-    crossfade: isLp || isCb ? false : Boolean(e.crossfade),
+    crossfadeSec: isLp || isCb ? 0 : normalizedEntryCrossfadeSec(e),
     loopMode:
       isLp || isCb ? 'off' : (normalizeStoredLoopMode(e.loopMode) ?? 'off'),
     themeColor: tc ?? '',
@@ -681,7 +703,7 @@ function duplicateSavedPlaylist(id: string): { id: string } | null {
       id: newId,
       label,
       paths: [],
-      crossfade: false,
+      crossfadeSec: 0,
       themeColor: dupTheme ?? null,
       playlistMode: 'launchpad',
       launchPadCells: src.launchPadCells.map((c) => ({ ...c })),
@@ -701,7 +723,7 @@ function duplicateSavedPlaylist(id: string): { id: string } | null {
       id: newId,
       label,
       paths: [],
-      crossfade: false,
+      crossfadeSec: 0,
       themeColor: dupTheme ?? null,
       playlistMode: 'chalkboard',
       chalkboardBankPaths: nextPaths,
@@ -721,7 +743,7 @@ function duplicateSavedPlaylist(id: string): { id: string } | null {
     id: newId,
     label,
     paths: [...src.paths],
-    crossfade: src.crossfade,
+    crossfadeSec: src.crossfadeSec,
     loopMode: src.loopMode,
     themeColor: dupTheme ?? null,
     playlistMode: 'tracks',
@@ -1626,8 +1648,8 @@ function setupIpc() {
           ? cmd.src
           : pathToMediaUrl(cmd.src)
       const out: PlaybackCommand =
-        cmd.crossfade !== undefined
-          ? { type: 'load', src, crossfade: cmd.crossfade }
+        cmd.crossfadeMs !== undefined
+          ? { type: 'load', src, crossfadeMs: cmd.crossfadeMs }
           : { type: 'load', src }
       forwardToOutput(out)
       return
@@ -1638,8 +1660,15 @@ function setupIpc() {
           ? cmd.src
           : pathToMediaUrl(cmd.src)
       const out: PlaybackCommand =
-        cmd.loop !== undefined
-          ? { type: 'sottofondoLoad', src, loop: cmd.loop }
+        cmd.loop !== undefined || cmd.crossfadeMs !== undefined
+          ? {
+              type: 'sottofondoLoad',
+              src,
+              ...(cmd.loop !== undefined ? { loop: cmd.loop } : {}),
+              ...(cmd.crossfadeMs !== undefined
+                ? { crossfadeMs: cmd.crossfadeMs }
+                : {}),
+            }
           : { type: 'sottofondoLoad', src }
       forwardToOutput(out)
       return
@@ -1739,6 +1768,7 @@ function setupIpc() {
         label: string
         paths: string[]
         crossfade?: boolean
+        crossfadeSec?: 0 | 3 | 6
         loopMode?: StoredPlaylistLoopMode
         themeColor?: string | null
         playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'

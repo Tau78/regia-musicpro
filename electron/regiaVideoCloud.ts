@@ -24,7 +24,9 @@ export type CloudPlaylistManifestV1 = {
   label: string
   playlistMode: 'tracks' | 'launchpad' | 'chalkboard'
   paths: string[]
-  crossfade: boolean
+  /** Legacy; preferire `crossfadeSec`. */
+  crossfade?: boolean
+  crossfadeSec?: 0 | 3 | 6
   loopMode: 'off' | 'one' | 'all'
   themeColor: string
   launchPadCells: Array<{
@@ -46,6 +48,14 @@ export type CloudPlaylistManifestV1 = {
 
 function configPath(app: App): string {
   return path.join(app.getPath('userData'), 'regia-video-cloud.json')
+}
+
+function manifestCrossfadeSec(m: CloudPlaylistManifestV1): 0 | 3 | 6 {
+  const cs = m.crossfadeSec
+  if (cs === 0 || cs === 3 || cs === 6) return cs
+  if (m.crossfade === true) return 3
+  if (m.crossfade === false) return 0
+  return 3
 }
 
 export function readCloudConfig(app: App): RegiaVideoCloudConfig {
@@ -331,7 +341,7 @@ export function loadCloudPlaylistFile(
       data: {
         label: string
         paths: string[]
-        crossfade: boolean
+        crossfadeSec: 0 | 3 | 6
         loopMode: 'off' | 'one' | 'all'
         themeColor: string
         playlistMode: 'tracks' | 'launchpad' | 'chalkboard'
@@ -404,7 +414,7 @@ export function loadCloudPlaylistFile(
     data: {
       label: m.label,
       paths,
-      crossfade: Boolean(m.crossfade),
+      crossfadeSec: manifestCrossfadeSec(m),
       loopMode: m.loopMode === 'one' || m.loopMode === 'all' ? m.loopMode : 'off',
       themeColor: typeof m.themeColor === 'string' ? m.themeColor : '',
       playlistMode: m.playlistMode,
@@ -424,6 +434,7 @@ export type CloudSavePayload = {
   label: string
   paths: string[]
   crossfade?: boolean
+  crossfadeSec?: 0 | 3 | 6
   loopMode?: 'off' | 'one' | 'all'
   themeColor?: string | null
   playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'
@@ -592,7 +603,22 @@ export function saveCloudPlaylist(
     label: payload.label.trim().slice(0, 120) || 'Senza titolo',
     playlistMode: payload.playlistMode ?? 'tracks',
     paths: payload.playlistMode === 'tracks' ? relPaths : [],
-    crossfade: Boolean(payload.crossfade),
+    ...(() => {
+      const sec: 0 | 3 | 6 =
+        payload.crossfadeSec === 0 ||
+        payload.crossfadeSec === 3 ||
+        payload.crossfadeSec === 6
+          ? payload.crossfadeSec
+          : payload.crossfade === true
+            ? 3
+            : payload.crossfade === false
+              ? 0
+              : 3
+      return {
+        crossfadeSec: sec,
+        crossfade: sec > 0,
+      }
+    })(),
     loopMode:
       payload.loopMode === 'one' || payload.loopMode === 'all'
         ? payload.loopMode

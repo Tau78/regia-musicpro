@@ -3,6 +3,8 @@
  * (titolo blur / Invio da `persistSavedPlaylistAfterFloatingTitleBlur`).
  *
  * Tenere qui launchpad + tracks insieme evita regressioni del tipo «solo launchpad salvato al primo commit».
+ * Il **sottofondo** non crea mai una voce `tracks` su disco: resta nel workspace (come
+ * flussi distinti per lavagna/launchpad); eventuali setlist interne saranno un’estensione futura.
  */
 import { normalizePlaylistThemeColor } from './playlistThemeColor.ts'
 import { normalizePlaylistWatermarkAbsPath } from './playlistWatermarkPath.ts'
@@ -13,6 +15,7 @@ import {
   type FloatingPlaylistSession,
   type LaunchPadCell,
 } from '../state/floatingPlaylistSession.ts'
+import { normalizePlaylistCrossfadeSec } from './playlistCrossfade.ts'
 
 export type ShellLoopMode = 'off' | 'one' | 'all'
 
@@ -29,7 +32,7 @@ export type FirstDiskLinkPlan =
       label: string
       themeColor: string
       paths: string[]
-      crossfade: boolean
+      crossfadeSec: 0 | 3 | 6
       loopMode: ShellLoopMode
     }
   | {
@@ -86,6 +89,9 @@ export function planFirstDiskLinkForUnlinkedSession(args: {
     }
   }
 
+  /** Sottofondo: un solo pannello nel workspace, niente preset PLAYLIST (`tracks`). */
+  if (s.playlistMode === 'sottofondo') return { kind: 'skip' }
+
   const paths = s.paths ?? []
   if (!paths.length) return { kind: 'skip' }
 
@@ -96,7 +102,7 @@ export function planFirstDiskLinkForUnlinkedSession(args: {
     label,
     themeColor: themeCur,
     paths,
-    crossfade: s.playlistCrossfade ?? false,
+    crossfadeSec: normalizePlaylistCrossfadeSec(s.playlistCrossfadeSec),
     loopMode,
   }
 }

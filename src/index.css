@@ -4610,8 +4610,11 @@ button {
   position: relative;
   overflow: visible;
   flex-shrink: 0;
-  line-height: 0;
-  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  line-height: 1;
+  padding: 0 0.25rem;
   border: none;
   background: transparent;
   box-shadow: none;
@@ -4635,6 +4638,15 @@ button {
 
 .floating-playlist-window-pin.floating-playlist-icon-btn.is-active {
   color: var(--accent);
+}
+
+.floating-playlist-crossfade-sec-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  min-width: 1.1rem;
+  text-align: left;
 }
 
 .floating-playlist-crossfade-hint-tooltip {
@@ -4904,6 +4916,165 @@ button {
   background: rgba(58, 134, 255, 0.2);
   border: 1px solid rgba(58, 134, 255, 0.42);
   color: var(--text);
+}
+
+/* Wizard Presenter: mappa tasti telecomando (playlist) */
+.presenter-wizard-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.presenter-wizard-dialog {
+  width: min(420px, 100%);
+  max-height: min(90vh, 560px);
+  overflow: auto;
+  padding: 1rem 1.1rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.presenter-wizard-title {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.presenter-wizard-desc {
+  margin: 0 0 0.75rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.presenter-wizard-learn-banner {
+  margin-bottom: 0.65rem;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 8px;
+  background: rgba(58, 134, 255, 0.2);
+  border: 1px solid rgba(58, 134, 255, 0.42);
+  color: var(--text);
+}
+
+.presenter-wizard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.presenter-wizard-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text);
+  padding: 0.45rem 0.5rem 0.45rem 0;
+  vertical-align: middle;
+  width: 42%;
+}
+
+.presenter-wizard-table td {
+  padding: 0.35rem 0.25rem;
+  vertical-align: middle;
+  color: var(--muted);
+}
+
+.presenter-wizard-kbd {
+  display: inline-block;
+  margin-right: 0.35rem;
+  padding: 0.12rem 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+
+.presenter-wizard-code {
+  font-size: 0.65rem;
+  opacity: 0.75;
+  font-family: ui-monospace, monospace;
+}
+
+.presenter-wizard-learn-btn {
+  padding: 0.28rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(58, 134, 255, 0.16);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.presenter-wizard-learn-btn:hover {
+  filter: brightness(1.08);
+}
+
+.presenter-wizard-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border);
+}
+
+.presenter-wizard-primary,
+.presenter-wizard-secondary {
+  padding: 0.38rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+
+.presenter-wizard-primary {
+  background: rgba(58, 134, 255, 0.35);
+  color: var(--text);
+  border-color: rgba(58, 134, 255, 0.55);
+}
+
+.presenter-wizard-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+}
+
+.presenter-wizard-primary:hover,
+.presenter-wizard-secondary:hover {
+  filter: brightness(1.06);
+}
+
+.floating-playlist-presenter-wizard-btn {
+  max-width: 9.5rem;
+  padding: 0.22rem 0.4rem;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.15;
+  text-align: center;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(168, 85, 247, 0.18);
+  color: var(--text);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.floating-playlist-presenter-wizard-btn:hover {
+  filter: brightness(1.08);
 }
 
 .launchpad-bank-tabs {
@@ -5262,6 +5433,14 @@ button {
   border-radius: 6px;
   overflow: hidden;
   border: 1px solid var(--border);
+}
+
+.floating-playlist-loop-btn.floating-playlist-loop-cycle {
+  min-width: 3.25rem;
+  padding-left: 0.65rem;
+  padding-right: 0.65rem;
+  border-right: none;
+  letter-spacing: 0.02em;
 }
 
 .floating-playlist-loop-btn {

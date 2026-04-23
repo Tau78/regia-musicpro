@@ -113,6 +113,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     label: string
     paths: string[]
     crossfade?: boolean
+    crossfadeSec?: 0 | 3 | 6
     loopMode?: 'off' | 'one' | 'all'
     themeColor?: string | null
     playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'
@@ -139,7 +140,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     id: string
     label: string
     paths: string[]
-    crossfade: boolean
+    crossfadeSec: 0 | 3 | 6
     loopMode: 'off' | 'one' | 'all'
     themeColor: string
     playlistMode: 'tracks' | 'launchpad' | 'chalkboard'
@@ -203,7 +204,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         data: {
           label: string
           paths: string[]
-          crossfade: boolean
+          crossfadeSec: 0 | 3 | 6
           loopMode: 'off' | 'one' | 'all'
           themeColor: string
           playlistMode: 'tracks' | 'launchpad' | 'chalkboard'
@@ -239,6 +240,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       label: string
       paths: string[]
       crossfade?: boolean
+      crossfadeSec?: 0 | 3 | 6
       loopMode?: 'off' | 'one' | 'all'
       themeColor?: string | null
       playlistMode?: 'tracks' | 'launchpad' | 'chalkboard'

@@ -6,3 +6,10 @@ export function cycleLoopMode(mode: LoopCycleMode): LoopCycleMode {
   if (mode === 'one') return 'all'
   return 'off'
 }
+
+/** Etichetta compatta sul pulsante ciclo (OFF / 1 / Tutti). */
+export function loopCycleModeShortLabel(mode: LoopCycleMode): string {
+  if (mode === 'off') return 'OFF'
+  if (mode === 'one') return '1'
+  return 'Tutti'
+}

@@ -1,5 +1,10 @@
 export type PlaybackCommand =
-  | { type: 'load'; src: string; crossfade?: boolean }
+  | {
+      type: 'load'
+      src: string
+      /** 0 = taglio; 3000 o 6000 = dissolvenza incrociata (solo stesso tipo media). */
+      crossfadeMs?: number
+    }
   | { type: 'seek'; seconds: number }
   | { type: 'play' }
   | { type: 'pause' }
@@ -14,6 +19,8 @@ export type PlaybackCommand =
   /** `''` = dispositivo predefinito di sistema (setSinkId). */
   | { type: 'setSinkId'; sinkId: string }
   | { type: 'setLoopOne'; loop: boolean }
+  | { type: 'setCrossfadeMs'; ms: number }
+  /** @deprecated inviato da build vecchi; mappato su ms 0 / 3000. */
   | { type: 'setCrossfade'; enabled: boolean }
   /** Durata immagine fissa in playlist (secondi, clamp 1–600 in uscita). */
   | { type: 'setStillImageDurationSec'; seconds: number }
@@ -50,7 +57,13 @@ export type PlaybackCommand =
    * Canale audio «sottofondo» separato dal video program: stesso device di uscita,
    * mix indipendente da play/pausa del programma.
    */
-  | { type: 'sottofondoLoad'; src: string; loop?: boolean }
+  | {
+      type: 'sottofondoLoad'
+      src: string
+      loop?: boolean
+      /** 0 = taglio; 3000 o 6000 = incrocio volume tra due elementi audio. */
+      crossfadeMs?: number
+    }
   | { type: 'sottofondoPlay' }
   | { type: 'sottofondoPause' }
   | { type: 'sottofondoStop' }

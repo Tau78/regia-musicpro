@@ -35,7 +35,7 @@ export type PlaylistFloaterSyncPayload = {
   secondScreenOn: boolean
   savedPlaylists: RegiaContextValue['savedPlaylists']
   playlistTitle: string
-  playlistCrossfade: boolean
+  playlistCrossfadeSec: RegiaContextValue['playlistCrossfadeSec']
   outputTrackLoopMode: RegiaContextValue['outputTrackLoopMode']
   stillImageDurationSec: number
   namedWorkspaces: RegiaContextValue['namedWorkspaces']
@@ -87,7 +87,7 @@ export function buildPlaylistFloaterSyncPayload(
     secondScreenOn: v.secondScreenOn,
     savedPlaylists: v.savedPlaylists,
     playlistTitle: v.playlistTitle,
-    playlistCrossfade: v.playlistCrossfade,
+    playlistCrossfadeSec: v.playlistCrossfadeSec,
     outputTrackLoopMode: v.outputTrackLoopMode,
     stillImageDurationSec: v.stillImageDurationSec,
     namedWorkspaces: v.namedWorkspaces,
@@ -244,10 +244,10 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     setPlaylistWatermarkPngPath: call(
       'setPlaylistWatermarkPngPath',
     ) as RegiaContextValue['setPlaylistWatermarkPngPath'],
-    playlistCrossfade: sync.playlistCrossfade,
-    setPlaylistCrossfade: call(
-      'setPlaylistCrossfade',
-    ) as RegiaContextValue['setPlaylistCrossfade'],
+    playlistCrossfadeSec: sync.playlistCrossfadeSec,
+    cyclePlaylistCrossfadeSec: call(
+      'cyclePlaylistCrossfadeSec',
+    ) as RegiaContextValue['cyclePlaylistCrossfadeSec'],
     setPlaylistLoopMode: call(
       'setPlaylistLoopMode',
     ) as RegiaContextValue['setPlaylistLoopMode'],

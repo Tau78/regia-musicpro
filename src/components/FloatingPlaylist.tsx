@@ -69,6 +69,11 @@ import {
 import { normalizePlaylistWatermarkAbsPath } from '../lib/playlistWatermarkPath.ts'
 import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
 import { sessionIsLiveOnRegiaOutput } from '../lib/sessionLiveOutput.ts'
+import { normalizePlaylistCrossfadeSec } from '../lib/playlistCrossfade.ts'
+import {
+  cycleLoopMode,
+  loopCycleModeShortLabel,
+} from '../lib/loopModeCycle.ts'
 import {
   formatPlaylistDurationLabel,
   usePlaylistMediaDurations,
@@ -77,6 +82,7 @@ import { useRegia, type LoopMode } from '../state/RegiaContext.tsx'
 import MediaDurationRing from './MediaDurationRing.tsx'
 import RegiaPanelHintHost from './RegiaPanelHintHost.tsx'
 import ChalkboardPanel from './ChalkboardPanel.tsx'
+import { PresenterKeyWizardDialog } from './PresenterKeyWizardDialog.tsx'
 import { PlaylistChromeOverflowRow } from './PlaylistChromeOverflowRow.tsx'
 import {
   cloneChalkboardPlacementsByBank,
@@ -981,7 +987,7 @@ export default function FloatingPlaylist({
     setPlaylistTitle,
     setPlaylistThemeColor,
     setPlaylistWatermarkPngPath,
-    setPlaylistCrossfade,
+    cyclePlaylistCrossfadeSec,
     setPlaylistOutputMuted,
     setPlaylistOutputVolume,
     recordUndoPoint,
@@ -1100,7 +1106,11 @@ export default function FloatingPlaylist({
     (isLaunchpad ? defaultLaunchPadCells() : null)
   const currentIndex = session?.currentIndex ?? 0
   const playlistTitle = session?.playlistTitle ?? ''
-  const playlistCrossfade = session?.playlistCrossfade ?? false
+  const playlistCrossfadeSec = normalizePlaylistCrossfadeSec(
+    session?.playlistCrossfadeSec,
+  )
+  const playlistCrossfadeLabel =
+    playlistCrossfadeSec === 0 ? 'Off' : `${playlistCrossfadeSec} s`
   const playlistLoopMode = session?.playlistLoopMode
   const panelLoopEffective: LoopMode = playlistLoopMode ?? loopMode
   const playlistOutputMuted = session?.playlistOutputMuted ?? false
@@ -1165,6 +1175,7 @@ export default function FloatingPlaylist({
   } | null>(null)
   /** Slot index in modalità “impara tasto”, o `null`. */
   const [padKeyLearnSlot, setPadKeyLearnSlot] = useState<number | null>(null)
+  const [presenterWizardOpen, setPresenterWizardOpen] = useState(false)
   const launchPadSampleGesturesRef = useRef(
     new Map<
       number,
@@ -2852,6 +2863,8 @@ export default function FloatingPlaylist({
 
   const zi = floatingZOrder.indexOf(sessionId)
   const zIndex = 40 + (zi >= 0 ? zi : 0)
+  const presenterWizardZBase =
+    isChalkboard && chalkboardFullscreen ? 20000 : zIndex
 
   const ctxSlotCell =
     launchPadCtx && launchPadCells
@@ -3000,14 +3013,18 @@ export default function FloatingPlaylist({
                   ? 'Nome o titolo…'
                   : isChalkboard
                     ? 'Nome o titolo…'
-                    : 'Nuova playlist'
+                    : isSottofondo
+                      ? 'Nome sottofondo…'
+                      : 'Nuova playlist'
               }
               aria-label={
                 isLaunchpad
                   ? 'Nome del pannello Launchpad'
                   : isChalkboard
                     ? 'Nome del pannello Chalkboard'
-                    : 'Nome della playlist'
+                    : isSottofondo
+                      ? 'Nome del pannello Sottofondo'
+                      : 'Nome della playlist'
               }
               maxLength={120}
               spellCheck={false}
@@ -3147,7 +3164,9 @@ export default function FloatingPlaylist({
                           <p className="floating-playlist-panel-help-popover-p">
                             <strong>Salva (disco)</strong> — Sovrascrive la voce in
                             PLAYLIST che hai aperto con Carica; il pulsante si accende
-                            solo se ci sono modifiche non ancora salvate su quel file.
+                            solo se ci sono modifiche non ancora salvate su quel file. Sul{' '}
+                            <strong>Sottofondo</strong> non si applica: pannello unico
+                            nel workspace (in futuro: setlist interne al pannello).
                           </p>
                           <p className="floating-playlist-panel-help-popover-p">
                             <strong>Annulla / Ripristina</strong> — Come in plancia:{' '}
@@ -3155,10 +3174,19 @@ export default function FloatingPlaylist({
                             <kbd>⌘⇧Z</kbd> / <kbd>Ctrl+⇧Z</kbd>.
                           </p>
                           <p className="floating-playlist-panel-help-popover-p">
-                            <strong>Crossfade</strong> — Dissolvenza incrociata in uscita
-                            tra due brani <em>dello stesso tipo</em> (solo video↔video
-                            o immagine↔immagine). Passando il mouse sul pulsante crossfade
-                            compare il promemoria sui tipi ammessi.
+                            <strong>WIZARD PRESENTER</strong> — Nella barra strumenti
+                            apre un popup per insegnare all&apos;app i tre tasti del
+                            telecomando (o tastiera): <em>Su</em> (brano precedente),{' '}
+                            <em>Giù</em> (successivo) e <em>Play/Pausa</em>. I valori
+                            restano in memoria locale e valgono per tutta l&apos;app.
+                          </p>
+                          <p className="floating-playlist-panel-help-popover-p">
+                            <strong>Crossfade</strong> — Clic cicla{' '}
+                            <em>Off</em> → <em>3 s</em> → <em>6 s</em>. Sulla playlist
+                            programma: dissolvenza in uscita tra due brani dello stesso
+                            tipo (video↔video o immagine↔immagine). Sul sottofondo:
+                            incrocio di volume tra brani audio. Passando il mouse sul
+                            pulsante compare il promemoria.
                           </p>
                           <p className="floating-playlist-panel-help-popover-p">
                             <strong>Volume e mute pannello</strong> — Il cursore
@@ -3167,10 +3195,10 @@ export default function FloatingPlaylist({
                             <em>questa</em> playlist (si somma al mute globale).
                           </p>
                           <p className="floating-playlist-panel-help-popover-p">
-                            <strong>Loop</strong> — <em>Off</em>: a fine brano segue la
-                            logica di riproduzione corrente. <em>File</em>: ripete il clip
-                            selezionato. <em>Lista</em>: dall&apos;ultimo brano torna al
-                            primo.
+                            <strong>Loop</strong> — Un pulsante cicla{' '}
+                            <em>OFF</em> → <em>1</em> (ripeti il brano) →{' '}
+                            <em>Tutti</em> (dall&apos;ultimo torna al primo) →{' '}
+                            <em>OFF</em>. Vale per playlist e sottofondo.
                           </p>
                           <p className="floating-playlist-panel-help-popover-p">
                             <strong>Elenco brani</strong> — Clic su una riga per
@@ -3325,6 +3353,24 @@ export default function FloatingPlaylist({
                   />
                 </Fragment>
               ) : null}
+              {!isLaunchpad && !isChalkboard ? (
+                <Fragment key="chrome-slot-presenter-collapsed">
+                  <span className="floating-playlist-chrome-sep" aria-hidden />
+                  <button
+                    type="button"
+                    className="floating-playlist-presenter-wizard-btn"
+                    onClick={() => setPresenterWizardOpen(true)}
+                    title="Wizard Presenter: tasti SU, GIÙ e Play/Pausa (tutta l’app)."
+                    aria-haspopup="dialog"
+                    aria-expanded={presenterWizardOpen}
+                    aria-label="Apri Wizard Presenter tasti telecomando"
+                  >
+                    WIZARD
+                    <br />
+                    PRESENTER
+                  </button>
+                </Fragment>
+              ) : null}
               <Fragment key="chrome-slot-doc">
               <div
                 className="floating-playlist-chrome-group floating-playlist-chrome-group--doc"
@@ -3393,27 +3439,39 @@ export default function FloatingPlaylist({
                 <button
                   type="button"
                   className="floating-playlist-icon-btn"
-                  disabled={panelLocked}
+                  disabled={panelLocked || isSottofondo}
                   onClick={() =>
                     void saveFloatingPlaylistCopyToRegiaVideoCloud(sessionId)
                   }
-                  title="Salva una copia come nuovo file JSON in Regia Video/Playlist (app desktop)"
-                  aria-label="Salva copia cloud Regia Video"
+                  title={
+                    isSottofondo
+                      ? 'Il Sottofondo non si salva come preset su file (resta nel workspace)'
+                      : 'Salva una copia come nuovo file JSON in Regia Video/Playlist (app desktop)'
+                  }
+                  aria-label={
+                    isSottofondo
+                      ? 'Salvataggio cloud non disponibile per Sottofondo'
+                      : 'Salva copia cloud Regia Video'
+                  }
                 >
                   <IconRegiaCloudCopy />
                 </button>
                 <button
                   type="button"
                   className="floating-playlist-icon-btn floating-playlist-save-disk"
-                  disabled={!savedPlaylistDirty(sessionId) || panelLocked}
+                  disabled={
+                    !savedPlaylistDirty(sessionId) || panelLocked || isSottofondo
+                  }
                   onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
                   title={
-                    savedPlaylistDirty(sessionId)
-                      ? typeof session.regiaVideoCloudSourceFile === 'string' &&
-                        session.regiaVideoCloudSourceFile.trim() !== ''
-                        ? 'Sovrascrive il file JSON cloud collegato'
-                        : 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
-                      : 'Nessuna modifica da salvare sul file collegato'
+                    isSottofondo
+                      ? 'Il Sottofondo non si collega a PLAYLIST: elenco e impostazioni restano nel workspace'
+                      : savedPlaylistDirty(sessionId)
+                        ? typeof session.regiaVideoCloudSourceFile === 'string' &&
+                          session.regiaVideoCloudSourceFile.trim() !== ''
+                          ? 'Sovrascrive il file JSON cloud collegato'
+                          : 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
+                        : 'Nessuna modifica da salvare sul file collegato'
                   }
                   aria-label="Salva sovrascrivendo la voce caricata da PLAYLIST"
                 >
@@ -3561,6 +3619,24 @@ export default function FloatingPlaylist({
                   <span className="floating-playlist-chrome-sep" aria-hidden />
                 </Fragment>
               ) : null}
+              {!isLaunchpad && !isChalkboard ? (
+                <Fragment key="chrome-slot-presenter-expanded">
+                  <span className="floating-playlist-chrome-sep" aria-hidden />
+                  <button
+                    type="button"
+                    className="floating-playlist-presenter-wizard-btn"
+                    onClick={() => setPresenterWizardOpen(true)}
+                    title="Wizard Presenter: tasti SU, GIÙ e Play/Pausa (tutta l’app)."
+                    aria-haspopup="dialog"
+                    aria-expanded={presenterWizardOpen}
+                    aria-label="Apri Wizard Presenter tasti telecomando"
+                  >
+                    WIZARD
+                    <br />
+                    PRESENTER
+                  </button>
+                </Fragment>
+              ) : null}
               <Fragment key="chrome-slot-doc">
                 <div
                   className="floating-playlist-chrome-group floating-playlist-chrome-group--doc"
@@ -3629,27 +3705,39 @@ export default function FloatingPlaylist({
                   <button
                     type="button"
                     className="floating-playlist-icon-btn"
-                    disabled={panelLocked}
+                    disabled={panelLocked || isSottofondo}
                     onClick={() =>
                       void saveFloatingPlaylistCopyToRegiaVideoCloud(sessionId)
                     }
-                    title="Salva una copia come nuovo file JSON in Regia Video/Playlist (app desktop)"
-                    aria-label="Salva copia cloud Regia Video"
+                    title={
+                      isSottofondo
+                        ? 'Il Sottofondo non si salva come preset su file (resta nel workspace)'
+                        : 'Salva una copia come nuovo file JSON in Regia Video/Playlist (app desktop)'
+                    }
+                    aria-label={
+                      isSottofondo
+                        ? 'Salvataggio cloud non disponibile per Sottofondo'
+                        : 'Salva copia cloud Regia Video'
+                    }
                   >
                     <IconRegiaCloudCopy />
                   </button>
                   <button
                     type="button"
                     className="floating-playlist-icon-btn floating-playlist-save-disk"
-                    disabled={!savedPlaylistDirty(sessionId) || panelLocked}
+                    disabled={
+                      !savedPlaylistDirty(sessionId) || panelLocked || isSottofondo
+                    }
                     onClick={() => void saveLoadedPlaylistOverwrite(sessionId)}
                     title={
-                      savedPlaylistDirty(sessionId)
-                        ? typeof session.regiaVideoCloudSourceFile === 'string' &&
-                          session.regiaVideoCloudSourceFile.trim() !== ''
-                          ? 'Sovrascrive il file JSON cloud collegato'
-                          : 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
-                        : 'Nessuna modifica da salvare sul file collegato'
+                      isSottofondo
+                        ? 'Il Sottofondo non si collega a PLAYLIST: elenco e impostazioni restano nel workspace'
+                        : savedPlaylistDirty(sessionId)
+                          ? typeof session.regiaVideoCloudSourceFile === 'string' &&
+                            session.regiaVideoCloudSourceFile.trim() !== ''
+                            ? 'Sovrascrive il file JSON cloud collegato'
+                            : 'Sovrascrive la playlist o launchpad salvati che hai aperto con Carica'
+                          : 'Nessuna modifica da salvare sul file collegato'
                     }
                     aria-label="Salva sovrascrivendo la voce caricata da PLAYLIST"
                   >
@@ -3692,32 +3780,41 @@ export default function FloatingPlaylist({
                   </button>
                 </div>
               </Fragment>
-              {!isLaunchpad && !isChalkboard && !isSottofondo ? (
+              {!isLaunchpad && !isChalkboard ? (
                 <Fragment key="chrome-slot-xfade">
                   <span className="floating-playlist-chrome-sep" aria-hidden />
                   <div
                     className="floating-playlist-chrome-group floating-playlist-chrome-group--xfade"
                     role="group"
-                    aria-label="Crossfade"
+                    aria-label="Crossfade in uscita"
                   >
                     <button
                       type="button"
-                      className={`floating-playlist-icon-btn floating-playlist-crossfade-toggle ${playlistCrossfade ? 'is-active' : ''}`}
+                      className={`floating-playlist-icon-btn floating-playlist-crossfade-toggle ${playlistCrossfadeSec > 0 ? 'is-active' : ''}`}
                       disabled={panelLocked}
-                      title="Crossfade tra brani: dissolvenza incrociata in uscita tra due brani dello stesso tipo."
-                      aria-label="Crossfade tra brani. Solo tra video/video o immagine/immagine."
-                      aria-pressed={playlistCrossfade}
+                      title={
+                        isSottofondo
+                          ? `Crossfade audio tra brani: ${playlistCrossfadeLabel}. Clic: Off, 3 s, 6 s.`
+                          : `Crossfade tra brani in uscita: ${playlistCrossfadeLabel} (solo stesso tipo: video/video o immagine/immagine). Clic: Off, 3 s, 6 s.`
+                      }
+                      aria-label={`Crossfade ${playlistCrossfadeLabel}`}
+                      aria-pressed={playlistCrossfadeSec > 0}
                       onClick={() => {
                         setActiveFloatingSession(sessionId)
-                        setPlaylistCrossfade(!playlistCrossfade, sessionId)
+                        cyclePlaylistCrossfadeSec(sessionId)
                       }}
                     >
                       <IconCrossfade />
+                      <span className="floating-playlist-crossfade-sec-label">
+                        {playlistCrossfadeLabel}
+                      </span>
                       <span
                         className="floating-playlist-crossfade-hint-tooltip"
                         aria-hidden="true"
                       >
-                        Solo tra video/video o immagine/immagine
+                        {isSottofondo
+                          ? 'Incrocio volume tra brani audio'
+                          : 'Solo tra video/video o immagine/immagine'}
                       </span>
                     </button>
                   </div>
@@ -3761,48 +3858,25 @@ export default function FloatingPlaylist({
               <div className="floating-playlist-loop-toggles">
                 <button
                   type="button"
-                  className={
+                  disabled={panelLocked}
+                  className={`floating-playlist-loop-btn floating-playlist-loop-cycle${panelLoopEffective !== 'off' ? ' is-active' : ''}`}
+                  onClick={() => {
+                    setActiveFloatingSession(sessionId)
+                    setPlaylistLoopMode(
+                      sessionId,
+                      cycleLoopMode(panelLoopEffective),
+                    )
+                  }}
+                  title={
                     panelLoopEffective === 'off'
-                      ? 'floating-playlist-loop-btn is-active'
-                      : 'floating-playlist-loop-btn'
+                      ? 'Loop OFF. Clic: ripeti il brano corrente (1).'
+                      : panelLoopEffective === 'one'
+                        ? 'Loop brano (1). Clic: ripeti tutta la lista (Tutti).'
+                        : 'Loop tutta la lista (Tutti). Clic: disattiva (OFF).'
                   }
-                  onClick={() => {
-                    setActiveFloatingSession(sessionId)
-                    setPlaylistLoopMode(sessionId, 'off')
-                  }}
-                  title="Loop disattivato: a fine brano si ferma o passa al successivo"
+                  aria-label={`Loop pannello: ${loopCycleModeShortLabel(panelLoopEffective)}. Clic per ciclo OFF, 1, Tutti.`}
                 >
-                  Off
-                </button>
-                <button
-                  type="button"
-                  className={
-                    panelLoopEffective === 'one'
-                      ? 'floating-playlist-loop-btn is-active'
-                      : 'floating-playlist-loop-btn'
-                  }
-                  onClick={() => {
-                    setActiveFloatingSession(sessionId)
-                    setPlaylistLoopMode(sessionId, 'one')
-                  }}
-                  title="Ripeti il file corrente"
-                >
-                  File
-                </button>
-                <button
-                  type="button"
-                  className={
-                    panelLoopEffective === 'all'
-                      ? 'floating-playlist-loop-btn is-active'
-                      : 'floating-playlist-loop-btn'
-                  }
-                  onClick={() => {
-                    setActiveFloatingSession(sessionId)
-                    setPlaylistLoopMode(sessionId, 'all')
-                  }}
-                  title="Alla fine dell’ultimo brano torna al primo"
-                >
-                  Lista
+                  {loopCycleModeShortLabel(panelLoopEffective)}
                 </button>
               </div>
             </div>
@@ -4475,6 +4549,11 @@ export default function FloatingPlaylist({
         </div>
       </div>
     ) : null}
+    <PresenterKeyWizardDialog
+      open={presenterWizardOpen}
+      onClose={() => setPresenterWizardOpen(false)}
+      zIndex={presenterWizardZBase}
+    />
     </Fragment>
   )
 }

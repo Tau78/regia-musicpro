@@ -25,6 +25,7 @@ import {
 } from './lib/panelTooltipHintsSettings.ts'
 import { clampSidebarWidth } from './lib/sidebarLayout.ts'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
+import { usePresenterKeyBindings } from './lib/presenterKeySettings.ts'
 import { formatRegiaProgramCreatedIt } from './lib/regiaAppBranding.ts'
 import { RegiaProvider, useRegia } from './state/RegiaContext.tsx'
 
@@ -161,6 +162,8 @@ function RegiaShell() {
     [setSidebarWidthPx],
   )
 
+  const presenterKeys = usePresenterKeyBindings()
+
   useKeyboardShortcuts({
     onTogglePlay: () => void togglePlay(),
     onPrev: () => void goPrev(),
@@ -171,6 +174,9 @@ function RegiaShell() {
     onRedo: () => {
       if (canRedo) void redo()
     },
+    presenterPrevCode: presenterKeys.prevCode,
+    presenterNextCode: presenterKeys.nextCode,
+    presenterPlayPauseCode: presenterKeys.playPauseCode,
   })
 
   return (

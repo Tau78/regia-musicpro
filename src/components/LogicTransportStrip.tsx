@@ -1,4 +1,6 @@
 import { isStillImagePath } from '../mediaPaths.ts'
+import { launchPadKeyLabel } from '../lib/launchPadKeyboard.ts'
+import { usePresenterKeyBindings } from '../lib/presenterKeySettings.ts'
 import { useRegia } from '../state/RegiaContext.tsx'
 
 function IconPrev() {
@@ -60,6 +62,11 @@ export default function LogicTransportStrip() {
     previewSrc,
   } = useRegia()
 
+  const pk = usePresenterKeyBindings()
+  const prevKeyHint = launchPadKeyLabel(pk.prevCode) || pk.prevCode
+  const nextKeyHint = launchPadKeyLabel(pk.nextCode) || pk.nextCode
+  const playKeyHint = launchPadKeyLabel(pk.playPauseCode) || pk.playPauseCode
+
   const stillPreview = previewSrc ? isStillImagePath(previewSrc) : false
   const canPrev =
     paths.length > 0 &&
@@ -84,8 +91,8 @@ export default function LogicTransportStrip() {
           disabled={!canPrev}
           onClick={() => void goPrev()}
           aria-label="Brano precedente"
-          title="Brano precedente (PageUp, freccia sinistra o P)"
-          data-preview-hint="Brano precedente nella playlist che comanda l’uscita video (PageUp, freccia sinistra o P)."
+          title={`Brano precedente (tasto: ${prevKeyHint})`}
+          data-preview-hint={`Brano precedente nella playlist che comanda l’uscita video (tasto configurabile nel Wizard Presenter nel pannello playlist: ${prevKeyHint}).`}
         >
           <IconPrev />
         </button>
@@ -94,11 +101,15 @@ export default function LogicTransportStrip() {
           className={`logic-tbtn logic-tbtn--play ${playing ? 'is-playing' : ''}`}
           onClick={() => void togglePlay()}
           aria-label={playing ? 'Pausa' : 'Play'}
-          title={playing ? 'Pausa' : 'Play (barra spaziatrice)'}
+          title={
+            playing
+              ? `Pausa (tasto: ${playKeyHint})`
+              : `Play (tasto: ${playKeyHint})`
+          }
           data-preview-hint={
             playing
-              ? 'Pausa: mette in pausa il programma in anteprima e in uscita (barra spaziatrice).'
-              : 'Play: avvia o riprende il programma dalla posizione corrente (barra spaziatrice).'
+              ? `Pausa: mette in pausa il programma in anteprima e in uscita (tasto ${playKeyHint}, Wizard Presenter nel pannello playlist).`
+              : `Play: avvia o riprende il programma dalla posizione corrente (tasto ${playKeyHint}, Wizard Presenter nel pannello playlist).`
           }
         >
           {playing ? <IconPause /> : <IconPlay />}
@@ -119,8 +130,8 @@ export default function LogicTransportStrip() {
           disabled={!canNext}
           onClick={() => void goNext()}
           aria-label="Brano successivo"
-          title="Brano successivo (PageDown, freccia destra o N)"
-          data-preview-hint="Brano successivo nella playlist attiva (PageDown, freccia destra o N)."
+          title={`Brano successivo (tasto: ${nextKeyHint})`}
+          data-preview-hint={`Brano successivo nella playlist attiva (tasto configurabile nel Wizard Presenter: ${nextKeyHint}).`}
         >
           <IconNext />
         </button>

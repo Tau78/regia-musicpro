@@ -14,6 +14,10 @@ type Handlers = {
   onNext: () => void
   onUndo: () => void
   onRedo: () => void
+  /** Codici `KeyboardEvent.code` da Wizard Presenter (localStorage). */
+  presenterPrevCode: string
+  presenterNextCode: string
+  presenterPlayPauseCode: string
 }
 
 export function useKeyboardShortcuts({
@@ -22,6 +26,9 @@ export function useKeyboardShortcuts({
   onNext,
   onUndo,
   onRedo,
+  presenterPrevCode,
+  presenterNextCode,
+  presenterPlayPauseCode,
 }: Handlers): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -37,29 +44,21 @@ export function useKeyboardShortcuts({
 
       if (e.metaKey || e.ctrlKey || e.altKey) return
 
-      if (e.code === 'Space') {
+      if (e.code === presenterPlayPauseCode) {
         if (isTypingTarget(e.target)) return
         e.preventDefault()
         onTogglePlay()
         return
       }
 
-      if (
-        e.code === 'PageUp' ||
-        e.code === 'ArrowLeft' ||
-        (e.code === 'KeyP' && !e.shiftKey)
-      ) {
+      if (e.code === presenterPrevCode) {
         if (isTypingTarget(e.target)) return
         e.preventDefault()
         onPrev()
         return
       }
 
-      if (
-        e.code === 'PageDown' ||
-        e.code === 'ArrowRight' ||
-        (e.code === 'KeyN' && !e.shiftKey)
-      ) {
+      if (e.code === presenterNextCode) {
         if (isTypingTarget(e.target)) return
         e.preventDefault()
         onNext()
@@ -67,5 +66,14 @@ export function useKeyboardShortcuts({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onTogglePlay, onPrev, onNext, onUndo, onRedo])
+  }, [
+    onTogglePlay,
+    onPrev,
+    onNext,
+    onUndo,
+    onRedo,
+    presenterPrevCode,
+    presenterNextCode,
+    presenterPlayPauseCode,
+  ])
 }

@@ -24,7 +24,7 @@ export function previewHintSidebarOpenPanelRow(mode: PanelKind): string {
     return 'Lavagna aperta: clic per portarla in primo piano sulla plancia. Trascina per riordinare l’elenco nella sidebar.'
   }
   if (m === 'sottofondo') {
-    return 'Sottofondo aperto: audio in uscita indipendente dal trasporto globale. Clic per portarlo in primo piano. Trascina per riordinare.'
+    return 'Sottofondo aperto: audio in uscita indipendente dal trasporto globale; un solo pannello (non compare tra i preset su disco). Clic per primo piano; trascina per riordinare.'
   }
   return 'Playlist aperta: clic per portarla in primo piano sulla plancia. Trascina per riordinare l’elenco nella sidebar.'
 }
@@ -42,7 +42,7 @@ export const previewHintNewChalkboard =
   'Nuova lavagna: apre un pannello chalkboard (disegno e testo) sulla plancia.'
 
 export const previewHintNewSottofondo =
-  'Nuovo sottofondo: apre una playlist con play/stop sul pannello, audio in uscita indipendente dal trasporto globale.'
+  'Nuovo sottofondo: pannello unico con play/stop sul pannello e audio in uscita indipendente; elenco e impostazioni restano nel workspace (niente salvataggio in PLAYLIST; in futuro: setlist interne).'
 
 export const previewHintFilterTracks =
   'Filtro playlist a brani: nell’elenco salvati mostra solo le playlist con elenco file (combinabile con altri filtri).'

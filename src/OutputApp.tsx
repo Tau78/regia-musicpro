@@ -22,10 +22,16 @@ import {
   readOutputProgramLogoVisibleFromLs,
 } from './lib/outputProgramLogoStorage.ts'
 
-const CROSSFADE_MS = 480
 const DEFAULT_STILL_IMAGE_DURATION_MS = 8000
 
+/** Valori ammessi inviati dalla regia (ms). */
+function clampPlaybackCrossfadeMs(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return 0
+  return raw >= 5000 ? 6000 : 3000
+}
+
 type Slot = 0 | 1
+type SottofondoSlot = 0 | 1
 
 function preloadImage(src: string): Promise<void> {
   return new Promise((resolve) => {
@@ -45,7 +51,13 @@ type MediaSnap = {
 export default function OutputApp() {
   const vRef0 = useRef<HTMLVideoElement>(null)
   const vRef1 = useRef<HTMLVideoElement>(null)
-  const sottofondoAudioRef = useRef<HTMLAudioElement>(null)
+  const sottofondoRef0 = useRef<HTMLAudioElement>(null)
+  const sottofondoRef1 = useRef<HTMLAudioElement>(null)
+  const sottofondoFrontRef = useRef<SottofondoSlot>(0)
+  const sottofondoVolRef = useRef(1)
+  const sottofondoMutedRef = useRef(false)
+  const sottofondoRampRafRef = useRef<number | null>(null)
+  const sottofondoLoadGenRef = useRef(0)
 
   const [videoSrc, setVideoSrc] = useState<[string | null, string | null]>([
     null,
@@ -72,7 +84,8 @@ export default function OutputApp() {
     mediaSnapRef.current = { front, video: videoSrc, image: imageSrc }
   }, [front, videoSrc, imageSrc])
 
-  const crossfadeRef = useRef(false)
+  const crossfadeMsRef = useRef(3000)
+  const [slotCrossfadeMs, setSlotCrossfadeMs] = useState(3000)
   const mutedRef = useRef(false)
   const volumeRef = useRef(1)
   const sinkIdRef = useRef('')
@@ -143,6 +156,19 @@ export default function OutputApp() {
     if (typeof setSink !== 'function') return
     void setSink.call(el, sinkIdRef.current || '').catch(() => {})
   }, [])
+
+  const cancelSottofondoRamp = useCallback(() => {
+    if (sottofondoRampRafRef.current != null) {
+      cancelAnimationFrame(sottofondoRampRafRef.current)
+      sottofondoRampRafRef.current = null
+    }
+  }, [])
+
+  const sottofondoSlotEl = useCallback(
+    (slot: SottofondoSlot) =>
+      slot === 0 ? sottofondoRef0.current : sottofondoRef1.current,
+    [],
+  )
 
   const applyVideoAttrsFromState = useCallback(() => {
     const vs = mediaSnapRef.current.video
@@ -272,7 +298,7 @@ export default function OutputApp() {
   )
 
   const runLoadTask = useCallback(
-    async (src: string, crossfadeForThisLoad: boolean) => {
+    async (src: string, crossfadeMsForThisLoad: number) => {
       clearStillAdvanceTimer()
       loadGenRef.current += 1
       const myGen = loadGenRef.current
@@ -289,9 +315,9 @@ export default function OutputApp() {
       const curStill = Boolean(curI)
       const nextStill = isStillImagePath(src)
 
-      /** Valore catturato sul comando `load`: evita che `setCrossfade` IPC arrivi prima dell’esecuzione e azzeri il ref. */
+      /** Valore catturato sul comando `load`: evita che `setCrossfadeMs` IPC arrivi prima dell’esecuzione e azzeri il ref. */
       const useFade =
-        crossfadeForThisLoad && had && curStill === nextStill
+        crossfadeMsForThisLoad > 0 && had && curStill === nextStill
 
       if (!useFade) {
         applyInstantLoad(src)
@@ -371,6 +397,7 @@ export default function OutputApp() {
       }
 
       stillCrossfadePreparingRef.current = false
+      setSlotCrossfadeMs(crossfadeMsForThisLoad)
       setOpacityTransition(true)
       setOpacity(() => {
         const n: [number, number] = [0, 0]
@@ -418,7 +445,7 @@ export default function OutputApp() {
             void oldEl.load()
           }
           resolve()
-        }, CROSSFADE_MS + 40)
+        }, crossfadeMsForThisLoad + 40)
       })
     },
     [
@@ -432,12 +459,14 @@ export default function OutputApp() {
   )
 
   const handleLoad = useCallback(
-    (src: string, crossfadeFromCmd?: boolean) => {
-      const crossfadeForQueued =
-        crossfadeFromCmd !== undefined ? crossfadeFromCmd : crossfadeRef.current
+    (src: string, crossfadeMsFromCmd?: number) => {
+      const crossfadeMsForQueued =
+        crossfadeMsFromCmd !== undefined
+          ? crossfadeMsFromCmd
+          : crossfadeMsRef.current
       loadQueueRef.current = loadQueueRef.current
         .catch(() => {})
-        .then(() => runLoadTask(src, crossfadeForQueued))
+        .then(() => runLoadTask(src, crossfadeMsForQueued))
       void loadQueueRef.current
     },
     [runLoadTask],
@@ -474,14 +503,22 @@ export default function OutputApp() {
   const apply = useCallback(
     (cmd: PlaybackCommand) => {
       switch (cmd.type) {
-        case 'load':
-          if (cmd.crossfade !== undefined) {
-            crossfadeRef.current = cmd.crossfade
+        case 'load': {
+          const ms =
+            cmd.crossfadeMs !== undefined
+              ? clampPlaybackCrossfadeMs(cmd.crossfadeMs)
+              : crossfadeMsRef.current
+          if (cmd.crossfadeMs !== undefined) {
+            crossfadeMsRef.current = ms
           }
-          void handleLoad(cmd.src, cmd.crossfade)
+          void handleLoad(cmd.src, ms)
+          break
+        }
+        case 'setCrossfadeMs':
+          crossfadeMsRef.current = clampPlaybackCrossfadeMs(cmd.ms)
           break
         case 'setCrossfade':
-          crossfadeRef.current = cmd.enabled
+          crossfadeMsRef.current = cmd.enabled ? 3000 : 0
           break
         case 'seek': {
           const snap = mediaSnapRef.current
@@ -538,8 +575,10 @@ export default function OutputApp() {
           sinkIdRef.current = cmd.sinkId
           if (vRef0.current) applySinkToVideo(vRef0.current)
           if (vRef1.current) applySinkToVideo(vRef1.current)
-          if (sottofondoAudioRef.current)
-            applySinkToSottofondo(sottofondoAudioRef.current)
+          if (sottofondoRef0.current)
+            applySinkToSottofondo(sottofondoRef0.current)
+          if (sottofondoRef1.current)
+            applySinkToSottofondo(sottofondoRef1.current)
           break
         case 'setLoopOne':
           loopRef.current = cmd.loop
@@ -608,43 +647,115 @@ export default function OutputApp() {
           setProgramLogoVisible(cmd.visible === true)
           break
         case 'sottofondoLoad': {
-          const a = sottofondoAudioRef.current
-          if (!a) break
-          a.loop = cmd.loop === true
-          if (a.src !== cmd.src) {
-            a.src = cmd.src
-            void a.load()
+          cancelSottofondoRamp()
+          sottofondoLoadGenRef.current += 1
+          const gen = sottofondoLoadGenRef.current
+          const ms = clampPlaybackCrossfadeMs(cmd.crossfadeMs ?? 0)
+          const f = sottofondoFrontRef.current
+          const out = sottofondoSlotEl(f)
+          const inc: SottofondoSlot = ((1 - f) as SottofondoSlot)
+          const inEl = sottofondoSlotEl(inc)
+          if (!out || !inEl) break
+
+          const baseVol = Math.min(1, Math.max(0, sottofondoVolRef.current))
+          const loopOne = cmd.loop === true
+          const had =
+            Boolean(out.src) &&
+            !out.paused &&
+            out.currentTime > 0.04 &&
+            out.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+
+          if (ms <= 0 || !had) {
+            inEl.loop = false
+            inEl.pause()
+            inEl.removeAttribute('src')
+            void inEl.load()
+            out.loop = loopOne
+            if (out.src !== cmd.src) {
+              out.src = cmd.src
+              void out.load()
+            } else {
+              void out.load()
+            }
+            out.muted = sottofondoMutedRef.current
+            out.volume = baseVol
+            applySinkToSottofondo(out)
+            break
           }
-          applySinkToSottofondo(a)
+
+          out.loop = false
+          out.volume = baseVol
+          inEl.loop = loopOne
+          if (inEl.src !== cmd.src) {
+            inEl.src = cmd.src
+            void inEl.load()
+          } else {
+            void inEl.load()
+          }
+          inEl.muted = sottofondoMutedRef.current
+          inEl.volume = 0
+          applySinkToSottofondo(inEl)
+          void inEl.play().catch(() => {})
+
+          const t0 = performance.now()
+          const step = () => {
+            if (gen !== sottofondoLoadGenRef.current) return
+            const now = performance.now()
+            const p = Math.min(1, (now - t0) / ms)
+            out.volume = baseVol * (1 - p)
+            inEl.volume = baseVol * p
+            if (p >= 1) {
+              sottofondoRampRafRef.current = null
+              out.pause()
+              out.removeAttribute('src')
+              void out.load()
+              inEl.volume = baseVol
+              sottofondoFrontRef.current = inc
+              return
+            }
+            sottofondoRampRafRef.current = requestAnimationFrame(step)
+          }
+          sottofondoRampRafRef.current = requestAnimationFrame(step)
           break
         }
         case 'sottofondoPlay': {
-          const a = sottofondoAudioRef.current
+          const f = sottofondoFrontRef.current
+          const a = sottofondoSlotEl(f)
           if (a) void a.play().catch(() => {})
           break
         }
         case 'sottofondoPause': {
-          sottofondoAudioRef.current?.pause()
+          sottofondoRef0.current?.pause()
+          sottofondoRef1.current?.pause()
           break
         }
         case 'sottofondoStop': {
-          const a = sottofondoAudioRef.current
-          if (!a) break
-          a.loop = false
-          a.pause()
-          a.removeAttribute('src')
-          void a.load()
+          cancelSottofondoRamp()
+          sottofondoLoadGenRef.current += 1
+          sottofondoFrontRef.current = 0
+          for (const slot of [0, 1] as const) {
+            const a = sottofondoSlotEl(slot)
+            if (!a) continue
+            a.loop = false
+            a.pause()
+            a.removeAttribute('src')
+            void a.load()
+          }
           break
         }
         case 'sottofondoSetVolume': {
-          const a = sottofondoAudioRef.current
-          if (a)
-            a.volume = Math.min(1, Math.max(0, cmd.volume))
+          const v = Math.min(1, Math.max(0, cmd.volume))
+          sottofondoVolRef.current = v
+          for (const slot of [0, 1] as const) {
+            const a = sottofondoSlotEl(slot)
+            if (a?.src) a.volume = v
+          }
           break
         }
         case 'sottofondoSetMuted': {
-          const a = sottofondoAudioRef.current
-          if (a) a.muted = cmd.muted
+          sottofondoMutedRef.current = cmd.muted
+          if (sottofondoRef0.current) sottofondoRef0.current.muted = cmd.muted
+          if (sottofondoRef1.current) sottofondoRef1.current.muted = cmd.muted
           break
         }
         default:
@@ -654,9 +765,11 @@ export default function OutputApp() {
     [
       applySinkToVideo,
       applySinkToSottofondo,
+      cancelSottofondoRamp,
       clearStillAdvanceTimer,
       handleLoad,
       pauseBoth,
+      sottofondoSlotEl,
       vacateProgramSlots,
     ],
   )
@@ -669,13 +782,22 @@ export default function OutputApp() {
   }, [apply])
 
   useLayoutEffect(() => {
-    const a = sottofondoAudioRef.current
-    if (!a) return
-    const onEnded = () => {
+    const onEnded = (ev: Event) => {
+      const t = ev.currentTarget as HTMLAudioElement
+      const f = sottofondoFrontRef.current
+      const frontEl = f === 0 ? sottofondoRef0.current : sottofondoRef1.current
+      if (t !== frontEl) return
+      if (sottofondoRampRafRef.current != null) return
       window.electronAPI?.notifySottofondoEnded?.()
     }
-    a.addEventListener('ended', onEnded)
-    return () => a.removeEventListener('ended', onEnded)
+    const a0 = sottofondoRef0.current
+    const a1 = sottofondoRef1.current
+    a0?.addEventListener('ended', onEnded)
+    a1?.addEventListener('ended', onEnded)
+    return () => {
+      a0?.removeEventListener('ended', onEnded)
+      a1?.removeEventListener('ended', onEnded)
+    }
   }, [])
 
   useEffect(() => {
@@ -1041,7 +1163,7 @@ export default function OutputApp() {
           style={{
             opacity: opacity[0],
             transition: opacityTransition
-              ? `opacity ${CROSSFADE_MS}ms ease-in-out`
+              ? `opacity ${slotCrossfadeMs}ms ease-in-out`
               : 'none',
             zIndex: opacity[0] >= 0.5 ? 2 : 1,
           }}
@@ -1067,7 +1189,7 @@ export default function OutputApp() {
           style={{
             opacity: opacity[1],
             transition: opacityTransition
-              ? `opacity ${CROSSFADE_MS}ms ease-in-out`
+              ? `opacity ${slotCrossfadeMs}ms ease-in-out`
               : 'none',
             zIndex: opacity[1] >= 0.5 ? 2 : 1,
           }}
@@ -1161,7 +1283,14 @@ export default function OutputApp() {
         </div>
       ) : null}
       <audio
-        ref={sottofondoAudioRef}
+        ref={sottofondoRef0}
+        className="output-sottofondo-audio"
+        aria-hidden
+        playsInline
+        preload="auto"
+      />
+      <audio
+        ref={sottofondoRef1}
         className="output-sottofondo-audio"
         aria-hidden
         playsInline

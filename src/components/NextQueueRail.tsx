@@ -7,7 +7,10 @@ import {
 } from 'react'
 import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
 import { computeNextPlaylistIndex } from '../lib/nextPlaylistIndex.ts'
-import { OUTPUT_CROSSFADE_TAIL_SEC } from '../lib/outputCrossfadeSec.ts'
+import {
+  normalizePlaylistCrossfadeSec,
+  playlistCrossfadeTailSec,
+} from '../lib/playlistCrossfade.ts'
 import {
   formatPlaylistDurationLabel,
   usePlaylistMediaDurations,
@@ -285,11 +288,10 @@ export default function NextQueueRail() {
         const c = tRef.currentTime
         if (!Number.isFinite(d) || d <= 0) return 'Durata in corso…'
         const remaining = Math.max(0, d - c)
-        const cross = Boolean(trackSess.playlistCrossfade)
-        const head = Math.max(
-          0,
-          remaining - (cross ? OUTPUT_CROSSFADE_TAIL_SEC : 0),
+        const tail = playlistCrossfadeTailSec(
+          normalizePlaylistCrossfadeSec(trackSess.playlistCrossfadeSec),
         )
+        const head = Math.max(0, remaining - tail)
         return `Entra tra ${formatDurationMmSs(head)}`
       }
     }

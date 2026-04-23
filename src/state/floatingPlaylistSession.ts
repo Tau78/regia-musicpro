@@ -1,4 +1,5 @@
 import { readLaunchPadDefaultKeyMode } from '../lib/launchPadSettings.ts'
+import type { PlaylistCrossfadeSec } from '../lib/playlistCrossfade.ts'
 
 export type FloatingPlaylistPos = { x: number; y: number }
 
@@ -275,7 +276,8 @@ export type FloatingPlaylistSession = {
   paths: string[]
   currentIndex: number
   playlistTitle: string
-  playlistCrossfade: boolean
+  /** Dissolvenza tra brani: 0 = off, 3 o 6 secondi. */
+  playlistCrossfadeSec: PlaylistCrossfadeSec
   /**
    * Loop per questa playlist (solo elenco brani). Assente = usa il loop globale
    * dell’header regia.
@@ -295,7 +297,7 @@ export type FloatingPlaylistSession = {
   editingSavedPlaylistId: string | null
   savedEditPathsBaseline: string[] | null
   savedEditTitleBaseline: string
-  savedEditCrossfadeBaseline: boolean
+  savedEditCrossfadeSecBaseline: PlaylistCrossfadeSec
   /** Loop salvato su disco (solo playlist a elenco collegata a salvataggio). */
   savedEditPlaylistLoopBaseline?: 'off' | 'one' | 'all'
   /** Tema salvato su disco (solo quando si modifica una playlist salvata). */
@@ -355,7 +357,7 @@ export function createEmptyFloatingSession(
     paths: [],
     currentIndex: 0,
     playlistTitle: '',
-    playlistCrossfade: true,
+    playlistCrossfadeSec: 3,
     playlistOutputMuted: false,
     playlistOutputVolume: 1,
     playlistThemeColor: '',
@@ -363,7 +365,7 @@ export function createEmptyFloatingSession(
     editingSavedPlaylistId: null,
     savedEditPathsBaseline: null,
     savedEditTitleBaseline: '',
-    savedEditCrossfadeBaseline: false,
+    savedEditCrossfadeSecBaseline: 3,
     savedEditThemeColorBaseline: '',
     savedEditWatermarkBaseline: '',
     savedEditLaunchPadBaseline: null,
@@ -437,7 +439,7 @@ export function createLaunchPadFloatingSession(
     editingSavedPlaylistId: null,
     savedEditPathsBaseline: null,
     savedEditTitleBaseline: '',
-    savedEditCrossfadeBaseline: false,
+    savedEditCrossfadeSecBaseline: 0,
     savedEditThemeColorBaseline: '',
     savedEditWatermarkBaseline: '',
   }

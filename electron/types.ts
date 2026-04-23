@@ -1,5 +1,5 @@
 export type PlaybackCommand =
-  | { type: 'load'; src: string; crossfade?: boolean }
+  | { type: 'load'; src: string; crossfadeMs?: number }
   | { type: 'seek'; seconds: number }
   | { type: 'play' }
   | { type: 'pause' }
@@ -8,6 +8,7 @@ export type PlaybackCommand =
   | { type: 'setVolume'; volume: number }
   | { type: 'setSinkId'; sinkId: string }
   | { type: 'setLoopOne'; loop: boolean }
+  | { type: 'setCrossfadeMs'; ms: number }
   | { type: 'setCrossfade'; enabled: boolean }
   | { type: 'setStillImageDurationSec'; seconds: number }
   /** Layer immagine sopra il video in uscita (Chalkboard). */
@@ -26,7 +27,7 @@ export type PlaybackCommand =
       imagePath?: string | null
     }
   | { type: 'setOutputProgramLogoVisible'; visible: boolean }
-  | { type: 'sottofondoLoad'; src: string; loop?: boolean }
+  | { type: 'sottofondoLoad'; src: string; loop?: boolean; crossfadeMs?: number }
   | { type: 'sottofondoPlay' }
   | { type: 'sottofondoPause' }
   | { type: 'sottofondoStop' }

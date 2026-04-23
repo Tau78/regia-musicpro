@@ -46,6 +46,12 @@ import { planFirstDiskLinkForUnlinkedSession } from '../lib/playlistFirstDiskLin
 import { normalizePlaylistThemeColor } from '../lib/playlistThemeColor.ts'
 import { normalizePlaylistWatermarkAbsPath } from '../lib/playlistWatermarkPath.ts'
 import { totalDurationSecForPlaylistSave } from '../lib/sumMediaDurationsSec.ts'
+import {
+  cyclePlaylistCrossfadeSec as cycleCrossfadeSecValue,
+  normalizePlaylistCrossfadeSec,
+  playlistCrossfadeSecToMs,
+  type PlaylistCrossfadeSec,
+} from '../lib/playlistCrossfade.ts'
 import type { SavedPlaylistMeta } from '../playlistTypes.ts'
 import { clampPanelInViewport } from '../lib/floatingPanelGeometry.ts'
 import {
@@ -403,9 +409,9 @@ export type RegiaContextValue = {
     sessionId: string,
     absPath: string | null,
   ) => void
-  /** Dissolvenza incrociata in uscita tra brani dello stesso tipo (video/immagine). */
-  playlistCrossfade: boolean
-  setPlaylistCrossfade: (enabled: boolean, sessionId: string) => void
+  /** Dissolvenza tra brani in uscita: 0 = off, 3 o 6 s (video/immagine o sottofondo audio). */
+  playlistCrossfadeSec: PlaylistCrossfadeSec
+  cyclePlaylistCrossfadeSec: (sessionId: string) => void
   /** Loop playlist/file per il pannello a elenco (assente = loop globale header). */
   setPlaylistLoopMode: (sessionId: string, mode: LoopMode) => void
   /**
@@ -655,10 +661,10 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
     typeof r.playlistTitle === 'string'
       ? r.playlistTitle.slice(0, 120)
       : def.playlistTitle
-  const playlistCrossfade =
-    typeof r.playlistCrossfade === 'boolean'
-      ? r.playlistCrossfade
-      : def.playlistCrossfade
+  const sessionPlaylistCrossfadeSec = normalizePlaylistCrossfadeSec(
+    (r as Record<string, unknown>).playlistCrossfadeSec,
+    (r as Record<string, unknown>).playlistCrossfade,
+  )
   const playlistOutputMuted =
     typeof r.playlistOutputMuted === 'boolean'
       ? r.playlistOutputMuted
@@ -833,10 +839,10 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
     typeof r.savedEditTitleBaseline === 'string'
       ? r.savedEditTitleBaseline
       : ''
-  const savedEditCrossfadeBaseline =
-    typeof r.savedEditCrossfadeBaseline === 'boolean'
-      ? r.savedEditCrossfadeBaseline
-      : false
+  const savedEditCrossfadeSecBaseline = normalizePlaylistCrossfadeSec(
+    (r as Record<string, unknown>).savedEditCrossfadeSecBaseline,
+    (r as Record<string, unknown>).savedEditCrossfadeBaseline,
+  )
   const playlistLoopMode = parsePersistedPlaylistLoopMode(r.playlistLoopMode)
   const savedEditPlaylistLoopBaseline = parsePersistedPlaylistLoopMode(
     r.savedEditPlaylistLoopBaseline,
@@ -911,7 +917,7 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
     paths,
     currentIndex,
     playlistTitle,
-    playlistCrossfade,
+    playlistCrossfadeSec: sessionPlaylistCrossfadeSec,
     ...(playlistLoopMode !== undefined ? { playlistLoopMode } : {}),
     playlistOutputMuted,
     playlistOutputVolume,
@@ -919,7 +925,7 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
     editingSavedPlaylistId,
     savedEditPathsBaseline,
     savedEditTitleBaseline,
-    savedEditCrossfadeBaseline,
+    savedEditCrossfadeSecBaseline,
     ...(savedEditPlaylistLoopBaseline !== undefined
       ? { savedEditPlaylistLoopBaseline }
       : {}),
@@ -1244,7 +1250,7 @@ function floatingPlaylistSessionDirty(
   if (s.playlistTitle.trim() !== s.savedEditTitleBaseline.trim()) return true
   if (
     isTracksPlaylistMode(s.playlistMode) &&
-    s.playlistCrossfade !== s.savedEditCrossfadeBaseline
+    s.playlistCrossfadeSec !== s.savedEditCrossfadeSecBaseline
   )
     return true
   if (isTracksPlaylistMode(s.playlistMode)) {
@@ -1717,7 +1723,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const paths = activeSession?.paths ?? []
   const currentIndex = activeSession?.currentIndex ?? 0
   const playlistTitle = activeSession?.playlistTitle ?? ''
-  const playlistCrossfade = activeSession?.playlistCrossfade ?? false
+  const playlistCrossfadeSec: PlaylistCrossfadeSec =
+    activeSession?.playlistCrossfadeSec ?? 3
 
   const floatingSessionsRef = useRef(floatingSessions)
   useLayoutEffect(() => {
@@ -2140,10 +2147,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditPathsBaseline: null,
           savedEditLaunchPadBaseline: null,
           savedEditTitleBaseline: '',
-          savedEditCrossfadeBaseline: false,
+          savedEditCrossfadeSecBaseline: 3,
           savedEditPlaylistLoopBaseline: undefined,
           savedEditThemeColorBaseline: '',
-          playlistCrossfade: true,
+          playlistCrossfadeSec: 3,
         })
       }
       setPlaybackSessionId(sessionId)
@@ -2632,12 +2639,15 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     })
   }, [patchFloatingSession])
 
-  const setPlaylistCrossfade = useCallback(
-    (enabled: boolean, sessionId: string) => {
+  const cyclePlaylistCrossfadeSec = useCallback(
+    (sessionId: string) => {
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
       if (s0?.panelLocked === true) return
       recordUndoPoint()
-      patchFloatingSession(sessionId, { playlistCrossfade: enabled })
+      const cur = normalizePlaylistCrossfadeSec(s0?.playlistCrossfadeSec)
+      patchFloatingSession(sessionId, {
+        playlistCrossfadeSec: cycleCrossfadeSecValue(cur),
+      })
     },
     [patchFloatingSession, recordUndoPoint],
   )
@@ -2693,10 +2703,14 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     [patchFloatingSession],
   )
 
-  const playbackCrossfade = videoOutputSession?.playlistCrossfade ?? false
+  const playbackCrossfadeMs = videoOutputSession
+    ? playlistCrossfadeSecToMs(
+        normalizePlaylistCrossfadeSec(videoOutputSession.playlistCrossfadeSec),
+      )
+    : 0
   useEffect(() => {
-    void send({ type: 'setCrossfade', enabled: playbackCrossfade })
-  }, [playbackCrossfade, send])
+    void send({ type: 'setCrossfadeMs', ms: playbackCrossfadeMs })
+  }, [playbackCrossfadeMs, send])
 
   useEffect(() => {
     if (!programWatermarkAbsPath) {
@@ -2749,7 +2763,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           payload: {
             label,
             paths: [],
-            crossfade: false,
+            crossfadeSec: 0,
             loopMode: 'off',
             themeColor: themeCur === '' ? null : themeCur,
             playlistMode: 'launchpad',
@@ -2809,6 +2823,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         })
         return r
       }
+      if (s.playlistMode === 'sottofondo') {
+        return {
+          ok: false,
+          error:
+            'Il Sottofondo non si salva come preset su file: resta nel workspace. In futuro potranno esserci setlist interne al pannello.',
+        }
+      }
       const list = s.paths
       const trackLoop = s.playlistLoopMode ?? loopMode
       const totalDurationSec = await totalDurationSecForPlaylistSave({
@@ -2820,7 +2841,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         payload: {
           label,
           paths: list,
-          crossfade: s.playlistCrossfade,
+          crossfadeSec: normalizePlaylistCrossfadeSec(s.playlistCrossfadeSec),
           loopMode: trackLoop,
           themeColor: themeCur === '' ? null : themeCur,
           playlistMode: 'tracks',
@@ -2833,7 +2854,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       patchFloatingSession(sessionId, {
         savedEditPathsBaseline: [...list],
         savedEditTitleBaseline: label.trim(),
-        savedEditCrossfadeBaseline: s.playlistCrossfade,
+        savedEditCrossfadeSecBaseline: normalizePlaylistCrossfadeSec(
+          s.playlistCrossfadeSec,
+        ),
         savedEditPlaylistLoopBaseline: trackLoop,
         savedEditThemeColorBaseline: themeCur,
         savedEditWatermarkBaseline: wmCur,
@@ -2893,7 +2916,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           id,
           label,
           paths: [],
-          crossfade: false,
+          crossfadeSec: 0,
           themeColor: themeCur === '' ? undefined : themeCur,
           playlistMode: 'launchpad',
           launchPadCells: cloneLaunchPadCellsSnapshot(cells),
@@ -2943,7 +2966,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           id,
           label,
           paths: [],
-          crossfade: false,
+          crossfadeSec: 0,
           themeColor: themeCur === '' ? undefined : themeCur,
           playlistMode: 'chalkboard',
           chalkboardBankPaths: [...pathsCb],
@@ -2970,7 +2993,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (
         pathsEqual(list, s.savedEditPathsBaseline!) &&
         label.trim() === s.savedEditTitleBaseline.trim() &&
-        s.playlistCrossfade === s.savedEditCrossfadeBaseline &&
+        s.playlistCrossfadeSec === s.savedEditCrossfadeSecBaseline &&
         trackLoop === baseLoop &&
         themeCur === themeBase &&
         wmCur === wmBase
@@ -2985,7 +3008,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         id,
         label,
         paths: list,
-        crossfade: s.playlistCrossfade,
+        crossfadeSec: normalizePlaylistCrossfadeSec(s.playlistCrossfadeSec),
         loopMode: trackLoop,
         themeColor: themeCur === '' ? undefined : themeCur,
         playlistMode: 'tracks',
@@ -2996,7 +3019,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       patchFloatingSession(sessionId, {
         savedEditPathsBaseline: [...list],
         savedEditTitleBaseline: label.trim(),
-        savedEditCrossfadeBaseline: s.playlistCrossfade,
+        savedEditCrossfadeSecBaseline: normalizePlaylistCrossfadeSec(
+          s.playlistCrossfadeSec,
+        ),
         savedEditPlaylistLoopBaseline: trackLoop,
         savedEditThemeColorBaseline: themeCur,
         savedEditWatermarkBaseline: wmCur,
@@ -3059,7 +3084,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           const { id: newId } = await window.electronAPI.playlistsSave({
             label: plan.label,
             paths: [],
-            crossfade: false,
+            crossfadeSec: 0,
             themeColor: plan.themeColor === '' ? undefined : plan.themeColor,
             playlistMode: 'launchpad',
             launchPadCells: cloneLaunchPadCellsSnapshot(plan.cells),
@@ -3072,7 +3097,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             savedEditPathsBaseline: [],
             savedEditLaunchPadBaseline: cloneLaunchPadCellsSnapshot(plan.cells),
             savedEditTitleBaseline: plan.label.trim(),
-            savedEditCrossfadeBaseline: false,
+            savedEditCrossfadeSecBaseline: 0,
             savedEditThemeColorBaseline: plan.themeColor,
             savedEditWatermarkBaseline: wmBaseline,
           })
@@ -3087,7 +3112,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           const { id: newId } = await window.electronAPI.playlistsSave({
             label: plan.label,
             paths: [],
-            crossfade: false,
+            crossfadeSec: 0,
             themeColor: plan.themeColor === '' ? undefined : plan.themeColor,
             playlistMode: 'chalkboard',
             chalkboardBankPaths: [...plan.chalkboardBankPaths],
@@ -3118,7 +3143,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             savedEditPathsBaseline: null,
             savedEditLaunchPadBaseline: null,
             savedEditTitleBaseline: plan.label.trim(),
-            savedEditCrossfadeBaseline: false,
+            savedEditCrossfadeSecBaseline: 0,
             savedEditThemeColorBaseline: plan.themeColor,
             savedEditWatermarkBaseline: wmBaseline,
           })
@@ -3131,7 +3156,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         const { id: newId } = await window.electronAPI.playlistsSave({
           label: plan.label,
           paths: [...plan.paths],
-          crossfade: plan.crossfade,
+          crossfadeSec: plan.crossfadeSec,
           loopMode: plan.loopMode,
           themeColor: plan.themeColor === '' ? undefined : plan.themeColor,
           playlistMode: 'tracks',
@@ -3144,7 +3169,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditPathsBaseline: [...plan.paths],
           savedEditLaunchPadBaseline: null,
           savedEditTitleBaseline: plan.label.trim(),
-          savedEditCrossfadeBaseline: plan.crossfade,
+          savedEditCrossfadeSecBaseline: plan.crossfadeSec,
           savedEditPlaylistLoopBaseline: plan.loopMode,
           savedEditThemeColorBaseline: plan.themeColor,
           savedEditWatermarkBaseline: wmBaseline,
@@ -3182,7 +3207,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             ))
       const crossfadeDirty =
         isTracksPlaylistMode(s.playlistMode) &&
-        s.playlistCrossfade !== s.savedEditCrossfadeBaseline
+        s.playlistCrossfadeSec !== s.savedEditCrossfadeSecBaseline
       const shellLoop = shellLoopModeRef.current
       const loopDirty =
         isTracksPlaylistMode(s.playlistMode) &&
@@ -3217,7 +3242,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           id,
           label,
           paths: [],
-          crossfade: false,
+          crossfadeSec: 0,
           themeColor: themeCur === '' ? undefined : themeCur,
           playlistMode: 'launchpad',
           launchPadCells: cloneLaunchPadCellsSnapshot(cells),
@@ -3248,7 +3273,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           id,
           label,
           paths: [],
-          crossfade: false,
+          crossfadeSec: 0,
           themeColor: themeCur === '' ? undefined : themeCur,
           playlistMode: 'chalkboard',
           chalkboardBankPaths: [...pathsCb],
@@ -3284,7 +3309,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         id,
         label,
         paths: list,
-        crossfade: s.playlistCrossfade,
+        crossfadeSec: normalizePlaylistCrossfadeSec(s.playlistCrossfadeSec),
         loopMode: trackLoop,
         themeColor: themeCur === '' ? undefined : themeCur,
         playlistMode: 'tracks',
@@ -3295,7 +3320,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       patchFloatingSession(sessionId, {
         savedEditPathsBaseline: [...list],
         savedEditTitleBaseline: label.trim(),
-        savedEditCrossfadeBaseline: s.playlistCrossfade,
+        savedEditCrossfadeSecBaseline: normalizePlaylistCrossfadeSec(
+          s.playlistCrossfadeSec,
+        ),
         savedEditPlaylistLoopBaseline: trackLoop,
         savedEditThemeColorBaseline: themeCur,
         savedEditWatermarkBaseline: wmCur,
@@ -3399,6 +3426,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (!s) return
       const themeCur = normalizePlaylistThemeColor(s.playlistThemeColor ?? '')
       if (s.playlistMode === 'chalkboard') return
+      /** Sottofondo: nessun preset `tracks` su disco (solo workspace). */
       if (s.playlistMode === 'sottofondo') return
       if (s.playlistMode === 'launchpad') {
         const cells = s.launchPadCells ?? defaultLaunchPadCells()
@@ -3410,7 +3438,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         await window.electronAPI.playlistsSave({
           label,
           paths: [],
-          crossfade: false,
+          crossfadeSec: 0,
           themeColor: themeCur === '' ? null : themeCur,
           playlistMode: 'launchpad',
           launchPadCells: cloneLaunchPadCellsSnapshot(cells),
@@ -3430,7 +3458,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       await window.electronAPI.playlistsSave({
         label,
         paths: list,
-        crossfade: s.playlistCrossfade ?? false,
+        crossfadeSec: normalizePlaylistCrossfadeSec(s.playlistCrossfadeSec),
         loopMode: trackLoop,
         themeColor: themeCur === '' ? null : themeCur,
         playlistMode: 'tracks',
@@ -3477,6 +3505,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const label = data.label.trim() || 'Senza titolo'
       const loadedTheme = normalizePlaylistThemeColor(data.themeColor)
       const loadedWm = normalizePlaylistWatermarkAbsPath(data.watermarkPngPath)
+      const loadedCrossfadeSec = normalizePlaylistCrossfadeSec(
+        (data as { crossfadeSec?: unknown }).crossfadeSec,
+        (data as { crossfade?: unknown }).crossfade,
+      )
       let newS: FloatingPlaylistSession
       if (isLaunchpad) {
         const cells = cloneLaunchPadCellsSnapshot(
@@ -3487,13 +3519,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           playlistTitle: label,
           launchPadCells: cells,
           playlistThemeColor: loadedTheme,
-          playlistCrossfade: false,
+          playlistCrossfadeSec: 0,
           editingSavedPlaylistId: id,
           regiaVideoCloudSourceFile: null,
           savedEditPathsBaseline: [],
           savedEditLaunchPadBaseline: cloneLaunchPadCellsSnapshot(cells),
           savedEditTitleBaseline: label.trim(),
-          savedEditCrossfadeBaseline: false,
+          savedEditCrossfadeSecBaseline: 0,
           savedEditThemeColorBaseline: loadedTheme,
           playlistWatermarkPngPath: loadedWm,
           savedEditWatermarkBaseline: loadedWm,
@@ -3516,7 +3548,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           chalkboardBackgroundColor: bgLoaded,
           chalkboardPlacementsByBank: plLoaded,
           playlistThemeColor: loadedTheme,
-          playlistCrossfade: false,
+          playlistCrossfadeSec: 0,
           editingSavedPlaylistId: id,
           regiaVideoCloudSourceFile: null,
           savedEditPathsBaseline: null,
@@ -3527,7 +3559,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             cloneChalkboardPlacementsByBank(plLoaded),
           savedEditChalkboardBackgroundBaseline: bgLoaded,
           savedEditTitleBaseline: label.trim(),
-          savedEditCrossfadeBaseline: false,
+          savedEditCrossfadeSecBaseline: 0,
           savedEditThemeColorBaseline: loadedTheme,
           playlistWatermarkPngPath: loadedWm,
           savedEditWatermarkBaseline: loadedWm,
@@ -3544,10 +3576,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditPathsBaseline: [...data.paths],
           savedEditLaunchPadBaseline: null,
           savedEditTitleBaseline: label.trim(),
-          savedEditCrossfadeBaseline: data.crossfade,
+          savedEditCrossfadeSecBaseline: loadedCrossfadeSec,
           savedEditPlaylistLoopBaseline: loadedLoop,
           savedEditThemeColorBaseline: loadedTheme,
-          playlistCrossfade: data.crossfade,
+          playlistCrossfadeSec: loadedCrossfadeSec,
           playlistLoopMode: loadedLoop,
           playlistThemeColor: loadedTheme,
           playlistWatermarkPngPath: loadedWm,
@@ -3593,6 +3625,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         return null
       }
       const data = res.data
+      const loadedCrossfadeSecCloud = normalizePlaylistCrossfadeSec(
+        (data as { crossfadeSec?: unknown }).crossfadeSec,
+        (data as { crossfade?: unknown }).crossfade,
+      )
       const isLaunchpad = data.playlistMode === 'launchpad'
       const isChalkboard = data.playlistMode === 'chalkboard'
       if (!isLaunchpad && !isChalkboard && !data.paths.length) return null
@@ -3629,13 +3665,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           playlistTitle: label,
           launchPadCells: cells,
           playlistThemeColor: loadedTheme,
-          playlistCrossfade: false,
+          playlistCrossfadeSec: 0,
           editingSavedPlaylistId: null,
           regiaVideoCloudSourceFile: safeName,
           savedEditPathsBaseline: [],
           savedEditLaunchPadBaseline: cloneLaunchPadCellsSnapshot(cells),
           savedEditTitleBaseline: label.trim(),
-          savedEditCrossfadeBaseline: false,
+          savedEditCrossfadeSecBaseline: 0,
           savedEditThemeColorBaseline: loadedTheme,
           playlistWatermarkPngPath: loadedWm,
           savedEditWatermarkBaseline: loadedWm,
@@ -3658,7 +3694,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           chalkboardBackgroundColor: bgLoaded,
           chalkboardPlacementsByBank: plLoaded,
           playlistThemeColor: loadedTheme,
-          playlistCrossfade: false,
+          playlistCrossfadeSec: 0,
           editingSavedPlaylistId: null,
           regiaVideoCloudSourceFile: safeName,
           savedEditPathsBaseline: null,
@@ -3669,7 +3705,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             cloneChalkboardPlacementsByBank(plLoaded),
           savedEditChalkboardBackgroundBaseline: bgLoaded,
           savedEditTitleBaseline: label.trim(),
-          savedEditCrossfadeBaseline: false,
+          savedEditCrossfadeSecBaseline: 0,
           savedEditThemeColorBaseline: loadedTheme,
           playlistWatermarkPngPath: loadedWm,
           savedEditWatermarkBaseline: loadedWm,
@@ -3686,10 +3722,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           savedEditPathsBaseline: [...data.paths],
           savedEditLaunchPadBaseline: null,
           savedEditTitleBaseline: label.trim(),
-          savedEditCrossfadeBaseline: data.crossfade,
+          savedEditCrossfadeSecBaseline: loadedCrossfadeSecCloud,
           savedEditPlaylistLoopBaseline: loadedLoop,
           savedEditThemeColorBaseline: loadedTheme,
-          playlistCrossfade: data.crossfade,
+          playlistCrossfadeSec: loadedCrossfadeSecCloud,
           playlistLoopMode: loadedLoop,
           playlistThemeColor: loadedTheme,
           playlistWatermarkPngPath: loadedWm,
@@ -3728,6 +3764,12 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     async (sessionId: string): Promise<boolean> => {
       const s = floatingSessionsRef.current.find((x) => x.id === sessionId)
       if (!s) return false
+      if (s.playlistMode === 'sottofondo') {
+        window.alert(
+          'Il Sottofondo non si salva come file JSON: è un pannello unico nel workspace. Le modifiche restano nel layout; in futuro si potranno avere setlist interne.',
+        )
+        return false
+      }
       const api = window.electronAPI
       if (
         !api ||
@@ -3809,7 +3851,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
                 savedEditChalkboardPlacementsBaseline: undefined,
                 savedEditChalkboardBackgroundBaseline: undefined,
                 savedEditTitleBaseline: '',
-                savedEditCrossfadeBaseline: false,
+                savedEditCrossfadeSecBaseline: 0,
                 savedEditThemeColorBaseline: '',
               }
             : s,
@@ -3869,7 +3911,15 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           : 1
       const effMuted = muted || playlistMuted
       const loopOne = mode === 'one'
-      await send({ type: 'sottofondoLoad', src: p, loop: loopOne })
+      const xMs = playlistCrossfadeSecToMs(
+        normalizePlaylistCrossfadeSec(sess.playlistCrossfadeSec),
+      )
+      await send({
+        type: 'sottofondoLoad',
+        src: p,
+        loop: loopOne,
+        crossfadeMs: xMs,
+      })
       await send({ type: 'sottofondoSetMuted', muted: effMuted })
       await send({
         type: 'sottofondoSetVolume',
@@ -3918,11 +3968,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setPreviewSyncKey((k) => k + 1)
       const mode = loopModeRef.current
       const effectiveMuted = muted || playlistMuted
-      const crossfadeForLoad = Boolean(sess?.playlistCrossfade)
+      const crossfadeMsForLoad = playlistCrossfadeSecToMs(
+        normalizePlaylistCrossfadeSec(sess?.playlistCrossfadeSec),
+      )
       await send({
         type: 'load',
         src: p,
-        crossfade: crossfadeForLoad,
+        crossfadeMs: crossfadeMsForLoad,
       })
       await send({ type: 'setLoopOne', loop: mode === 'one' })
       await send({ type: 'setMuted', muted: effectiveMuted })
@@ -6208,8 +6260,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setPlaylistThemeColor,
       programWatermarkAbsPath,
       setPlaylistWatermarkPngPath,
-      playlistCrossfade,
-      setPlaylistCrossfade,
+      playlistCrossfadeSec,
+      cyclePlaylistCrossfadeSec,
       setPlaylistLoopMode,
       outputTrackLoopMode,
       previewMediaTimesTick,
@@ -6335,8 +6387,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setPlaylistThemeColor,
       programWatermarkAbsPath,
       setPlaylistWatermarkPngPath,
-      playlistCrossfade,
-      setPlaylistCrossfade,
+      playlistCrossfadeSec,
+      cyclePlaylistCrossfadeSec,
       setPlaylistLoopMode,
       outputTrackLoopMode,
       previewMediaTimesTick,
@@ -6425,7 +6477,7 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
   'setPlaylistTitle',
   'setPlaylistThemeColor',
   'setPlaylistWatermarkPngPath',
-  'setPlaylistCrossfade',
+  'cyclePlaylistCrossfadeSec',
   'setPlaylistOutputMuted',
   'setPlaylistOutputVolume',
   'recordUndoPoint',
