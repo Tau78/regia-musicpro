@@ -25,7 +25,7 @@ export const LAUNCHPAD_BANK_COUNT = 4 as const
 /** Dopo questa durata su pad o tasto assegnato parte il CUE (solo fino al rilascio). */
 export const LAUNCHPAD_CUE_HOLD_MS = 380
 
-export type PlaylistMode = 'tracks' | 'launchpad' | 'chalkboard'
+export type PlaylistMode = 'tracks' | 'sottofondo' | 'launchpad' | 'chalkboard'
 
 /** Stesso conteggio delle pagine Launchpad (4 banchi lavagna). */
 export const CHALKBOARD_BANK_COUNT = LAUNCHPAD_BANK_COUNT
@@ -152,8 +152,17 @@ export function chalkboardPlacementsEqual(
   return true
 }
 
-/** Playlist con file media in elenco (esclude launchpad e chalkboard). */
+/**
+ * Elenco che comanda il programma video in uscita (anteprima / Schermo 2).
+ * Esclude sottofondo, launchpad e lavagna.
+ */
 export function isTracksPlaylistMode(m?: PlaylistMode): boolean {
+  if (m === 'launchpad' || m === 'chalkboard' || m === 'sottofondo') return false
+  return true
+}
+
+/** Pannello con elenco file (playlist classica, sottofondo, …), non griglia o lavagna. */
+export function isListPlaylistWithPaths(m?: PlaylistMode): boolean {
   return m !== 'launchpad' && m !== 'chalkboard'
 }
 
@@ -373,6 +382,17 @@ export const LAUNCHPAD_PANEL_SIZE: FloatingPlaylistPanelSize = {
 export const CHALKBOARD_PANEL_SIZE: FloatingPlaylistPanelSize = {
   width: 560,
   height: 520,
+}
+
+export function createSottofondoFloatingSession(
+  pos?: FloatingPlaylistPos,
+): FloatingPlaylistSession {
+  const base = createEmptyFloatingSession(pos)
+  return {
+    ...base,
+    playlistMode: 'sottofondo',
+    playlistTitle: 'Sottofondo',
+  }
 }
 
 export function createChalkboardFloatingSession(

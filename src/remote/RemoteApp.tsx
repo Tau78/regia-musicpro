@@ -7,6 +7,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
+import { cycleLoopMode } from '../lib/loopModeCycle.ts'
 
 type Tab = 'playlist' | 'launchpad' | 'chalkboard'
 
@@ -853,33 +854,32 @@ export function RemoteApp() {
             </button>
             <button
               type="button"
-              className={`remote-icon-btn ${snap?.playlistLoopMode === 'off' ? 'is-active' : ''}`}
-              title="Loop disattivato"
-              aria-label="Loop off"
-              aria-pressed={snap?.playlistLoopMode === 'off'}
-              onClick={() => void setRemoteLoopMode('off')}
+              className={`remote-icon-btn remote-loop-cycle-btn${snap?.playlistLoopMode && snap.playlistLoopMode !== 'off' ? ' is-active' : ''}`}
+              title={
+                snap?.playlistLoopMode === 'one'
+                  ? 'Loop: ripeti il file. Clic per loop tutta la lista.'
+                  : snap?.playlistLoopMode === 'all'
+                    ? 'Loop: tutta la lista. Clic per disattivare.'
+                    : 'Loop disattivato. Clic per loop un file.'
+              }
+              aria-label={
+                snap?.playlistLoopMode === 'one'
+                  ? 'Loop un file. Clic per passare a loop tutta la lista.'
+                  : snap?.playlistLoopMode === 'all'
+                    ? 'Loop tutta la lista. Clic per disattivare il loop.'
+                    : 'Loop disattivato. Clic per loop un file.'
+              }
+              onClick={() =>
+                void setRemoteLoopMode(
+                  cycleLoopMode(snap?.playlistLoopMode ?? 'off'),
+                )
+              }
             >
-              <IconLoopOff />
-            </button>
-            <button
-              type="button"
-              className={`remote-icon-btn ${snap?.playlistLoopMode === 'one' ? 'is-active' : ''}`}
-              title="Ripeti il file corrente"
-              aria-label="Loop un file"
-              aria-pressed={snap?.playlistLoopMode === 'one'}
-              onClick={() => void setRemoteLoopMode('one')}
-            >
-              <IconLoopOne />
-            </button>
-            <button
-              type="button"
-              className={`remote-icon-btn ${snap?.playlistLoopMode === 'all' ? 'is-active' : ''}`}
-              title="Loop tutta la lista"
-              aria-label="Loop tutta la lista"
-              aria-pressed={snap?.playlistLoopMode === 'all'}
-              onClick={() => void setRemoteLoopMode('all')}
-            >
-              <IconLoopAll />
+              {snap?.playlistLoopMode === 'one' ?
+                <IconLoopOne />
+              : snap?.playlistLoopMode === 'all' ?
+                <IconLoopAll />
+              : <IconLoopOff />}
             </button>
             <button
               type="button"

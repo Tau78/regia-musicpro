@@ -4,6 +4,7 @@ import {
   previewHintFilterLaunchpad,
   previewHintFilterTracks,
   previewHintNewChalkboard,
+  previewHintNewSottofondo,
   previewHintNewEmptyLaunchpad,
   previewHintNewEmptyPlaylist,
   previewHintNewLaunchpadSfx,
@@ -117,6 +118,47 @@ function IconSidebarLaunchpadColors() {
 }
 
 /** Lavagna / gesso. */
+/** Elenco + onda (sottofondo indipendente). */
+function IconSidebarSottofondo() {
+  return (
+    <svg
+      className="regia-sidebar-primary-svg"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden="true"
+    >
+      <circle cx="4.5" cy="6.5" r="1.4" fill="currentColor" />
+      <line
+        x1="8"
+        y1="6.5"
+        x2="20"
+        y2="6.5"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+      />
+      <circle cx="4.5" cy="12" r="1.4" fill="currentColor" />
+      <line
+        x1="8"
+        y1="12"
+        x2="20"
+        y2="12"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+      />
+      <path
+        d="M8.5 17.5c1.2-1.6 2.2-1.6 3.2 0s2 1.6 3.2 0 2-1.6 3.2 0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 function IconSidebarChalkboard() {
   return (
     <svg
@@ -223,6 +265,7 @@ export default function SidebarTabsPanel() {
     addFloatingPlaylist,
     addFloatingLaunchPad,
     addFloatingChalkboard,
+    addFloatingSottofondo,
     openFloatingPlaylist,
   } = useRegia()
 
@@ -261,6 +304,11 @@ export default function SidebarTabsPanel() {
     await addFloatingChalkboard()
     openFloatingPlaylist()
   }, [addFloatingChalkboard, openFloatingPlaylist])
+
+  const onNewSottofondo = useCallback(() => {
+    addFloatingSottofondo()
+    openFloatingPlaylist()
+  }, [addFloatingSottofondo, openFloatingPlaylist])
 
   return (
     <div
@@ -345,6 +393,16 @@ export default function SidebarTabsPanel() {
               data-preview-hint={previewHintNewChalkboard}
             >
               <IconSidebarChalkboard />
+            </button>
+            <button
+              type="button"
+              className="btn-icon regia-sidebar-new-icon-btn saved-playlists-new-sottofondo"
+              onClick={onNewSottofondo}
+              title="Nuovo sottofondo (play/stop indipendente)"
+              aria-label="Nuovo pannello sottofondo"
+              data-preview-hint={previewHintNewSottofondo}
+            >
+              <IconSidebarSottofondo />
             </button>
           </div>
           <SavedPlaylistsPanel listOnly kindFilters={kindFiltersForPanel} />

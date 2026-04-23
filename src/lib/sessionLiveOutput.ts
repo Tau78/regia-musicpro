@@ -9,6 +9,7 @@ export type SessionLiveOutputCtx = {
   videoPlaying: boolean
   launchpadAudioPlaying: boolean
   playbackLoadedTrack: { sessionId: string } | null
+  sottofondoLoadedTrack: { sessionId: string } | null
 }
 
 /** True se video o audio di questo pannello è in uscita verso program / Schermo 2. */
@@ -29,6 +30,9 @@ export function sessionIsLiveOnRegiaOutput(
         (s as { chalkboardOutputToProgram?: boolean }).chalkboardOutputToProgram,
       ) !== 'off'
     )
+  }
+  if (s.playlistMode === 'sottofondo') {
+    return ctx.sottofondoLoadedTrack?.sessionId === s.id
   }
   if (isTracksPlaylistMode(s.playlistMode)) {
     return ctx.videoOutputSessionId === s.id && ctx.videoPlaying

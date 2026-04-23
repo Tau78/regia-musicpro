@@ -26,3 +26,9 @@ export type PlaybackCommand =
       imagePath?: string | null
     }
   | { type: 'setOutputProgramLogoVisible'; visible: boolean }
+  | { type: 'sottofondoLoad'; src: string; loop?: boolean }
+  | { type: 'sottofondoPlay' }
+  | { type: 'sottofondoPause' }
+  | { type: 'sottofondoStop' }
+  | { type: 'sottofondoSetVolume'; volume: number }
+  | { type: 'sottofondoSetMuted'; muted: boolean }

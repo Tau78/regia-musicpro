@@ -46,3 +46,13 @@ export type PlaybackCommand =
     }
   /** Logo marchio in alto a sinistra sulla finestra Schermo 2. */
   | { type: 'setOutputProgramLogoVisible'; visible: boolean }
+  /**
+   * Canale audio «sottofondo» separato dal video program: stesso device di uscita,
+   * mix indipendente da play/pausa del programma.
+   */
+  | { type: 'sottofondoLoad'; src: string; loop?: boolean }
+  | { type: 'sottofondoPlay' }
+  | { type: 'sottofondoPause' }
+  | { type: 'sottofondoStop' }
+  | { type: 'sottofondoSetVolume'; volume: number }
+  | { type: 'sottofondoSetMuted'; muted: boolean }

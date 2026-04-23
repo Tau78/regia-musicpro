@@ -1008,6 +1008,9 @@ export default function FloatingPlaylist({
     loopMode,
     setPlaylistLoopMode,
     launchpadAudioPlaying,
+    sottofondoLoadedTrack,
+    sottofondoPlaying,
+    stopSottofondoPlayback,
     previewMediaTimesRef,
     previewMediaTimesTick,
     playbackArmedNext,
@@ -1059,6 +1062,7 @@ export default function FloatingPlaylist({
       videoPlaying,
       launchpadAudioPlaying,
       playbackLoadedTrack,
+      sottofondoLoadedTrack,
     })
   }, [
     session,
@@ -1066,9 +1070,11 @@ export default function FloatingPlaylist({
     videoPlaying,
     launchpadAudioPlaying,
     playbackLoadedTrack,
+    sottofondoLoadedTrack,
   ])
   const isLaunchpad = session?.playlistMode === 'launchpad'
   const isChalkboard = session?.playlistMode === 'chalkboard'
+  const isSottofondo = session?.playlistMode === 'sottofondo'
   const panelDefaultHint = useMemo(() => {
     if (isLaunchpad) {
       return 'Launchpad: passa il mouse su intestazione, pagine, griglia pad e menu contestuale per le descrizioni. Il pulsante «?» mostra i tasti rapidi.'
@@ -1363,9 +1369,11 @@ export default function FloatingPlaylist({
   }, [sessionId, updateFloatingPlaylistChrome])
 
   const currentPlayIndexInThisPanel =
-    playbackLoadedTrack?.sessionId === sessionId
-      ? playbackLoadedTrack.index
-      : null
+    isSottofondo && sottofondoLoadedTrack?.sessionId === sessionId
+      ? sottofondoLoadedTrack.index
+      : !isSottofondo && playbackLoadedTrack?.sessionId === sessionId
+        ? playbackLoadedTrack.index
+        : null
 
   useLayoutEffect(() => {
     if (collapsed || isLaunchpad) {
@@ -2655,6 +2663,15 @@ export default function FloatingPlaylist({
     ],
   )
 
+  const onSottofondoPanelPlay = useCallback(() => {
+    if (!paths.length) return
+    void loadIndexAndPlay(currentIndex, sessionId)
+  }, [paths.length, currentIndex, sessionId, loadIndexAndPlay])
+
+  const onSottofondoPanelStop = useCallback(() => {
+    void stopSottofondoPlayback()
+  }, [stopSottofondoPlayback])
+
   const onPanelKeyDownCapture = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
       if (collapsed || isLaunchpad || isChalkboard || !paths.length) return
@@ -2865,7 +2882,7 @@ export default function FloatingPlaylist({
     <Fragment>
     <div
       ref={panelRef}
-      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${isChalkboard ? 'is-chalkboard' : ''} ${chalkboardFullscreen ? 'is-chalkboard-fullscreen' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}${isLiveOnRegiaOutput ? ' is-live-output' : ''}${planciaDockRight ? ' floating-playlist--plancia-dock-right' : ''}`}
+      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${isChalkboard ? 'is-chalkboard' : ''} ${isSottofondo ? 'is-sottofondo' : ''} ${chalkboardFullscreen ? 'is-chalkboard-fullscreen' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}${isLiveOnRegiaOutput ? ' is-live-output' : ''}${planciaDockRight ? ' floating-playlist--plancia-dock-right' : ''}`}
       style={{
         ...(chalkboardFullscreen
           ? {
@@ -2950,14 +2967,18 @@ export default function FloatingPlaylist({
                   ? 'is-launchpad'
                   : isChalkboard
                     ? 'is-chalkboard'
-                    : 'is-playlist'
+                    : isSottofondo
+                      ? 'is-sottofondo'
+                      : 'is-playlist'
               }`}
             >
               {isLaunchpad
                 ? 'Launchpad'
                 : isChalkboard
                   ? 'Chalkboard'
-                  : 'Playlist'}
+                  : isSottofondo
+                    ? 'Sottofondo'
+                    : 'Playlist'}
             </span>
             <input
               type="text"
@@ -3671,7 +3692,7 @@ export default function FloatingPlaylist({
                   </button>
                 </div>
               </Fragment>
-              {!isLaunchpad && !isChalkboard ? (
+              {!isLaunchpad && !isChalkboard && !isSottofondo ? (
                 <Fragment key="chrome-slot-xfade">
                   <span className="floating-playlist-chrome-sep" aria-hidden />
                   <div
@@ -3704,6 +3725,32 @@ export default function FloatingPlaylist({
               ) : null}
             </PlaylistChromeOverflowRow>
           </div>
+          {isSottofondo ? (
+            <div
+              className="floating-playlist-sottofondo-transport"
+              role="group"
+              aria-label="Sottofondo: play e stop indipendenti dal trasporto globale"
+            >
+              <button
+                type="button"
+                className="floating-playlist-loop-btn floating-playlist-sottofondo-play"
+                disabled={panelLocked || paths.length === 0}
+                onClick={() => onSottofondoPanelPlay()}
+                title="Avvia dal brano evidenziato in elenco (audio in uscita, indipendente da play/pausa globale)"
+              >
+                Play
+              </button>
+              <button
+                type="button"
+                className="floating-playlist-loop-btn floating-playlist-sottofondo-stop"
+                disabled={panelLocked || !sottofondoPlaying}
+                onClick={() => onSottofondoPanelStop()}
+                title="Ferma il sottofondo (non ferma il video program né il launchpad)"
+              >
+                Stop
+              </button>
+            </div>
+          ) : null}
           {!isLaunchpad && !isChalkboard ? (
             <div
               className="floating-playlist-loop-row"
@@ -4225,10 +4272,13 @@ export default function FloatingPlaylist({
               trackDurations[p],
               formatDurationMmSs,
             )
-            const isCurrentRow =
-              playbackLoadedTrack != null &&
-              playbackLoadedTrack.sessionId === sessionId &&
-              playbackLoadedTrack.index === i
+            const isCurrentRow = isSottofondo
+              ? sottofondoLoadedTrack != null &&
+                sottofondoLoadedTrack.sessionId === sessionId &&
+                sottofondoLoadedTrack.index === i
+              : playbackLoadedTrack != null &&
+                playbackLoadedTrack.sessionId === sessionId &&
+                playbackLoadedTrack.index === i
             const pv = previewMediaTimesRef.current
             const rowFrac =
               isCurrentRow && pv.duration > 0
@@ -4246,11 +4296,17 @@ export default function FloatingPlaylist({
                 <button
                   type="button"
                   className={`playlist-row ${
-                    playbackLoadedTrack != null &&
-                    playbackLoadedTrack.sessionId === sessionId &&
-                    playbackLoadedTrack.index === i
-                      ? 'is-current'
-                      : ''
+                    isSottofondo
+                      ? sottofondoLoadedTrack != null &&
+                        sottofondoLoadedTrack.sessionId === sessionId &&
+                        sottofondoLoadedTrack.index === i
+                        ? 'is-current'
+                        : ''
+                      : playbackLoadedTrack != null &&
+                          playbackLoadedTrack.sessionId === sessionId &&
+                          playbackLoadedTrack.index === i
+                        ? 'is-current'
+                        : ''
                   }`}
                   onClick={() => {
                     if (suppressPlaylistRowClickRef.current) {
@@ -4287,7 +4343,7 @@ export default function FloatingPlaylist({
                 >
                   <MediaDurationRing
                     fraction={rowFrac}
-                    active={isCurrentRow}
+                    active={isCurrentRow && !isSottofondo}
                     size={20}
                   />
                 </span>

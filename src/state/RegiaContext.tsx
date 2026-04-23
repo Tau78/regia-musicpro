@@ -104,10 +104,12 @@ import {
   CHALKBOARD_DEFAULT_BG,
   CHALKBOARD_PANEL_SIZE,
   createChalkboardFloatingSession,
+  createSottofondoFloatingSession,
   normalizeChalkboardBackgroundHex,
   createEmptyFloatingSession,
   createLaunchPadFloatingSession,
   createLaunchPadFloatingSessionWithKit,
+  isListPlaylistWithPaths,
   DEFAULT_FLOATING_PANEL_SIZE,
   LAUNCHPAD_PANEL_SIZE,
   chalkboardPathsEqual,
@@ -223,6 +225,23 @@ function clearedLaunchPadSlotCell(
   }
 }
 
+/** Prossima traccia sottofondo con audio da file: salta immagini fisse. */
+function firstPlayableSottofondoIndex(
+  paths: string[],
+  start: number,
+  wrapAll: boolean,
+): number | null {
+  for (let i = start; i < paths.length; i++) {
+    if (!isStillImagePath(paths[i]!)) return i
+  }
+  if (wrapAll) {
+    for (let i = 0; i < start && i < paths.length; i++) {
+      if (!isStillImagePath(paths[i]!)) return i
+    }
+  }
+  return null
+}
+
 export type LoopMode = 'off' | 'one' | 'all'
 
 /** Chiave in `floatingZOrder` per la finestra anteprima staccata. */
@@ -249,6 +268,11 @@ export type RegiaContextValue = {
   videoPlaying: boolean
   /** True se un sample launchpad è in riproduzione (non in pausa CUE). */
   launchpadAudioPlaying: boolean
+  /** Sottofondo: canale audio in uscita, non collegato al play/pausa globale. */
+  sottofondoPlaying: boolean
+  sottofondoLoadedTrack: { sessionId: string; index: number } | null
+  /** Ferma l’audio sottofondo (non influisce su video program o launchpad). */
+  stopSottofondoPlayback: () => Promise<void>
   /** Play combinato (video o sample launchpad) per il pulsante trasporto. */
   playing: boolean
   previewSrc: string | null
@@ -278,7 +302,14 @@ export type RegiaContextValue = {
   saveCurrentPlaylist: (label: string) => Promise<void>
   loadSavedPlaylist: (
     id: string,
-    opts?: { preservePlayback?: boolean },
+    opts?: {
+      /**
+       * Se `false`, il trasporto / PGM passa al nuovo pannello e viene inviato `programVacant`
+       * (come caricare e comandare da lì). Omesso o `true`: aggiunge il pannello senza fermare
+       * ciò che è già in onda.
+       */
+      preservePlayback?: boolean
+    },
   ) => Promise<string | null>
   /** Carica un manifest JSON da `Regia Video/Playlist` (Drive desktop). */
   loadPlaylistFromRegiaVideoCloudFile: (
@@ -416,6 +447,8 @@ export type RegiaContextValue = {
   addFloatingLaunchPad: (kit?: 'base' | 'sfx') => Promise<void>
   /** Nuova lavagna (4 banchi PNG, risoluzione uscita). */
   addFloatingChalkboard: () => Promise<void>
+  /** Sottofondo: playlist a elenco con play/stop indipendente dal trasporto globale. */
+  addFloatingSottofondo: () => void
   removeFloatingPlaylist: (id: string) => Promise<void>
   /** True se chiudere il pannello interromperebbe video o sample launchpad in play. */
   floatingCloseWouldInterruptPlay: (sessionId: string) => boolean
@@ -649,9 +682,11 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
       ? ('launchpad' as const)
       : r.playlistMode === 'chalkboard'
         ? ('chalkboard' as const)
-        : r.playlistMode === 'tracks'
-          ? ('tracks' as const)
-          : undefined
+        : r.playlistMode === 'sottofondo'
+          ? ('sottofondo' as const)
+          : r.playlistMode === 'tracks'
+            ? ('tracks' as const)
+            : undefined
 
   let launchPadCells: LaunchPadCell[] | undefined
   if (playlistMode === 'launchpad') {
@@ -857,7 +892,7 @@ function reviveFloatingSession(raw: unknown): FloatingPlaylistSession | null {
   }
 
   let playlistWatchFolder: string | undefined
-  if (isTracksPlaylistMode(playlistMode)) {
+  if (isListPlaylistWithPaths(playlistMode)) {
     const rawWf = (r as Record<string, unknown>).playlistWatchFolder
     if (typeof rawWf === 'string') {
       const t = rawWf.trim()
@@ -1404,6 +1439,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   } | null>(null)
   const [videoPlaying, setVideoPlaying] = useState(false)
   const [launchpadAudioPlaying, setLaunchpadAudioPlaying] = useState(false)
+  const [sottofondoPlaying, setSottofondoPlaying] = useState(false)
+  const [sottofondoLoadedTrack, setSottofondoLoadedTrack] = useState<{
+    sessionId: string
+    index: number
+  } | null>(null)
   const playing = videoPlaying || launchpadAudioPlaying
   const [previewSrc, setPreviewSrc] = useState<string | null>(null)
   const [previewSyncKey, setPreviewSyncKey] = useState(0)
@@ -1507,12 +1547,23 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const previewSyncKeyRef = useRef(previewSyncKey)
   const videoPlayingRef = useRef(videoPlaying)
   const launchpadAudioPlayingRef = useRef(launchpadAudioPlaying)
+  const sottofondoLoadedTrackRef = useRef(sottofondoLoadedTrack)
+  const sottofondoPlayingRef = useRef(sottofondoPlaying)
   useLayoutEffect(() => {
     previewSrcRef.current = previewSrc
     previewSyncKeyRef.current = previewSyncKey
     videoPlayingRef.current = videoPlaying
     launchpadAudioPlayingRef.current = launchpadAudioPlaying
-  }, [previewSrc, previewSyncKey, videoPlaying, launchpadAudioPlaying])
+    sottofondoLoadedTrackRef.current = sottofondoLoadedTrack
+    sottofondoPlayingRef.current = sottofondoPlaying
+  }, [
+    previewSrc,
+    previewSyncKey,
+    videoPlaying,
+    launchpadAudioPlaying,
+    sottofondoLoadedTrack,
+    sottofondoPlaying,
+  ])
 
   const undoStackRef = useRef<RegiaHistorySnapshot[]>([])
   const redoStackRef = useRef<RegiaHistorySnapshot[]>([])
@@ -2560,6 +2611,21 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     })
   }, [recordUndoPoint])
 
+  const addFloatingSottofondo = useCallback(() => {
+    recordUndoPoint()
+    setFloatingSessions((prev) => {
+      const k = prev.filter((s) => s.planciaDock !== 'right').length
+      const pos = computeNewFloatingPanelPos(
+        DEFAULT_FLOATING_PANEL_SIZE,
+        k,
+        prev,
+      )
+      const s = createSottofondoFloatingSession(pos)
+      setActiveFloatingSessionId(s.id)
+      return [...prev, s]
+    })
+  }, [recordUndoPoint])
+
   const setPlaylistTitle = useCallback((title: string, sessionId: string) => {
     patchFloatingSession(sessionId, {
       playlistTitle: title.slice(0, 120),
@@ -3260,6 +3326,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         stopLaunchpadSample()
         setLaunchpadAudioPlaying(false)
       }
+      if (s?.playlistMode === 'sottofondo') {
+        if (sottofondoLoadedTrackRef.current?.sessionId === id) {
+          void send({ type: 'sottofondoStop' })
+          setSottofondoPlaying(false)
+          setSottofondoLoadedTrack(null)
+        }
+      }
       if (
         s?.playlistMode === 'chalkboard' &&
         normalizeChalkboardOutputMode(
@@ -3312,6 +3385,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         playbackLoadedTrackRef.current?.sessionId === sessionId
       )
         return true
+      if (sottofondoLoadedTrackRef.current?.sessionId === sessionId)
+        return true
       return false
     },
     [],
@@ -3324,6 +3399,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (!s) return
       const themeCur = normalizePlaylistThemeColor(s.playlistThemeColor ?? '')
       if (s.playlistMode === 'chalkboard') return
+      if (s.playlistMode === 'sottofondo') return
       if (s.playlistMode === 'launchpad') {
         const cells = s.launchPadCells ?? defaultLaunchPadCells()
         const totalDurationSec = await totalDurationSecForPlaylistSave({
@@ -3369,7 +3445,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const loadSavedPlaylist = useCallback(
     async (
       id: string,
-      opts?: { preservePlayback?: boolean },
+      opts?: {
+        preservePlayback?: boolean
+      },
     ): Promise<string | null> => {
       const data = await window.electronAPI.playlistsLoad(id)
       if (!data) return null
@@ -3481,7 +3559,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setFloatingSessions(nextFloating)
       setActiveFloatingSessionId(newS.id)
       activeFloatingSessionIdRef.current = newS.id
-      const preservePlayback = opts?.preservePlayback === true
+      const preservePlayback = opts?.preservePlayback !== false
       if (!preservePlayback) {
         setPlaybackSessionId(newS.id)
         playbackSessionIdStateRef.current = newS.id
@@ -3758,6 +3836,52 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     [refreshSavedPlaylists],
   )
 
+  const stopSottofondoPlayback = useCallback(async () => {
+    await send({ type: 'sottofondoStop' })
+    setSottofondoPlaying(false)
+    setSottofondoLoadedTrack(null)
+  }, [send])
+
+  const sottofondoLoadIndexAndPlay = useCallback(
+    async (index: number, sessionId: string) => {
+      const sess = floatingSessionsRef.current.find((x) => x.id === sessionId)
+      if (!sess || sess.playlistMode !== 'sottofondo') return
+      const list = sess.paths
+      if (list.length === 0) return
+      if (index < 0 || index >= list.length) return
+      const mode = sess.playlistLoopMode ?? loopModeRef.current
+      const j = firstPlayableSottofondoIndex(
+        list,
+        index,
+        mode === 'all',
+      )
+      if (j == null) {
+        await stopSottofondoPlayback()
+        return
+      }
+      const p = list[j]!
+      patchFloatingSession(sessionId, { currentIndex: j })
+      const playlistMuted = Boolean(sess.playlistOutputMuted)
+      const panelVol =
+        typeof sess.playlistOutputVolume === 'number' &&
+        Number.isFinite(sess.playlistOutputVolume)
+          ? Math.min(1, Math.max(0, sess.playlistOutputVolume))
+          : 1
+      const effMuted = muted || playlistMuted
+      const loopOne = mode === 'one'
+      await send({ type: 'sottofondoLoad', src: p, loop: loopOne })
+      await send({ type: 'sottofondoSetMuted', muted: effMuted })
+      await send({
+        type: 'sottofondoSetVolume',
+        volume: outputVolumeRef.current * panelVol,
+      })
+      await send({ type: 'sottofondoPlay' })
+      setSottofondoPlaying(true)
+      setSottofondoLoadedTrack({ sessionId, index: j })
+    },
+    [muted, send, patchFloatingSession, stopSottofondoPlayback],
+  )
+
   const loadIndexAndPlay = useCallback(
     async (index: number, sessionId?: string) => {
       const fallbackPlaybackId =
@@ -3772,6 +3896,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         sess?.playlistMode === 'chalkboard'
       )
         return
+      if (sess?.playlistMode === 'sottofondo') {
+        await sottofondoLoadIndexAndPlay(index, sid)
+        return
+      }
       const list = sess?.paths ?? []
       if (list.length === 0 || index < 0 || index >= list.length) return
       const playlistMuted = Boolean(sess?.playlistOutputMuted)
@@ -3811,8 +3939,79 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setVideoPlaying(true)
       setPlaybackArmedNext(null)
     },
-    [muted, send, patchFloatingSession],
+    [muted, send, patchFloatingSession, sottofondoLoadIndexAndPlay],
   )
+
+  const sottofondoLoadIndexAndPlayRef = useRef(sottofondoLoadIndexAndPlay)
+  useLayoutEffect(() => {
+    sottofondoLoadIndexAndPlayRef.current = sottofondoLoadIndexAndPlay
+  }, [sottofondoLoadIndexAndPlay])
+
+  const handleSottofondoEnded = useCallback(() => {
+    const t = sottofondoLoadedTrackRef.current
+    if (!t) return
+    const id = t.sessionId
+    const sess = floatingSessionsRef.current.find((s) => s.id === id)
+    if (!sess || sess.playlistMode !== 'sottofondo') return
+    const list = sess.paths
+    if (list.length === 0) {
+      void stopSottofondoPlayback()
+      return
+    }
+    const mode = sess.playlistLoopMode ?? loopModeRef.current
+    const idx = sess.currentIndex
+    if (mode === 'one') return
+    if (mode === 'all') {
+      const from = (idx + 1) % list.length
+      const j = firstPlayableSottofondoIndex(list, from, true)
+      if (j == null) {
+        void stopSottofondoPlayback()
+        return
+      }
+      void sottofondoLoadIndexAndPlayRef.current(j, id)
+      return
+    }
+    const j = firstPlayableSottofondoIndex(list, idx + 1, false)
+    if (j == null) {
+      void stopSottofondoPlayback()
+    } else {
+      void sottofondoLoadIndexAndPlayRef.current(j, id)
+    }
+  }, [stopSottofondoPlayback])
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.onSottofondoEndedFromOutput) return
+    return api.onSottofondoEndedFromOutput(handleSottofondoEnded)
+  }, [handleSottofondoEnded])
+
+  useEffect(() => {
+    if (!sottofondoPlaying || !sottofondoLoadedTrack) return
+    const sess = floatingSessions.find(
+      (s) => s.id === sottofondoLoadedTrack.sessionId,
+    )
+    if (!sess || sess.playlistMode !== 'sottofondo') return
+    const panelVol =
+      typeof sess.playlistOutputVolume === 'number' &&
+      Number.isFinite(sess.playlistOutputVolume)
+        ? Math.min(1, Math.max(0, sess.playlistOutputVolume))
+        : 1
+    void send({
+      type: 'sottofondoSetVolume',
+      volume: outputVolume * panelVol,
+    })
+    void send({
+      type: 'sottofondoSetMuted',
+      muted: muted || Boolean(sess.playlistOutputMuted),
+    })
+  }, [
+    sottofondoPlaying,
+    sottofondoLoadedTrack,
+    floatingSessions,
+    outputVolume,
+    muted,
+    send,
+  ])
 
   const clearPlaybackArmedNext = useCallback(() => {
     setPlaybackArmedNext(null)
@@ -3823,7 +4022,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     if (
       !sess ||
       sess.playlistMode === 'launchpad' ||
-      sess.playlistMode === 'chalkboard'
+      sess.playlistMode === 'chalkboard' ||
+      sess.playlistMode === 'sottofondo'
     )
       return
     if (index < 0 || index >= sess.paths.length) return
@@ -5951,6 +6151,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       playing,
       videoPlaying,
       launchpadAudioPlaying,
+      sottofondoPlaying,
+      sottofondoLoadedTrack,
+      stopSottofondoPlayback,
       previewSrc,
       previewSyncKey,
       secondScreenOn,
@@ -5964,6 +6167,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       addFloatingPlaylist,
       addFloatingLaunchPad,
       addFloatingChalkboard,
+      addFloatingSottofondo,
       removeFloatingPlaylist,
       floatingCloseWouldInterruptPlay,
       openFolder,
@@ -6074,6 +6278,9 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       playing,
       videoPlaying,
       launchpadAudioPlaying,
+      sottofondoPlaying,
+      sottofondoLoadedTrack,
+      stopSottofondoPlayback,
       previewSrc,
       previewSyncKey,
       secondScreenOn,
@@ -6087,6 +6294,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       addFloatingPlaylist,
       addFloatingLaunchPad,
       addFloatingChalkboard,
+      addFloatingSottofondo,
       removeFloatingPlaylist,
       floatingCloseWouldInterruptPlay,
       openFolder,
@@ -6279,6 +6487,8 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
   'addFloatingPlaylist',
   'addFloatingLaunchPad',
   'addFloatingChalkboard',
+  'addFloatingSottofondo',
+  'stopSottofondoPlayback',
   'patchFloatingPlaylistSession',
 ])
 

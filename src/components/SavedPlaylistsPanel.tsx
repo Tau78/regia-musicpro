@@ -556,7 +556,7 @@ export default function SavedPlaylistsPanel({
                   setActiveFloatingSession(sid)
                   openFloatingPlaylist()
                 } else {
-                  void loadSavedPlaylist(pl.id, { preservePlayback: true })
+                  void loadSavedPlaylist(pl.id)
                 }
               }}
               onContextMenu={(e: MouseEvent<HTMLLIElement>) => {

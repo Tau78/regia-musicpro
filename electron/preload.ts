@@ -70,6 +70,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('video:ended-to-regia', listener)
   },
 
+  notifySottofondoEnded: (): void => {
+    ipcRenderer.send('sottofondo:ended-from-output')
+  },
+
+  onSottofondoEndedFromOutput: (handler: () => void): (() => void) => {
+    const listener = () => handler()
+    ipcRenderer.on('sottofondo:ended-to-regia', listener)
+    return () => ipcRenderer.removeListener('sottofondo:ended-to-regia', listener)
+  },
+
   playlistsList: (): Promise<
     Array<{
       id: string

@@ -1,6 +1,6 @@
 import type { SavedPlaylistKind } from '../playlistTypes.ts'
 
-type PanelKind = SavedPlaylistKind | undefined
+type PanelKind = SavedPlaylistKind | 'sottofondo' | undefined
 
 /** Voce nella lista «Preset» (salvati su disco). */
 export function previewHintSavedListRow(mode: PanelKind): string {
@@ -23,6 +23,9 @@ export function previewHintSidebarOpenPanelRow(mode: PanelKind): string {
   if (m === 'chalkboard') {
     return 'Lavagna aperta: clic per portarla in primo piano sulla plancia. Trascina per riordinare l’elenco nella sidebar.'
   }
+  if (m === 'sottofondo') {
+    return 'Sottofondo aperto: audio in uscita indipendente dal trasporto globale. Clic per portarlo in primo piano. Trascina per riordinare.'
+  }
   return 'Playlist aperta: clic per portarla in primo piano sulla plancia. Trascina per riordinare l’elenco nella sidebar.'
 }
 
@@ -37,6 +40,9 @@ export const previewHintNewLaunchpadSfx =
 
 export const previewHintNewChalkboard =
   'Nuova lavagna: apre un pannello chalkboard (disegno e testo) sulla plancia.'
+
+export const previewHintNewSottofondo =
+  'Nuovo sottofondo: apre una playlist con play/stop sul pannello, audio in uscita indipendente dal trasporto globale.'
 
 export const previewHintFilterTracks =
   'Filtro playlist a brani: nell’elenco salvati mostra solo le playlist con elenco file (combinabile con altri filtri).'

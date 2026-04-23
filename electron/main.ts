@@ -1632,6 +1632,18 @@ function setupIpc() {
       forwardToOutput(out)
       return
     }
+    if (cmd.type === 'sottofondoLoad') {
+      const src =
+        cmd.src.startsWith('file:') || cmd.src.startsWith('http')
+          ? cmd.src
+          : pathToMediaUrl(cmd.src)
+      const out: PlaybackCommand =
+        cmd.loop !== undefined
+          ? { type: 'sottofondoLoad', src, loop: cmd.loop }
+          : { type: 'sottofondoLoad', src }
+      forwardToOutput(out)
+      return
+    }
     if (cmd.type === 'chalkboardLayer') {
       const raw = cmd.src
       const src =
@@ -1700,6 +1712,11 @@ function setupIpc() {
   ipcMain.on('video:ended-from-output', () => {
     if (!regiaWindow || regiaWindow.isDestroyed()) return
     regiaWindow.webContents.send('video:ended-to-regia')
+  })
+
+  ipcMain.on('sottofondo:ended-from-output', () => {
+    if (!regiaWindow || regiaWindow.isDestroyed()) return
+    regiaWindow.webContents.send('sottofondo:ended-to-regia')
   })
 
   ipcMain.on('output:audio-level', (_e, level: unknown) => {

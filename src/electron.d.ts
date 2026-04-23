@@ -51,6 +51,8 @@ declare global {
       onPlaybackCommand: (handler: (cmd: PlaybackCommand) => void) => () => void
       notifyVideoEnded: () => void
       onVideoEndedFromOutput: (handler: () => void) => () => void
+      notifySottofondoEnded: () => void
+      onSottofondoEndedFromOutput: (handler: () => void) => () => void
       playlistsList: () => Promise<SavedPlaylistMeta[]>
       playlistsSave: (opts: {
         id?: string

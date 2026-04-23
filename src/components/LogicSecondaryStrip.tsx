@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react'
-import { useRegia, type LoopMode } from '../state/RegiaContext.tsx'
+import { cycleLoopMode } from '../lib/loopModeCycle.ts'
+import { useRegia } from '../state/RegiaContext.tsx'
 
 function IconLoopOff() {
   return (
@@ -130,45 +130,35 @@ export default function LogicSecondaryStrip() {
 
   const showGrid = floatingPlaylistOpen && floatingPlaylistSessions.length > 0
 
-  const loopBtn = (mode: LoopMode, icon: ReactNode, label: string, title: string) => (
-    <button
-      key={mode}
-      type="button"
-      className={`logic-seg ${loopMode === mode ? 'is-active' : ''}`}
-      onClick={() => setLoopMode(mode)}
-      aria-pressed={loopMode === mode}
-      aria-label={label}
-      title={title}
-    >
-      {icon}
-    </button>
-  )
+  const loopTitle =
+    loopMode === 'off'
+      ? 'Loop disattivato'
+      : loopMode === 'one'
+        ? 'Loop: ripeti il file corrente'
+        : 'Loop: ripeti tutta la playlist'
+  const loopNextHint =
+    loopMode === 'off'
+      ? 'Prossimo: loop un file'
+      : loopMode === 'one'
+        ? 'Prossimo: loop tutta la lista'
+        : 'Prossimo: loop disattivato'
 
   return (
     <div className="logic-secondary-strip">
-      <div
-        className="logic-segmented"
-        role="radiogroup"
-        aria-label="Modalità loop"
-      >
-        {loopBtn(
-          'off',
-          <IconLoopOff />,
-          'Loop disattivato',
-          'Loop disattivato: a fine brano si ferma o passa al successivo',
-        )}
-        {loopBtn(
-          'one',
-          <IconLoopOne />,
-          'Loop file',
-          'Ripeti il file corrente',
-        )}
-        {loopBtn(
-          'all',
-          <IconLoopAll />,
-          'Loop playlist',
-          'Alla fine dell’ultimo brano torna al primo',
-        )}
+      <div className="logic-segmented" role="group" aria-label="Modalità loop">
+        <button
+          type="button"
+          className={`logic-seg logic-loop-cycle-btn${loopMode !== 'off' ? ' is-active' : ''}`}
+          onClick={() => setLoopMode(cycleLoopMode(loopMode))}
+          aria-label={`${loopTitle}. Clic per ${loopNextHint}.`}
+          title={`${loopTitle}. Clic per ciclo: ${loopNextHint}.`}
+        >
+          {loopMode === 'off' ?
+            <IconLoopOff />
+          : loopMode === 'one' ?
+            <IconLoopOne />
+          : <IconLoopAll />}
+        </button>
       </div>
 
       {showGrid ? (

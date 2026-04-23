@@ -45,6 +45,7 @@ type MediaSnap = {
 export default function OutputApp() {
   const vRef0 = useRef<HTMLVideoElement>(null)
   const vRef1 = useRef<HTMLVideoElement>(null)
+  const sottofondoAudioRef = useRef<HTMLAudioElement>(null)
 
   const [videoSrc, setVideoSrc] = useState<[string | null, string | null]>([
     null,
@@ -130,6 +131,14 @@ export default function OutputApp() {
   const applySinkToVideo = useCallback((el: HTMLVideoElement) => {
     const setSink = (
       el as HTMLVideoElement & { setSinkId?: (id: string) => Promise<void> }
+    ).setSinkId
+    if (typeof setSink !== 'function') return
+    void setSink.call(el, sinkIdRef.current || '').catch(() => {})
+  }, [])
+
+  const applySinkToSottofondo = useCallback((el: HTMLAudioElement) => {
+    const setSink = (
+      el as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }
     ).setSinkId
     if (typeof setSink !== 'function') return
     void setSink.call(el, sinkIdRef.current || '').catch(() => {})
@@ -529,6 +538,8 @@ export default function OutputApp() {
           sinkIdRef.current = cmd.sinkId
           if (vRef0.current) applySinkToVideo(vRef0.current)
           if (vRef1.current) applySinkToVideo(vRef1.current)
+          if (sottofondoAudioRef.current)
+            applySinkToSottofondo(sottofondoAudioRef.current)
           break
         case 'setLoopOne':
           loopRef.current = cmd.loop
@@ -596,12 +607,53 @@ export default function OutputApp() {
         case 'setOutputProgramLogoVisible':
           setProgramLogoVisible(cmd.visible === true)
           break
+        case 'sottofondoLoad': {
+          const a = sottofondoAudioRef.current
+          if (!a) break
+          a.loop = cmd.loop === true
+          if (a.src !== cmd.src) {
+            a.src = cmd.src
+            void a.load()
+          }
+          applySinkToSottofondo(a)
+          break
+        }
+        case 'sottofondoPlay': {
+          const a = sottofondoAudioRef.current
+          if (a) void a.play().catch(() => {})
+          break
+        }
+        case 'sottofondoPause': {
+          sottofondoAudioRef.current?.pause()
+          break
+        }
+        case 'sottofondoStop': {
+          const a = sottofondoAudioRef.current
+          if (!a) break
+          a.loop = false
+          a.pause()
+          a.removeAttribute('src')
+          void a.load()
+          break
+        }
+        case 'sottofondoSetVolume': {
+          const a = sottofondoAudioRef.current
+          if (a)
+            a.volume = Math.min(1, Math.max(0, cmd.volume))
+          break
+        }
+        case 'sottofondoSetMuted': {
+          const a = sottofondoAudioRef.current
+          if (a) a.muted = cmd.muted
+          break
+        }
         default:
           break
       }
     },
     [
       applySinkToVideo,
+      applySinkToSottofondo,
       clearStillAdvanceTimer,
       handleLoad,
       pauseBoth,
@@ -615,6 +667,16 @@ export default function OutputApp() {
     const unsub = api.onPlaybackCommand(apply)
     return unsub
   }, [apply])
+
+  useLayoutEffect(() => {
+    const a = sottofondoAudioRef.current
+    if (!a) return
+    const onEnded = () => {
+      window.electronAPI?.notifySottofondoEnded?.()
+    }
+    a.addEventListener('ended', onEnded)
+    return () => a.removeEventListener('ended', onEnded)
+  }, [])
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
@@ -1098,6 +1160,13 @@ export default function OutputApp() {
           />
         </div>
       ) : null}
+      <audio
+        ref={sottofondoAudioRef}
+        className="output-sottofondo-audio"
+        aria-hidden
+        playsInline
+        preload="auto"
+      />
     </div>
   )
 }

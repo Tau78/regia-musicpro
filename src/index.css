@@ -5291,6 +5291,23 @@ button {
   background: rgba(61, 139, 253, 0.22);
 }
 
+.floating-playlist-sottofondo-transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 10px;
+  flex-wrap: wrap;
+}
+
+.floating-playlist-sottofondo-transport .floating-playlist-loop-btn {
+  border-radius: 6px;
+  min-width: 4.25rem;
+}
+
+.floating-playlist.is-sottofondo .floating-playlist-panel-kind.is-sottofondo {
+  color: #6ee7c5;
+}
+
 .floating-playlist-item-duration {
   flex-shrink: 0;
   align-self: center;

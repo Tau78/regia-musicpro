@@ -46,6 +46,8 @@ export type PlaylistFloaterSyncPayload = {
   videoOutputSessionId: string | null
   playbackSessionId: string | null
   playbackArmedNext: RegiaContextValue['playbackArmedNext']
+  sottofondoPlaying: boolean
+  sottofondoLoadedTrack: RegiaContextValue['sottofondoLoadedTrack']
 }
 
 export function buildPlaylistFloaterSyncPayload(
@@ -96,6 +98,8 @@ export function buildPlaylistFloaterSyncPayload(
     videoOutputSessionId: v.videoOutputSessionId,
     playbackSessionId: v.playbackSessionId,
     playbackArmedNext: v.playbackArmedNext,
+    sottofondoPlaying: v.sottofondoPlaying,
+    sottofondoLoadedTrack: v.sottofondoLoadedTrack,
   }
 }
 
@@ -146,6 +150,11 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     setCueSinkId: call('setCueSinkId') as RegiaContextValue['setCueSinkId'],
     videoPlaying: sync.videoPlaying,
     launchpadAudioPlaying: sync.launchpadAudioPlaying,
+    sottofondoPlaying: sync.sottofondoPlaying,
+    sottofondoLoadedTrack: sync.sottofondoLoadedTrack,
+    stopSottofondoPlayback: call(
+      'stopSottofondoPlayback',
+    ) as RegiaContextValue['stopSottofondoPlayback'],
     playing: sync.playing,
     previewSrc: sync.previewSrc,
     previewSyncKey: sync.previewSyncKey,
@@ -275,6 +284,9 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     addFloatingChalkboard: call(
       'addFloatingChalkboard',
     ) as RegiaContextValue['addFloatingChalkboard'],
+    addFloatingSottofondo: call(
+      'addFloatingSottofondo',
+    ) as RegiaContextValue['addFloatingSottofondo'],
     removeFloatingPlaylist: call(
       'removeFloatingPlaylist',
     ) as RegiaContextValue['removeFloatingPlaylist'],

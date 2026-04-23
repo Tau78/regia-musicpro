@@ -108,6 +108,30 @@ function IconSavedCardChalkboard() {
   )
 }
 
+function IconSavedCardSottofondo() {
+  return (
+    <svg viewBox="0 0 24 24" width={18} height={18} aria-hidden="true">
+      <path
+        d="M4 14c1.5-2.5 3-2.5 4.5 0s3 2.5 4.5 0 3-2.5 4.5 0"
+        fill="none"
+        stroke="#5eead4"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+      />
+      <circle cx="5" cy="8" r="1.5" fill="#94a3b8" />
+      <line
+        x1="8.5"
+        y1="8"
+        x2="19"
+        y2="8"
+        stroke="#94a3b8"
+        strokeWidth={1.6}
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 function IconClosePanel() {
   return (
     <svg
@@ -140,6 +164,7 @@ export default function SidebarFloatingOpenPanels() {
     videoPlaying,
     launchpadAudioPlaying,
     playbackLoadedTrack,
+    sottofondoLoadedTrack,
   } = useRegia()
 
   const inAppSessions = useMemo(
@@ -186,12 +211,14 @@ export default function SidebarFloatingOpenPanels() {
       videoPlaying,
       launchpadAudioPlaying,
       playbackLoadedTrack,
+      sottofondoLoadedTrack,
     }),
     [
       videoOutputSessionId,
       videoPlaying,
       launchpadAudioPlaying,
       playbackLoadedTrack,
+      sottofondoLoadedTrack,
     ],
   )
 
@@ -209,10 +236,13 @@ export default function SidebarFloatingOpenPanels() {
       if (floatingCloseWouldInterruptPlay(sessionId)) {
         const s = sessionById.get(sessionId)
         const isLp = s?.playlistMode === 'launchpad'
+        const isSotto = s?.playlistMode === 'sottofondo'
         const ok = window.confirm(
           isLp
             ? 'C’è un sample del Launchpad in riproduzione: chiudere il pannello lo interrompe. Chiudere comunque?'
-            : 'C’è un video in uscita da questo pannello in riproduzione: chiudere lo interrompe. Chiudere comunque?',
+            : isSotto
+              ? 'Il sottofondo è in riproduzione: chiudere il pannello lo ferma. Chiudere comunque?'
+              : 'C’è un video in uscita da questo pannello in riproduzione: chiudere lo interrompe. Chiudere comunque?',
         )
         if (!ok) return
       }
@@ -336,6 +366,14 @@ export default function SidebarFloatingOpenPanels() {
                       aria-hidden
                     >
                       <IconSavedCardChalkboard />
+                    </span>
+                  ) : s.playlistMode === 'sottofondo' ? (
+                    <span
+                      className="saved-playlists-kind-icon"
+                      title="Sottofondo"
+                      aria-hidden
+                    >
+                      <IconSavedCardSottofondo />
                     </span>
                   ) : null}
                   <div className="saved-playlists-meta-text">
