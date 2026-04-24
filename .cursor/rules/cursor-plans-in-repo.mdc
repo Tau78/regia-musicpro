@@ -1,0 +1,10 @@
+---
+description: Piani Cursor (.plan.md) versionati nel repo, non solo in ~/.cursor/plans
+alwaysApply: true
+---
+
+# Piani di lavoro nel repository
+
+- I piani di implementazione e architettura **per questo codebase** devono vivere in **`docs/cursor-plans/`** come file `.plan.md` (o `.md`), **committati su git**.
+- **Non** lasciare come unica copia un piano solo in `~/.cursor/plans/` se il contenuto è specifico di questo progetto: dopo aver creato o aggiornato un piano, **salva o copia** il file sotto `docs/cursor-plans/` e aggiorna i link interni tra piani usando percorsi relativi (es. `./altro_piano.plan.md`).
+- **Nuovi progetti** (nuovi repo Regia / fork): replica questa convenzione creando `docs/cursor-plans/` e copiando questa regola in `.cursor/rules/cursor-plans-in-repo.mdc`.
