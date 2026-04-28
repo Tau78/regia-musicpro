@@ -1189,11 +1189,27 @@ function writeUpdateCheckSchedule(schedule: UpdateCheckSchedule): void {
 }
 
 let updateCheckRepeatTimer: ReturnType<typeof setInterval> | null = null
+let updateCheckInFlight = false
+let updateDownloadedPromptActive = false
+let updateInstallStarted = false
+let updateHandledVersion: string | null = null
+let windowsUpdateWaitWindowSpawned = false
 
 function clearUpdateCheckRepeatTimer(): void {
   if (updateCheckRepeatTimer) {
     clearInterval(updateCheckRepeatTimer)
     updateCheckRepeatTimer = null
+  }
+}
+
+async function checkForUpdatesOnce(): Promise<void> {
+  if (isDev || updateCheckInFlight || updateDownloadedPromptActive || updateInstallStarted)
+    return
+  updateCheckInFlight = true
+  try {
+    await autoUpdater.checkForUpdates()
+  } finally {
+    updateCheckInFlight = false
   }
 }
 
@@ -1210,7 +1226,7 @@ function applyUpdateCheckRepeatSchedule(schedule: UpdateCheckSchedule): void {
           : 0
   if (ms <= 0) return
   updateCheckRepeatTimer = setInterval(() => {
-    void autoUpdater.checkForUpdates()
+    void checkForUpdatesOnce()
   }, ms)
 }
 
@@ -2416,7 +2432,7 @@ function setupIpc() {
         }
       }
       try {
-        await autoUpdater.checkForUpdates()
+        await checkForUpdatesOnce()
         return { ok: true }
       } catch (e) {
         return {
@@ -2459,6 +2475,7 @@ const WINDOWS_REGIA_TASKLIST_IMAGE = 'REGIA MUSICPRO.exe'
  */
 function dismissDetachedWindowsUpdateWaitWindow(): void {
   if (process.platform !== 'win32') return
+  windowsUpdateWaitWindowSpawned = false
   const pidPath = path.join(app.getPath('userData'), WINDOWS_UPDATE_WAIT_PID_FILE)
   let raw = ''
   try {
@@ -2483,6 +2500,26 @@ function dismissDetachedWindowsUpdateWaitWindow(): void {
   }
 }
 
+function isWindowsProcessAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function readDetachedWindowsUpdateWaitPid(): number | null {
+  const pidPath = path.join(app.getPath('userData'), WINDOWS_UPDATE_WAIT_PID_FILE)
+  try {
+    const pid = parseInt(fs.readFileSync(pidPath, 'utf8').trim(), 10)
+    return Number.isFinite(pid) && pid > 0 ? pid : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Windows + NSIS silenzioso: dopo `quitAndInstall` non resta alcuna finestra Electron finché
  * l'installer non ha finito. HTA + `mshta` (processo separato): barra a 3 fasi basata sul processo
@@ -2491,6 +2528,12 @@ function dismissDetachedWindowsUpdateWaitWindow(): void {
  */
 function spawnDetachedWindowsUpdateWaitWindow(): void {
   if (process.platform !== 'win32') return
+  if (windowsUpdateWaitWindowSpawned) return
+  const existingPid = readDetachedWindowsUpdateWaitPid()
+  if (existingPid && isWindowsProcessAlive(existingPid)) {
+    windowsUpdateWaitWindowSpawned = true
+    return
+  }
   const root = process.env.SystemRoot
   const winDir =
     typeof root === 'string' && root.length > 0 ? root.replace(/[/\\]+$/, '') : 'C:\\Windows'
@@ -2617,6 +2660,7 @@ window.setInterval(tick, 450);
       stdio: 'ignore',
       windowsHide: false,
     })
+    windowsUpdateWaitWindowSpawned = true
     if (typeof child.pid === 'number' && child.pid > 0) {
       try {
         fs.writeFileSync(pidPath, String(child.pid), 'utf8')
@@ -2642,6 +2686,21 @@ function setupAutoUpdater(): void {
   })
 
   autoUpdater.on('update-downloaded', (info) => {
+    const version =
+      typeof info.version === 'string' && info.version.trim()
+        ? info.version.trim()
+        : 'unknown'
+    if (
+      updateInstallStarted ||
+      updateDownloadedPromptActive ||
+      updateHandledVersion === version
+    ) {
+      return
+    }
+    updateDownloadedPromptActive = true
+    updateHandledVersion = version
+    clearUpdateCheckRepeatTimer()
+
     // NSIS: `true` = `/S` (nessuna procedura guidata in aggiornamento); `true` = `--force-run` riapre l'app.
     // Può restare un solo prompt UAC di Windows se serve elevazione (non controllabile dall'app).
     const detailWin =
@@ -2651,9 +2710,9 @@ function setupAutoUpdater(): void {
     const opts = {
       type: 'info' as const,
       title: 'Novità in arrivo',
-      message: `La versione ${info.version} è pronta.`,
+      message: `La versione ${version} è pronta.`,
       detail: process.platform === 'win32' ? detailWin : detailDefault,
-      buttons: ['Ok, aggiorna!'],
+      buttons: ['OK'],
       defaultId: 0,
     }
     const owner =
@@ -2665,6 +2724,9 @@ function setupAutoUpdater(): void {
         ? dialog.showMessageBox(owner, opts)
         : dialog.showMessageBox(opts)
     void finished.then(() => {
+      if (updateInstallStarted) return
+      updateInstallStarted = true
+      updateDownloadedPromptActive = false
       if (process.platform === 'win32') {
         spawnDetachedWindowsUpdateWaitWindow()
         setTimeout(() => {
@@ -2677,11 +2739,14 @@ function setupAutoUpdater(): void {
       setImmediate(() => {
         autoUpdater.quitAndInstall(true, true)
       })
+    }).catch((err) => {
+      updateDownloadedPromptActive = false
+      console.error('[autoUpdater] update prompt failed', err)
     })
   })
 
   const schedule = readUpdateCheckSchedule()
-  void autoUpdater.checkForUpdates()
+  void checkForUpdatesOnce()
   applyUpdateCheckRepeatSchedule(schedule)
 }
 
