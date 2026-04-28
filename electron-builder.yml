@@ -18,6 +18,13 @@ files:
 
 asar: true
 
+# I moduli nativi non possono restare dentro app.asar. `node-hid` serve al
+# controller Bluetooth/HID e va lasciato unpacked per evitare crash in produzione.
+asarUnpack:
+  - node_modules/node-hid/**/*
+  - node_modules/node-addon-api/**/*
+  - node_modules/pkg-prebuilds/**/*
+
 # Auto-updater (electron-updater): in fase di build viene generato `app-update.yml` nel pacchetto.
 # `releaseType: release` = release pubblicata (badge «Latest»), NON bozza — il default di electron-builder è draft.
 # Per pubblicare da PC: `npm run dist:win:publish` con `GH_TOKEN`. In CI vedi workflow (GITHUB_TOKEN).

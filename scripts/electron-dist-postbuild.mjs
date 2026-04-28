@@ -28,12 +28,27 @@ if (exists(chalkboardJs)) {
   fs.renameSync(chalkboardJs, chalkboardCjs)
 }
 
+const controllerHidJs = path.join(dist, 'controllerHidService.js')
+const controllerHidCjs = path.join(dist, 'controllerHidService.cjs')
+if (exists(controllerHidJs)) {
+  if (exists(controllerHidCjs)) fs.unlinkSync(controllerHidCjs)
+  fs.renameSync(controllerHidJs, controllerHidCjs)
+}
+
 const mainJs = path.join(dist, 'main.js')
 const mainCjs = path.join(dist, 'main.cjs')
 if (exists(mainJs)) {
   let s = fs.readFileSync(mainJs, 'utf8')
   s = s.replaceAll('require("./chalkboardPng")', 'require("./chalkboardPng.cjs")')
   s = s.replaceAll("require('./chalkboardPng')", "require('./chalkboardPng.cjs')")
+  s = s.replaceAll(
+    'require("./controllerHidService")',
+    'require("./controllerHidService.cjs")',
+  )
+  s = s.replaceAll(
+    "require('./controllerHidService')",
+    "require('./controllerHidService.cjs')",
+  )
   fs.writeFileSync(mainCjs, s, 'utf8')
   fs.unlinkSync(mainJs)
 }
