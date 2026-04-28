@@ -3,6 +3,73 @@ import type { SavedPlaylistMeta } from './playlistTypes'
 
 export {}
 
+type ControllerHidLearningStep =
+  | 'jogRight'
+  | 'jogLeft'
+  | 'button1'
+  | 'button2'
+  | 'button3'
+  | 'button4'
+
+type ControllerHidDeviceInfo = {
+  id: string
+  path: string
+  vendorId: number | null
+  productId: number | null
+  serialNumber: string | null
+  manufacturer: string | null
+  product: string | null
+  release: number | null
+  interfaceNumber: number | null
+  usagePage: number | null
+  usage: number | null
+  excludedHint: string | null
+}
+
+type ControllerHidRawEvent = {
+  ts: number
+  deviceId: string
+  rawHex: string
+  reportId: number | null
+  byteLength: number
+  matchedStep?: ControllerHidLearningStep
+  learned: boolean
+}
+
+type ControllerHidProfile = {
+  version: 1
+  savedAt: string
+  device: ControllerHidDeviceInfo
+  fingerprint: {
+    path: string | null
+    vendorId: number | null
+    productId: number | null
+    serialNumber: string | null
+    manufacturer: string | null
+    product: string | null
+    usagePage: number | null
+    usage: number | null
+    interfaceNumber: number | null
+  }
+  reportsByStep: Record<ControllerHidLearningStep, string>
+}
+
+type ControllerHidStatus = {
+  available: boolean
+  adapterError: string | null
+  selectedDeviceId: string | null
+  profile: ControllerHidProfile | null
+  connected: boolean
+  learning: {
+    active: boolean
+    device: ControllerHidDeviceInfo | null
+    captured: Partial<Record<ControllerHidLearningStep, string>>
+    lastEvent: ControllerHidRawEvent | null
+    readyToSave: boolean
+  }
+  recentEvents: ControllerHidRawEvent[]
+}
+
 declare global {
   interface Window {
     electronAPI: {
@@ -253,6 +320,24 @@ declare global {
       reportRemotePlaybackSnapshotPatch: (
         patch: Record<string, unknown>,
       ) => void
+
+      controllerHidListDevices: () => Promise<ControllerHidDeviceInfo[]>
+      controllerHidStatus: () => Promise<ControllerHidStatus | null>
+      controllerHidSelectDevice: (
+        deviceId: string | null,
+      ) => Promise<ControllerHidStatus | null>
+      controllerHidStartLearning: (
+        deviceId?: string | null,
+      ) => Promise<ControllerHidStatus | null>
+      controllerHidCaptureLearningStep: (
+        step: ControllerHidLearningStep,
+      ) => Promise<ControllerHidStatus | null>
+      controllerHidSaveLearningProfile: () => Promise<ControllerHidStatus | null>
+      controllerHidCancelLearning: () => Promise<ControllerHidStatus | null>
+      controllerHidForgetProfile: () => Promise<ControllerHidStatus | null>
+      onControllerHidEvent: (
+        handler: (event: ControllerHidRawEvent) => void,
+      ) => () => void
 
       getUpdateCheckSchedule: () => Promise<
         'on_startup' | 'daily' | 'hourly' | 'every_5_minutes'

@@ -2830,6 +2830,64 @@ button {
   align-self: center;
 }
 
+.settings-controller-hid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.settings-controller-hid-learning {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.settings-controller-hid-steps {
+  list-style: decimal;
+  margin: 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.settings-controller-hid-steps li {
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+}
+
+.settings-controller-hid-steps li,
+.settings-controller-hid-steps li > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.settings-controller-hid-steps li > div {
+  min-width: 0;
+  flex: 1;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.settings-controller-hid-steps li span,
+.settings-controller-hid-steps li code {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.settings-controller-hid-steps li.is-captured {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
 /** Contenitore comune per barra suggerimenti (stessi stili di `.preview-hint-bar`). */
 .regia-panel-hint-host {
   display: flex;

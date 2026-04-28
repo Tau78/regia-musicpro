@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { PlaybackCommand } from './types'
+import type {
+  ControllerHidDeviceInfo,
+  ControllerHidLearningStep,
+  ControllerHidRawEvent,
+  ControllerHidStatus,
+} from './controllerHidService'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   /** Kit predefinito Launchpad (campioni in public/launchpad-base; vuoto se assente). */
@@ -489,6 +495,45 @@ contextBridge.exposeInMainWorld('electronAPI', {
     patch: Record<string, unknown>,
   ): void => {
     ipcRenderer.send('remote:snapshot:patch', patch)
+  },
+
+  controllerHidListDevices: (): Promise<ControllerHidDeviceInfo[]> =>
+    ipcRenderer.invoke('controllerHid:listDevices'),
+
+  controllerHidStatus: (): Promise<ControllerHidStatus | null> =>
+    ipcRenderer.invoke('controllerHid:status'),
+
+  controllerHidSelectDevice: (
+    deviceId: string | null,
+  ): Promise<ControllerHidStatus | null> =>
+    ipcRenderer.invoke('controllerHid:selectDevice', deviceId),
+
+  controllerHidStartLearning: (
+    deviceId?: string | null,
+  ): Promise<ControllerHidStatus | null> =>
+    ipcRenderer.invoke('controllerHid:startLearning', deviceId ?? null),
+
+  controllerHidCaptureLearningStep: (
+    step: ControllerHidLearningStep,
+  ): Promise<ControllerHidStatus | null> =>
+    ipcRenderer.invoke('controllerHid:captureLearningStep', step),
+
+  controllerHidSaveLearningProfile: (): Promise<ControllerHidStatus | null> =>
+    ipcRenderer.invoke('controllerHid:saveLearningProfile'),
+
+  controllerHidCancelLearning: (): Promise<ControllerHidStatus | null> =>
+    ipcRenderer.invoke('controllerHid:cancelLearning'),
+
+  controllerHidForgetProfile: (): Promise<ControllerHidStatus | null> =>
+    ipcRenderer.invoke('controllerHid:forgetProfile'),
+
+  onControllerHidEvent: (
+    handler: (event: ControllerHidRawEvent) => void,
+  ): (() => void) => {
+    const fn = (_: Electron.IpcRendererEvent, event: ControllerHidRawEvent) =>
+      handler(event)
+    ipcRenderer.on('controller-hid:event', fn)
+    return () => ipcRenderer.removeListener('controller-hid:event', fn)
   },
 
   getUpdateCheckSchedule: (): Promise<

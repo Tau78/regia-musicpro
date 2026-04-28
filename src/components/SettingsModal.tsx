@@ -51,6 +51,7 @@ import {
   writeOnAirOnAtStartup,
 } from '../lib/onAirStartupSettings.ts'
 import { useRegia } from '../state/RegiaContext.tsx'
+import SettingsControllerHidSection from './SettingsControllerHidSection.tsx'
 import SettingsCueSinkSection from './SettingsCueSinkSection.tsx'
 
 type UpdateCheckSchedulePref =
@@ -77,6 +78,7 @@ function basenamePath(p: string): string {
 type SettingsSectionId =
   | 'output'
   | 'audio'
+  | 'controller'
   | 'lan'
   | 'cloud'
   | 'playlist'
@@ -185,6 +187,7 @@ export default function SettingsModal({
   >(() => ({
     output: true,
     audio: true,
+    controller: true,
     lan: true,
     cloud: true,
     playlist: true,
@@ -843,6 +846,16 @@ export default function SettingsModal({
               onToggle={() => toggleSettingsSection('audio')}
             >
               <SettingsCueSinkSection />
+            </SettingsCollapsibleSection>
+
+            <SettingsCollapsibleSection
+              sectionId="controller"
+              titleId="settings-panel-controller-title"
+              title="Controller Bluetooth / HID"
+              expanded={settingsSectionOpen.controller}
+              onToggle={() => toggleSettingsSection('controller')}
+            >
+              <SettingsControllerHidSection />
             </SettingsCollapsibleSection>
 
             <SettingsCollapsibleSection

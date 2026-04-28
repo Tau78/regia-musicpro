@@ -19,6 +19,12 @@ import type {
 } from './lan/remoteTypes'
 import { getPrimaryLanIPv4 } from './lan/networkUtils'
 import * as regiaVideoCloud from './regiaVideoCloud'
+import {
+  ControllerHidService,
+  CONTROLLER_HID_LEARNING_STEPS,
+  type ControllerHidLearningStep,
+  type ControllerHidRawEvent,
+} from './controllerHidService'
 
 /* --- Playlist salvate; `dist-electron/package.json` con type commonjs (script post-build) evita ESM sui .js emessi da tsc --- */
 
@@ -799,6 +805,7 @@ function wireRegiaPlaylistFloaterHost(win: BrowserWindow): void {
 const OUTPUT_WINDOW_BASE_TITLE = 'Uscita — REGIA MUSICPRO'
 
 let lanHost: LanHost | null = null
+let controllerHidService: ControllerHidService | null = null
 
 let remotePlaybackSnapshot: RemotePlaybackSnapshotV1 = {
   v: 1,
@@ -1528,6 +1535,14 @@ function listLaunchpadKitPaths(subdir: string): string[] {
 }
 
 function setupIpc() {
+  controllerHidService = new ControllerHidService(
+    app.getPath('userData'),
+    (event: ControllerHidRawEvent) => {
+      if (!regiaWindow || regiaWindow.isDestroyed()) return
+      regiaWindow.webContents.send('controller-hid:event', event)
+    },
+  )
+
   ipcMain.handle('launchpad-base:kitPaths', () =>
     listLaunchpadKitPaths('launchpad-base'),
   )
@@ -2322,6 +2337,52 @@ function setupIpc() {
       'Se il telefono non si collega, controlla Firewall macOS: consenti connessioni in entrata per REGIA MUSICPRO.',
   }))
 
+  ipcMain.handle('controllerHid:listDevices', async () => {
+    return controllerHidService?.listDevices() ?? []
+  })
+
+  ipcMain.handle('controllerHid:status', async () => {
+    if (!controllerHidService) return null
+    return controllerHidService.getStatus()
+  })
+
+  ipcMain.handle('controllerHid:selectDevice', async (_e, deviceId: unknown) => {
+    if (!controllerHidService) return null
+    return controllerHidService.selectDevice(
+      typeof deviceId === 'string' ? deviceId : null,
+    )
+  })
+
+  ipcMain.handle('controllerHid:startLearning', async (_e, deviceId: unknown) => {
+    if (!controllerHidService) return null
+    return controllerHidService.startLearning(
+      typeof deviceId === 'string' ? deviceId : null,
+    )
+  })
+
+  ipcMain.handle('controllerHid:captureLearningStep', async (_e, step: unknown) => {
+    if (!controllerHidService) return null
+    if (!CONTROLLER_HID_LEARNING_STEPS.includes(step as ControllerHidLearningStep)) {
+      throw new Error('Step learning controller HID non valido.')
+    }
+    return controllerHidService.captureLearningStep(step as ControllerHidLearningStep)
+  })
+
+  ipcMain.handle('controllerHid:saveLearningProfile', async () => {
+    if (!controllerHidService) return null
+    return controllerHidService.saveLearningProfile()
+  })
+
+  ipcMain.handle('controllerHid:cancelLearning', () => {
+    if (!controllerHidService) return null
+    return controllerHidService.cancelLearning()
+  })
+
+  ipcMain.handle('controllerHid:forgetProfile', async () => {
+    if (!controllerHidService) return null
+    return controllerHidService.forgetProfile()
+  })
+
   ipcMain.handle('debug:getUpdateCheckSchedule', () => readUpdateCheckSchedule())
 
   ipcMain.handle('debug:setUpdateCheckSchedule', (_e, raw: unknown) => {
@@ -2648,6 +2709,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   clearUpdateCheckRepeatTimer()
+  controllerHidService?.shutdown()
+  controllerHidService = null
   void lanHost?.stop()
   lanHost = null
 })
