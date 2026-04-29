@@ -1,0 +1,96 @@
+# Build e pubblicazione su GitHub Release (Windows installer + artefatti macOS).
+# Trigger: push di un tag semver `v*` (stesso flusso: commit, tag, push da locale).
+
+name: Release (Windows + macOS)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  dist-win:
+    runs-on: windows-latest
+    permissions:
+      # electron-builder pubblica sulla Release il .exe + latest.yml (auto-update Windows).
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install, build installer, publish to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          ATTEMPTS=4
+          for attempt in 1 2 3 4; do
+            if npm run dist:win:publish; then
+              exit 0
+            fi
+            if [ "$attempt" -ge "$ATTEMPTS" ]; then
+              echo "dist:win:publish fallito dopo ${ATTEMPTS} tentativi." >&2
+              exit 1
+            fi
+            echo "Tentativo ${attempt} fallito (es. 504 su download). Attesa 90s e nuovo tentativo..."
+            sleep 90
+          done
+
+      - name: Upload Windows artifacts (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            release/*.exe
+            release/latest.yml
+          if-no-files-found: error
+
+  dist-mac:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install, build DMG/ZIP, publish to same GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # CI senza certificati Apple: evita ricerche lunghe in keychain (DMG non firmato).
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          ATTEMPTS=4
+          for attempt in 1 2 3 4; do
+            if npm run dist:mac:publish; then
+              exit 0
+            fi
+            if [ "$attempt" -ge "$ATTEMPTS" ]; then
+              echo "dist:mac:publish fallito dopo ${ATTEMPTS} tentativi." >&2
+              exit 1
+            fi
+            echo "Tentativo ${attempt} fallito (es. 504 su download). Attesa 90s e nuovo tentativo..."
+            sleep 90
+          done
+
+      - name: Upload macOS artifacts (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/latest-mac.yml
+          if-no-files-found: warn

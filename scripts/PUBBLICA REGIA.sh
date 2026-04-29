@@ -60,7 +60,7 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "→ Tag ${TAG} e push (avvia Build Windows su GitHub)..."
+echo "→ Tag ${TAG} e push (avvia CI Release Windows + macOS su GitHub)..."
 git tag -a "$TAG" -m "REGIA MUSICPRO ${VERSION}"
 git push origin "$TAG"
 

@@ -2,7 +2,7 @@
   "name": "regia-video",
   "description": "REGIA MUSICPRO — regia video / playlist",
   "private": true,
-  "version": "0.0.29",
+  "version": "0.0.30",
   "regiaProgramCreatedOn": "2026-04-18",
   "type": "module",
   "main": "dist-electron/main.cjs",
@@ -23,6 +23,7 @@
     "dist": "npm run build && electron-builder --publish never",
     "dist:win": "npm run build && electron-builder --win --x64 --publish never",
     "dist:win:publish": "npm run build && electron-builder --win --x64 --publish always",
+    "dist:mac:publish": "npm run build && electron-builder --mac --publish always",
     "release:win:github": "bash scripts/publish-win-github-release.sh",
     "git:commit": "bash scripts/git-commit.sh",
     "git:commit:release-win": "bash scripts/git-commit-and-win-build.sh"

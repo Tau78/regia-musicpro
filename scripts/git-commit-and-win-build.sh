@@ -2,7 +2,7 @@
 # 1) Se ci sono modifiche: stesso flusso di git-commit.sh. Se il working tree è pulito,
 #    salta il commit e crea solo il tag (utile quando il codice è già stato pushato).
 # 2) Crea il tag v<version> da package.json e fa push del branch + tag.
-#    Su GitHub parte il workflow che genera l'installer Windows (.exe).
+#    Su GitHub parte il workflow che pubblica installer Windows (.exe) e build macOS (.dmg/.zip) sulla stessa Release.
 #
 # Uso: ./scripts/git-commit-and-win-build.sh "messaggio del commit"
 #      npm run git:commit:release-win -- "messaggio del commit"
@@ -33,9 +33,9 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
   exit 1
 fi
 
-git tag -a "$TAG" -m "Release $TAG (build Windows CI)"
+git tag -a "$TAG" -m "Release $TAG (CI Windows + macOS)"
 git push
 git push origin "$TAG"
 
 echo "Push completato. Tag: $TAG"
-echo "Su GitHub: scheda Actions → workflow \"Build Windows\"; a fine job scarica l'artifact con l'.exe."
+echo "Su GitHub: Actions → workflow \"Release (Windows + macOS)\"; sulla Release del tag scarica .exe e .dmg (stesso link /assets)."
