@@ -2888,6 +2888,64 @@ button {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
 
+.settings-controller-hid-subtitle {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.settings-controller-hid-mapping,
+.settings-controller-hid-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.settings-controller-hid-map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.45rem;
+}
+
+.settings-controller-hid-map-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+}
+
+.settings-controller-hid-map-row span {
+  font-size: 0.82rem;
+  font-weight: 550;
+}
+
+.settings-controller-hid-diagnostics summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.settings-controller-hid-diagnostics ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.settings-controller-hid-diagnostics li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
 /** Contenitore comune per barra suggerimenti (stessi stili di `.preview-hint-bar`). */
 .regia-panel-hint-host {
   display: flex;

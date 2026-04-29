@@ -1,4 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  CONTROLLER_HID_ACTIONS,
+  CONTROLLER_HID_INPUT_LABELS,
+  CONTROLLER_HID_INPUTS,
+  readControllerHidActionMap,
+  writeControllerHidActionMap,
+  type ControllerHidAction,
+  type ControllerHidActionMap,
+  type ControllerHidInput,
+} from '../lib/controllerHidSettings.ts'
 
 type ControllerHidLearningStep =
   | 'jogRight'
@@ -50,6 +60,9 @@ export default function SettingsControllerHidSection() {
   const [devices, setDevices] = useState<ControllerHidDeviceInfo[]>([])
   const [status, setStatus] = useState<ControllerHidStatus | null>(null)
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
+  const [actionMap, setActionMap] = useState<ControllerHidActionMap>(() =>
+    readControllerHidActionMap(),
+  )
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
 
@@ -82,6 +95,17 @@ export default function SettingsControllerHidSection() {
       void refreshStatus()
     })
   }, [refreshStatus])
+
+  const onActionChange = useCallback(
+    (input: ControllerHidInput, action: ControllerHidAction) => {
+      setActionMap((prev) => {
+        const next = { ...prev, [input]: action }
+        writeControllerHidActionMap(next)
+        return next
+      })
+    },
+    [],
+  )
 
   const run = useCallback(
     async (fn: () => Promise<ControllerHidStatus | null>) => {
@@ -201,6 +225,12 @@ export default function SettingsControllerHidSection() {
         <span className="settings-modal-value-sep">·</span>
         Connessione: <strong>{status?.connected ? 'attiva' : 'non attiva'}</strong>
       </p>
+      {status?.captureMode ? (
+        <p className="settings-modal-hint">
+          Cattura input: <strong>{status.captureMode.label}</strong>.{' '}
+          {status.captureMode.detail}
+        </p>
+      ) : null}
 
       <div className="settings-debug-actions-row">
         <button
@@ -268,6 +298,34 @@ export default function SettingsControllerHidSection() {
         </div>
       ) : null}
 
+      <div className="settings-controller-hid-mapping">
+        <h5 className="settings-controller-hid-subtitle">Azioni Regia Video</h5>
+        <p className="settings-modal-hint">
+          Le azioni vengono eseguite solo quando il report arriva dal controller
+          appreso e corrisponde a uno degli input del learning.
+        </p>
+        <div className="settings-controller-hid-map-grid">
+          {CONTROLLER_HID_INPUTS.map((input) => (
+            <label key={input} className="settings-controller-hid-map-row">
+              <span>{CONTROLLER_HID_INPUT_LABELS[input]}</span>
+              <select
+                className="regia-output-sink-select settings-modal-cue-select"
+                value={actionMap[input]}
+                onChange={(e) =>
+                  onActionChange(input, e.target.value as ControllerHidAction)
+                }
+              >
+                {CONTROLLER_HID_ACTIONS.map((action) => (
+                  <option key={action.value} value={action.value}>
+                    {action.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+      </div>
+
       {lastEvent ? (
         <p className="settings-modal-value-line">
           Ultimo report: <code className="settings-modal-code">{lastEvent.rawHex}</code>
@@ -283,6 +341,23 @@ export default function SettingsControllerHidSection() {
       ) : (
         <p className="settings-modal-hint">Nessun report HID ricevuto in questa sessione.</p>
       )}
+
+      {status?.recentEvents.length ? (
+        <details className="settings-controller-hid-diagnostics">
+          <summary>Diagnostica report HID recenti</summary>
+          <ul>
+            {status.recentEvents.slice(0, 8).map((event) => (
+              <li key={`${event.ts}-${event.rawHex}`}>
+                <code>{event.rawHex}</code>
+                <span>
+                  {formatEventTime(event.ts)}
+                  {event.matchedStep ? ` · ${event.matchedStep}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
 
       {feedback ? (
         <p className="settings-debug-inline-msg is-err" role="status">

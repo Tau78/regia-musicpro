@@ -60,6 +60,11 @@ type ControllerHidStatus = {
   selectedDeviceId: string | null
   profile: ControllerHidProfile | null
   connected: boolean
+  captureMode: {
+    exclusive: boolean
+    label: string
+    detail: string
+  }
   learning: {
     active: boolean
     device: ControllerHidDeviceInfo | null

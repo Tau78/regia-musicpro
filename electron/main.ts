@@ -19,11 +19,10 @@ import type {
 } from './lan/remoteTypes'
 import { getPrimaryLanIPv4 } from './lan/networkUtils'
 import * as regiaVideoCloud from './regiaVideoCloud'
-import {
+import type {
+  ControllerHidLearningStep,
+  ControllerHidRawEvent,
   ControllerHidService,
-  CONTROLLER_HID_LEARNING_STEPS,
-  type ControllerHidLearningStep,
-  type ControllerHidRawEvent,
 } from './controllerHidService'
 
 /* --- Playlist salvate; `dist-electron/package.json` con type commonjs (script post-build) evita ESM sui .js emessi da tsc --- */
@@ -806,6 +805,16 @@ const OUTPUT_WINDOW_BASE_TITLE = 'Uscita — REGIA MUSICPRO'
 
 let lanHost: LanHost | null = null
 let controllerHidService: ControllerHidService | null = null
+let controllerHidLoadError: string | null = null
+
+const CONTROLLER_HID_LEARNING_STEPS: ControllerHidLearningStep[] = [
+  'jogRight',
+  'jogLeft',
+  'button1',
+  'button2',
+  'button3',
+  'button4',
+]
 
 let remotePlaybackSnapshot: RemotePlaybackSnapshotV1 = {
   v: 1,
@@ -1550,15 +1559,27 @@ function listLaunchpadKitPaths(subdir: string): string[] {
     .map((f) => path.join(dir, f))
 }
 
-function setupIpc() {
-  controllerHidService = new ControllerHidService(
-    app.getPath('userData'),
-    (event: ControllerHidRawEvent) => {
-      if (!regiaWindow || regiaWindow.isDestroyed()) return
-      regiaWindow.webContents.send('controller-hid:event', event)
-    },
-  )
+async function getControllerHidService(): Promise<ControllerHidService | null> {
+  if (controllerHidService) return controllerHidService
+  if (controllerHidLoadError) return null
+  try {
+    const mod = await import('./controllerHidService')
+    controllerHidService = new mod.ControllerHidService(
+      app.getPath('userData'),
+      (event: ControllerHidRawEvent) => {
+        if (!regiaWindow || regiaWindow.isDestroyed()) return
+        regiaWindow.webContents.send('controller-hid:event', event)
+      },
+    )
+    return controllerHidService
+  } catch (e) {
+    controllerHidLoadError = e instanceof Error ? e.message : String(e)
+    console.error('[controllerHid] service load failed', e)
+    return null
+  }
+}
 
+function setupIpc() {
   ipcMain.handle('launchpad-base:kitPaths', () =>
     listLaunchpadKitPaths('launchpad-base'),
   )
@@ -2354,49 +2375,57 @@ function setupIpc() {
   }))
 
   ipcMain.handle('controllerHid:listDevices', async () => {
-    return controllerHidService?.listDevices() ?? []
+    const svc = await getControllerHidService()
+    return svc?.listDevices() ?? []
   })
 
   ipcMain.handle('controllerHid:status', async () => {
-    if (!controllerHidService) return null
-    return controllerHidService.getStatus()
+    const svc = await getControllerHidService()
+    if (!svc) return null
+    return svc.getStatus()
   })
 
   ipcMain.handle('controllerHid:selectDevice', async (_e, deviceId: unknown) => {
-    if (!controllerHidService) return null
-    return controllerHidService.selectDevice(
+    const svc = await getControllerHidService()
+    if (!svc) return null
+    return svc.selectDevice(
       typeof deviceId === 'string' ? deviceId : null,
     )
   })
 
   ipcMain.handle('controllerHid:startLearning', async (_e, deviceId: unknown) => {
-    if (!controllerHidService) return null
-    return controllerHidService.startLearning(
+    const svc = await getControllerHidService()
+    if (!svc) return null
+    return svc.startLearning(
       typeof deviceId === 'string' ? deviceId : null,
     )
   })
 
   ipcMain.handle('controllerHid:captureLearningStep', async (_e, step: unknown) => {
-    if (!controllerHidService) return null
+    const svc = await getControllerHidService()
+    if (!svc) return null
     if (!CONTROLLER_HID_LEARNING_STEPS.includes(step as ControllerHidLearningStep)) {
       throw new Error('Step learning controller HID non valido.')
     }
-    return controllerHidService.captureLearningStep(step as ControllerHidLearningStep)
+    return svc.captureLearningStep(step as ControllerHidLearningStep)
   })
 
   ipcMain.handle('controllerHid:saveLearningProfile', async () => {
-    if (!controllerHidService) return null
-    return controllerHidService.saveLearningProfile()
+    const svc = await getControllerHidService()
+    if (!svc) return null
+    return svc.saveLearningProfile()
   })
 
-  ipcMain.handle('controllerHid:cancelLearning', () => {
-    if (!controllerHidService) return null
-    return controllerHidService.cancelLearning()
+  ipcMain.handle('controllerHid:cancelLearning', async () => {
+    const svc = await getControllerHidService()
+    if (!svc) return null
+    return svc.cancelLearning()
   })
 
   ipcMain.handle('controllerHid:forgetProfile', async () => {
-    if (!controllerHidService) return null
-    return controllerHidService.forgetProfile()
+    const svc = await getControllerHidService()
+    if (!svc) return null
+    return svc.forgetProfile()
   })
 
   ipcMain.handle('debug:getUpdateCheckSchedule', () => readUpdateCheckSchedule())

@@ -25,6 +25,7 @@ import {
 } from './lib/panelTooltipHintsSettings.ts'
 import { clampSidebarWidth } from './lib/sidebarLayout.ts'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.ts'
+import { useControllerHidActions } from './hooks/useControllerHidActions.ts'
 import { usePresenterKeyBindings } from './lib/presenterKeySettings.ts'
 import { formatRegiaProgramCreatedIt } from './lib/regiaAppBranding.ts'
 import { RegiaProvider, useRegia } from './state/RegiaContext.tsx'
@@ -53,8 +54,10 @@ function IconHeaderHints() {
 function RegiaShell() {
   const {
     togglePlay,
+    stopPlayback,
     goNext,
     goPrev,
+    toggleSecondScreen,
     floatingPlaylistOpen,
     floatingPlaylistSessions,
     playlistFloaterOsSessionIds,
@@ -178,6 +181,19 @@ function RegiaShell() {
     presenterNextCode: presenterKeys.nextCode,
     presenterPlayPauseCode: presenterKeys.playPauseCode,
   })
+
+  const controllerHidHandlers = useMemo(
+    () => ({
+      onTogglePlay: () => void togglePlay(),
+      onPrev: () => void goPrev(),
+      onNext: () => void goNext(),
+      onStop: () => void stopPlayback(),
+      onToggleSecondScreen: () => toggleSecondScreen(),
+    }),
+    [goNext, goPrev, stopPlayback, togglePlay, toggleSecondScreen],
+  )
+
+  useControllerHidActions(controllerHidHandlers)
 
   return (
     <div className="regia-app">

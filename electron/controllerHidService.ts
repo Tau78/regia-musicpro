@@ -58,6 +58,11 @@ export type ControllerHidStatus = {
   selectedDeviceId: string | null
   profile: ControllerHidProfile | null
   connected: boolean
+  captureMode: {
+    exclusive: boolean
+    label: string
+    detail: string
+  }
   learning: {
     active: boolean
     device: ControllerHidDeviceInfo | null
@@ -398,6 +403,12 @@ export class ControllerHidService {
       selectedDeviceId: this.selectedDeviceId,
       profile: this.profile,
       connected: Boolean(this.handle),
+      captureMode: {
+        exclusive: false,
+        label: 'lettura HID filtrata',
+        detail:
+          'node-hid legge il device appreso e filtra mouse/trackpad, ma non garantisce cattura esclusiva del puntatore di sistema.',
+      },
       learning: {
         active: this.learningActive,
         device: this.learningDevice,
