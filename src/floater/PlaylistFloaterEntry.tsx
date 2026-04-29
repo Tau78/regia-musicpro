@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import FloatingPlaylist from '../components/FloatingPlaylist.tsx'
 import { PlaylistFloaterMirrorContext } from '../state/RegiaContext.tsx'
 import {
@@ -18,19 +12,13 @@ export default function PlaylistFloaterEntry({
   sessionId: string
 }) {
   const [sync, setSync] = useState<PlaylistFloaterSyncPayload | null>(null)
-  const previewMediaTimesRef = useRef({ currentTime: 0, duration: 0 })
   const send = useCallback((method: string, args: unknown[]) => {
     window.electronAPI.playlistFloaterSendAction(method, args)
   }, [])
 
   const mirrorValue = useMemo(() => {
     if (!sync) return null
-    return buildPlaylistFloaterMirrorRegiaValue(
-      sync,
-      sessionId,
-      previewMediaTimesRef,
-      send,
-    )
+    return buildPlaylistFloaterMirrorRegiaValue(sync, sessionId, send)
   }, [sync, sessionId, send])
 
   useEffect(() => {
@@ -39,10 +27,6 @@ export default function PlaylistFloaterEntry({
     const off = api.onPlaylistFloaterState((payload) => {
       const p = payload as PlaylistFloaterSyncPayload
       setSync(p)
-      previewMediaTimesRef.current = {
-        currentTime: p.previewMediaTimes.currentTime,
-        duration: p.previewMediaTimes.duration,
-      }
     })
     /** Evita “Caricamento…” infinito: i broadcast dalla regia possono essere partiti prima che questo listener esistesse (StrictMode / load). */
     void api.playlistFloaterRequestState?.()

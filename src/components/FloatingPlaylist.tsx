@@ -967,6 +967,8 @@ function playlistEmptyDropCueClasses(
   return ''
 }
 
+const FALLBACK_FLOATING_PANEL_POS: PanelPos = { x: 24, y: 96 }
+
 export default function FloatingPlaylist({
   sessionId,
 }: {
@@ -1017,8 +1019,7 @@ export default function FloatingPlaylist({
     sottofondoLoadedTrack,
     sottofondoPlaying,
     stopSottofondoPlayback,
-    previewMediaTimesRef,
-    previewMediaTimesTick,
+    previewMediaTimes,
     playbackArmedNext,
     armPlayNext,
     clearPlaybackArmedNext,
@@ -1131,7 +1132,7 @@ export default function FloatingPlaylist({
     (!windowAlwaysOnTopPinned || isPlaylistOsFloaterWindow) &&
     !planciaDockRight
   const launchPadBankIndex = session?.launchPadBankIndex ?? 0
-  const pos = session?.pos ?? { x: 24, y: 96 }
+  const pos = session?.pos ?? FALLBACK_FLOATING_PANEL_POS
   const panelSize =
     session?.panelSize ?? DEFAULT_FLOATING_PANEL_SIZE
   const chalkboardFullscreen = session?.chalkboardFullscreen === true
@@ -1257,16 +1258,24 @@ export default function FloatingPlaylist({
   }, [isLaunchpad, sessionId])
 
   useEffect(() => {
-    setPanelHelpOpen(false)
+    queueMicrotask(() => {
+      setPanelHelpOpen(false)
+    })
   }, [isLaunchpad])
 
   useEffect(() => {
-    if (collapsed) setPanelHelpOpen(false)
+    if (collapsed) {
+      queueMicrotask(() => {
+        setPanelHelpOpen(false)
+      })
+    }
   }, [collapsed])
 
   useLayoutEffect(() => {
     if (!panelHelpOpen) {
-      setPanelHelpLayout(null)
+      queueMicrotask(() => {
+        setPanelHelpLayout(null)
+      })
       return
     }
     const run = () => {
@@ -2145,7 +2154,11 @@ export default function FloatingPlaylist({
   }, [launchPadCtx])
 
   useEffect(() => {
-    if (!isLaunchpad || collapsed) setPadKeyLearnSlot(null)
+    if (!isLaunchpad || collapsed) {
+      queueMicrotask(() => {
+        setPadKeyLearnSlot(null)
+      })
+    }
   }, [isLaunchpad, collapsed])
 
   useEffect(() => {
@@ -2756,7 +2769,11 @@ export default function FloatingPlaylist({
   }, [closePlayConfirmOpen])
 
   useEffect(() => {
-    if (!session) setClosePlayConfirmOpen(false)
+    if (!session) {
+      queueMicrotask(() => {
+        setClosePlayConfirmOpen(false)
+      })
+    }
   }, [session])
 
   useEffect(() => {
@@ -4340,7 +4357,6 @@ export default function FloatingPlaylist({
             </li>
           )}
           {paths.map((p, i) => {
-            void previewMediaTimesTick
             const name = p.split(/[/\\]/).pop() ?? p
             const durationLabel = formatPlaylistDurationLabel(
               trackDurations[p],
@@ -4353,10 +4369,12 @@ export default function FloatingPlaylist({
               : playbackLoadedTrack != null &&
                 playbackLoadedTrack.sessionId === sessionId &&
                 playbackLoadedTrack.index === i
-            const pv = previewMediaTimesRef.current
             const rowFrac =
-              isCurrentRow && pv.duration > 0
-                ? Math.min(1, pv.currentTime / pv.duration)
+              isCurrentRow && previewMediaTimes.duration > 0
+                ? Math.min(
+                    1,
+                    previewMediaTimes.currentTime / previewMediaTimes.duration,
+                  )
                 : 0
             return (
               <li

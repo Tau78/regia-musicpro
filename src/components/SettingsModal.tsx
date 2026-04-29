@@ -241,11 +241,13 @@ export default function SettingsModal({
 
   useEffect(() => {
     if (!open) return
-    setSnapEnabled(readPlanciaSnapEnabled())
-    setPanelTooltipHintsEnabled(readPanelTooltipHintsEnabled())
-    setOnAirOnAtStartup(readOnAirOnAtStartup())
-    setLaunchPadDefaultKeyMode(readLaunchPadDefaultKeyMode())
-    setLaunchPadCueEnabled(readLaunchPadCueEnabled())
+    queueMicrotask(() => {
+      setSnapEnabled(readPlanciaSnapEnabled())
+      setPanelTooltipHintsEnabled(readPanelTooltipHintsEnabled())
+      setOnAirOnAtStartup(readOnAirOnAtStartup())
+      setLaunchPadDefaultKeyMode(readLaunchPadDefaultKeyMode())
+      setLaunchPadCueEnabled(readLaunchPadCueEnabled())
+    })
     void (async () => {
       try {
         const cap = await window.electronAPI?.getOutputIdleCap?.()
@@ -309,13 +311,15 @@ export default function SettingsModal({
 
   useEffect(() => {
     if (!open) return
-    setSafeModeEnabled(readRegiaSafeMode())
-    setFloatingFloaterExperimental(readRegiaFloatingFloaterExperimental())
+    queueMicrotask(() => {
+      setSafeModeEnabled(readRegiaSafeMode())
+      setFloatingFloaterExperimental(readRegiaFloatingFloaterExperimental())
+    })
   }, [open])
 
   useEffect(() => {
     if (!open) return
-    setStillDraft(String(stillImageDurationSec))
+    queueMicrotask(() => setStillDraft(String(stillImageDurationSec)))
   }, [open, stillImageDurationSec])
 
   const onStillSave = useCallback(() => {
@@ -564,8 +568,10 @@ export default function SettingsModal({
 
   useEffect(() => {
     if (!open) return
-    setCloudReadinessText(null)
-    void refreshCloudStatus()
+    queueMicrotask(() => {
+      setCloudReadinessText(null)
+      void refreshCloudStatus()
+    })
   }, [open, refreshCloudStatus])
 
   useEffect(() => {

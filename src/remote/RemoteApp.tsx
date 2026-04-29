@@ -401,19 +401,25 @@ export function RemoteApp() {
   }, [lists, tab])
 
   useEffect(() => {
-    setSelectedId((cur) => {
-      if (cur && optionsForTab.some((o) => o.id === cur)) return cur
-      return optionsForTab[0]?.id ?? null
+    queueMicrotask(() => {
+      setSelectedId((cur) => {
+        if (cur && optionsForTab.some((o) => o.id === cur)) return cur
+        return optionsForTab[0]?.id ?? null
+      })
     })
   }, [optionsForTab])
 
   useEffect(() => {
     if (!token || !selectedId) {
-      setDetail(null)
+      queueMicrotask(() => {
+        setDetail(null)
+      })
       return
     }
     let cancelled = false
-    setPageErr(null)
+    queueMicrotask(() => {
+      setPageErr(null)
+    })
     void (async () => {
       try {
         const r = await api(

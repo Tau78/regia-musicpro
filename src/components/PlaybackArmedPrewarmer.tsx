@@ -22,7 +22,7 @@ export default function PlaybackArmedPrewarmer() {
 
   useEffect(() => {
     if (!absPath) {
-      setUrl(null)
+      queueMicrotask(() => setUrl(null))
       return
     }
     let cancelled = false

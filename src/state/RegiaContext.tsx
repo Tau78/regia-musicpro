@@ -420,6 +420,8 @@ export type RegiaContextValue = {
   outputTrackLoopMode: LoopMode
   /** Aggiornamento throttled durante la riproduzione anteprima video. */
   previewMediaTimesTick: number
+  /** Snapshot throttled (stesso ritmo di `previewMediaTimesTick`) per il render senza leggere ref. */
+  previewMediaTimes: { currentTime: number; duration: number }
   previewMediaTimesRef: MutableRefObject<{
     currentTime: number
     duration: number
@@ -1271,6 +1273,9 @@ function floatingPlaylistSessionDirty(
 
 const MAX_UNDO = 50
 
+/** Riuso stabile per `paths` quando non c’è sessione attiva (evita `[]` nuovo a ogni render). */
+const EMPTY_PLAYLIST_PATHS: string[] = []
+
 type RegiaHistorySnapshot = {
   floatingSessions: FloatingPlaylistSession[]
   activeFloatingSessionId: string
@@ -1408,9 +1413,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const previewMediaTimesRef = useRef({ currentTime: 0, duration: 0 })
   const previewMediaTimesLastBumpRef = useRef(0)
   const [previewMediaTimesTick, setPreviewMediaTimesTick] = useState(0)
+  const [previewMediaTimes, setPreviewMediaTimes] = useState({
+    currentTime: 0,
+    duration: 0,
+  })
   const reportPreviewMediaTimes = useCallback(
     (currentTime: number, duration: number) => {
-      previewMediaTimesRef.current = {
+      const snapshot = {
         currentTime: Number.isFinite(currentTime)
           ? Math.max(0, currentTime)
           : 0,
@@ -1421,9 +1430,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
             ? duration
             : 0,
       }
+      previewMediaTimesRef.current = snapshot
       const now = performance.now()
       if (now - previewMediaTimesLastBumpRef.current >= 88) {
         previewMediaTimesLastBumpRef.current = now
+        setPreviewMediaTimes(snapshot)
         setPreviewMediaTimesTick((x) => x + 1)
       }
     },
@@ -1574,7 +1585,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   const undoStackRef = useRef<RegiaHistorySnapshot[]>([])
   const redoStackRef = useRef<RegiaHistorySnapshot[]>([])
   const isApplyingHistoryRef = useRef(false)
-  const [historyRev, setHistoryRev] = useState(0)
+  const [historyStackDepths, setHistoryStackDepths] = useState({
+    undo: 0,
+    redo: 0,
+  })
 
   const resolvedActiveId =
     floatingSessions.some((s) => s.id === activeFloatingSessionId)
@@ -1593,55 +1607,63 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   }, [resolvedPlaybackId])
 
   useEffect(() => {
-    setActiveFloatingSessionId((cur) =>
-      cur && floatingSessions.some((s) => s.id === cur)
-        ? cur
-        : (floatingSessions[0]?.id ?? ''),
-    )
+    queueMicrotask(() => {
+      setActiveFloatingSessionId((cur) =>
+        cur && floatingSessions.some((s) => s.id === cur)
+          ? cur
+          : (floatingSessions[0]?.id ?? ''),
+      )
+    })
   }, [floatingSessions])
 
   useLayoutEffect(() => {
-    setFloatingZOrder((prev) => {
-      const allowed = new Set<string>()
-      for (const s of floatingSessions) allowed.add(s.id)
-      if (previewDisplayMode === 'floating')
-        allowed.add(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
-      const kept = prev.filter((k) => allowed.has(k))
-      const out = [...kept]
-      for (const s of floatingSessions) {
-        if (!out.includes(s.id)) out.push(s.id)
-      }
-      if (
-        previewDisplayMode === 'floating' &&
-        !out.includes(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
-      ) {
-        out.push(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
-      }
-      return out
+    queueMicrotask(() => {
+      setFloatingZOrder((prev) => {
+        const allowed = new Set<string>()
+        for (const s of floatingSessions) allowed.add(s.id)
+        if (previewDisplayMode === 'floating')
+          allowed.add(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
+        const kept = prev.filter((k) => allowed.has(k))
+        const out = [...kept]
+        for (const s of floatingSessions) {
+          if (!out.includes(s.id)) out.push(s.id)
+        }
+        if (
+          previewDisplayMode === 'floating' &&
+          !out.includes(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
+        ) {
+          out.push(REGIA_FLOATING_PREVIEW_ZORDER_KEY)
+        }
+        return out
+      })
     })
   }, [floatingSessions, previewDisplayMode])
 
   useEffect(() => {
-    setPlaybackSessionId((cur) =>
-      cur && floatingSessions.some((s) => s.id === cur)
-        ? cur
-        : (floatingSessions[0]?.id ?? null),
-    )
+    queueMicrotask(() => {
+      setPlaybackSessionId((cur) =>
+        cur && floatingSessions.some((s) => s.id === cur)
+          ? cur
+          : (floatingSessions[0]?.id ?? null),
+      )
+    })
   }, [floatingSessions])
 
   useEffect(() => {
-    setVideoOutputSessionId((cur) => {
-      if (
-        cur &&
-        floatingSessions.some(
-          (s) => s.id === cur && isTracksPlaylistMode(s.playlistMode),
+    queueMicrotask(() => {
+      setVideoOutputSessionId((cur) => {
+        if (
+          cur &&
+          floatingSessions.some(
+            (s) => s.id === cur && isTracksPlaylistMode(s.playlistMode),
+          )
         )
-      )
-        return cur
-      return initialVideoOutputSessionId(
-        floatingSessions,
-        playbackSessionId,
-      )
+          return cur
+        return initialVideoOutputSessionId(
+          floatingSessions,
+          playbackSessionId,
+        )
+      })
     })
   }, [floatingSessions, playbackSessionId])
 
@@ -1720,7 +1742,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   }, [floatingSessions, videoOutputSession])
 
   /** Elenco della sessione attiva (sidebar «Salva», ecc.). */
-  const paths = activeSession?.paths ?? []
+  const paths = activeSession?.paths ?? EMPTY_PLAYLIST_PATHS
   const currentIndex = activeSession?.currentIndex ?? 0
   const playlistTitle = activeSession?.playlistTitle ?? ''
   const playlistCrossfadeSec: PlaylistCrossfadeSec =
@@ -1762,17 +1784,19 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   )
 
   useEffect(() => {
-    setPlaybackArmedNext((a) => {
-      if (!a) return a
-      const sess = floatingSessions.find((s) => s.id === a.sessionId)
-      if (
-        !sess ||
-        sess.playlistMode === 'launchpad' ||
-        sess.playlistMode === 'chalkboard'
-      )
-        return null
-      if (a.index < 0 || a.index >= sess.paths.length) return null
-      return a
+    queueMicrotask(() => {
+      setPlaybackArmedNext((a) => {
+        if (!a) return a
+        const sess = floatingSessions.find((s) => s.id === a.sessionId)
+        if (
+          !sess ||
+          sess.playlistMode === 'launchpad' ||
+          sess.playlistMode === 'chalkboard'
+        )
+          return null
+        if (a.index < 0 || a.index >= sess.paths.length) return null
+        return a
+      })
     })
   }, [floatingSessions])
 
@@ -2033,7 +2057,10 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const bumpHistory = useCallback(() => {
-    setHistoryRev((n) => n + 1)
+    setHistoryStackDepths({
+      undo: undoStackRef.current.length,
+      redo: redoStackRef.current.length,
+    })
   }, [])
 
   const recordUndoPoint = useCallback(() => {
@@ -5713,14 +5740,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     setSecondScreenOn((v) => !v)
   }, [])
 
-  const canUndo = useMemo(
-    () => undoStackRef.current.length > 0,
-    [historyRev],
-  )
-  const canRedo = useMemo(
-    () => redoStackRef.current.length > 0,
-    [historyRev],
-  )
+  const canUndo = historyStackDepths.undo > 0
+  const canRedo = historyStackDepths.redo > 0
 
   useEffect(() => {
     if (!window.electronAPI?.onRemoteDispatch) return
@@ -6084,7 +6105,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         secondScreenOn,
         previewSrc,
         previewSyncKey,
-        previewMediaTimes: { ...previewMediaTimesRef.current },
+        previewMediaTimes: { ...previewMediaTimes },
       },
       routing: {
         activeFloatingSessionId: resolvedActiveId,
@@ -6143,7 +6164,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     activeNamedWorkspaceLabel,
     savedPlaylists,
     floatingSessions,
-    previewMediaTimesTick,
+    previewMediaTimes,
   ])
 
   const exportBugReportSnapshot = useCallback((): RegiaBugReportSnapshotV1 => {
@@ -6265,6 +6286,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setPlaylistLoopMode,
       outputTrackLoopMode,
       previewMediaTimesTick,
+      previewMediaTimes,
       previewMediaTimesRef,
       reportPreviewMediaTimes,
       stillImageDurationSec,
@@ -6392,6 +6414,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setPlaylistLoopMode,
       outputTrackLoopMode,
       previewMediaTimesTick,
+      previewMediaTimes,
       previewMediaTimesRef,
       reportPreviewMediaTimes,
       stillImageDurationSec,
@@ -6458,8 +6481,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
 
 export function useRegia(): RegiaContextValue {
   const mirror = useContext(PlaylistFloaterMirrorContext)
-  if (mirror) return mirror
   const v = useContext(RegiaContext)
+  if (mirror) return mirror
   if (!v) throw new Error('useRegia must be used within RegiaProvider')
   return v
 }

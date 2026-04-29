@@ -24,7 +24,9 @@ export default function SettingsCueSinkSection() {
   }, [])
 
   useEffect(() => {
-    void refreshDevices()
+    queueMicrotask(() => {
+      void refreshDevices()
+    })
     const md = navigator.mediaDevices
     md?.addEventListener?.('devicechange', refreshDevices)
     return () => md?.removeEventListener?.('devicechange', refreshDevices)

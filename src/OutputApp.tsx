@@ -42,6 +42,31 @@ function preloadImage(src: string): Promise<void> {
   })
 }
 
+function waitVideoElementLoaded(
+  el: HTMLVideoElement,
+  shouldAbort: () => boolean,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      el.removeEventListener('loadeddata', onData)
+      el.removeEventListener('error', onErr)
+      resolve()
+    }
+    const onData = () => done()
+    const onErr = () => done()
+    if (shouldAbort()) {
+      resolve()
+      return
+    }
+    if (el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      resolve()
+      return
+    }
+    el.addEventListener('loadeddata', onData)
+    el.addEventListener('error', onErr)
+  })
+}
+
 type MediaSnap = {
   front: Slot
   video: [string | null, string | null]
@@ -272,31 +297,6 @@ export default function OutputApp() {
     [clearTransitionTimer, pauseBoth],
   )
 
-  const waitVideoElement = useCallback(
-    (el: HTMLVideoElement, gen: number): Promise<void> => {
-      return new Promise((resolve) => {
-        const done = () => {
-          el.removeEventListener('loadeddata', onData)
-          el.removeEventListener('error', onErr)
-          resolve()
-        }
-        const onData = () => done()
-        const onErr = () => done()
-        if (gen !== loadGenRef.current) {
-          resolve()
-          return
-        }
-        if (el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-          resolve()
-          return
-        }
-        el.addEventListener('loadeddata', onData)
-        el.addEventListener('error', onErr)
-      })
-    },
-    [],
-  )
-
   const runLoadTask = useCallback(
     async (src: string, crossfadeMsForThisLoad: number) => {
       clearStillAdvanceTimer()
@@ -374,12 +374,18 @@ export default function OutputApp() {
           applyInstantLoad(src)
           return
         }
-        await waitVideoElement(elIn, myGen)
+        await waitVideoElementLoaded(
+          elIn,
+          () => myGen !== loadGenRef.current,
+        )
         if (myGen !== loadGenRef.current) return
+        /* Uscita program: mute/loop/volume/sink sono API imperative su <video> (non «stato React»). */
+        /* eslint-disable react-hooks/immutability -- DOM video element from ref */
         elIn.muted = mutedRef.current
         elIn.loop = loopRef.current
         elIn.volume = volumeRef.current
         applySinkToVideo(elIn)
+        /* eslint-enable react-hooks/immutability */
         try {
           await elIn.play()
         } catch {
@@ -454,7 +460,6 @@ export default function OutputApp() {
       clearStillAdvanceTimer,
       clearTransitionTimer,
       pauseBoth,
-      waitVideoElement,
     ],
   )
 
@@ -854,7 +859,9 @@ export default function OutputApp() {
    * Ripetiamo il pull e usiamo localStorage come fallback se l’invoke fallisce (preload vecchio).
    */
   useEffect(() => {
-    pullIdleCapFromMain()
+    queueMicrotask(() => {
+      pullIdleCapFromMain()
+    })
     const t1 = window.setTimeout(pullIdleCapFromMain, 100)
     const t2 = window.setTimeout(pullIdleCapFromMain, 450)
     const t3 = window.setTimeout(pullIdleCapFromMain, 1200)
@@ -866,7 +873,9 @@ export default function OutputApp() {
   }, [pullIdleCapFromMain])
 
   useEffect(() => {
-    pullProgramLogoFromMain()
+    queueMicrotask(() => {
+      pullProgramLogoFromMain()
+    })
     const t1 = window.setTimeout(pullProgramLogoFromMain, 100)
     const t2 = window.setTimeout(pullProgramLogoFromMain, 450)
     const t3 = window.setTimeout(pullProgramLogoFromMain, 1200)
@@ -879,12 +888,12 @@ export default function OutputApp() {
 
   useEffect(() => {
     if (idleCap.mode !== 'image' || !idleCap.imagePath) {
-      setIdleCapImageUrl(null)
+      queueMicrotask(() => setIdleCapImageUrl(null))
       return
     }
     const api = window.electronAPI
     if (!api?.toFileUrl) {
-      setIdleCapImageUrl(null)
+      queueMicrotask(() => setIdleCapImageUrl(null))
       return
     }
     let cancelled = false

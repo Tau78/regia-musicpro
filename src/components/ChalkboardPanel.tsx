@@ -251,6 +251,7 @@ function ChalkboardPlacedImagesOverlay({
     ptrStart: { x: number; y: number }
     orig: ChalkboardPlacedImage
   } | null>(null)
+  const pointerUpEndRef = useRef<(() => void) | null>(null)
 
   const clientToBitmap = useCallback((clientX: number, clientY: number) => {
     const el = wrapRef.current
@@ -286,8 +287,12 @@ function ChalkboardPlacedImagesOverlay({
     const had = dragRef.current != null
     dragRef.current = null
     document.removeEventListener('pointermove', onDocPointerMove)
-    document.removeEventListener('pointerup', endDrag)
-    document.removeEventListener('pointercancel', endDrag)
+    const up = pointerUpEndRef.current
+    if (up) {
+      document.removeEventListener('pointerup', up)
+      document.removeEventListener('pointercancel', up)
+      pointerUpEndRef.current = null
+    }
     if (had) onDragEndPersist()
   }, [onDocPointerMove, onDragEndPersist])
 
@@ -308,9 +313,13 @@ function ChalkboardPlacedImagesOverlay({
         ptrStart,
         orig: { ...im },
       }
+      const onPointerEnd = () => {
+        endDrag()
+      }
+      pointerUpEndRef.current = onPointerEnd
       document.addEventListener('pointermove', onDocPointerMove)
-      document.addEventListener('pointerup', endDrag)
-      document.addEventListener('pointercancel', endDrag)
+      document.addEventListener('pointerup', onPointerEnd)
+      document.addEventListener('pointercancel', onPointerEnd)
       ;(ev.target as HTMLElement).setPointerCapture?.(ev.pointerId)
     },
     [clientToBitmap, endDrag, onDocPointerMove, recordUndoPoint],
@@ -319,8 +328,11 @@ function ChalkboardPlacedImagesOverlay({
   useEffect(() => {
     return () => {
       document.removeEventListener('pointermove', onDocPointerMove)
-      document.removeEventListener('pointerup', endDrag)
-      document.removeEventListener('pointercancel', endDrag)
+      const up = pointerUpEndRef.current
+      if (up) {
+        document.removeEventListener('pointerup', up)
+        document.removeEventListener('pointercancel', up)
+      }
     }
   }, [endDrag, onDocPointerMove])
 
@@ -565,8 +577,10 @@ export default function ChalkboardPanel({
 
   useEffect(() => {
     if (tool !== 'text') {
-      setTextDraft(null)
-      setTextDraftValue('')
+      queueMicrotask(() => {
+        setTextDraft(null)
+        setTextDraftValue('')
+      })
     }
   }, [tool])
 

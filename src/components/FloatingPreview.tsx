@@ -104,7 +104,9 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
   const [isResizing, setIsResizing] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
   const layoutRef = useRef({ pos: DEFAULT_LAYOUT.pos, size: DEFAULT_LAYOUT.size })
-  layoutRef.current = { pos, size: panelSize }
+  useLayoutEffect(() => {
+    layoutRef.current = { pos, size: panelSize }
+  }, [pos, panelSize])
 
   const drag = useRef<{
     active: boolean
@@ -130,8 +132,10 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
       MIN_H,
       clampOptsWithDock,
     )
-    setPos(np)
-    setPanelSize(ns)
+    queueMicrotask(() => {
+      setPos(np)
+      setPanelSize(ns)
+    })
   }, [clampOptsWithDock, rightPlanciaDockWidthPx])
 
   useEffect(() => {

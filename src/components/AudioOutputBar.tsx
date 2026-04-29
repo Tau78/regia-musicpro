@@ -73,7 +73,9 @@ export default function AudioOutputBar({ variant = 'stack' }: Props) {
   }, [])
 
   useEffect(() => {
-    void refreshDevices()
+    queueMicrotask(() => {
+      void refreshDevices()
+    })
     const md = navigator.mediaDevices
     md?.addEventListener?.('devicechange', refreshDevices)
     return () => md?.removeEventListener?.('devicechange', refreshDevices)

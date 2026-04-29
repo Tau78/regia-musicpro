@@ -52,10 +52,12 @@ export function PresenterKeyWizardDialog({
 
   useEffect(() => {
     if (!open) {
-      setLearnRole(null)
+      queueMicrotask(() => setLearnRole(null))
       return
     }
-    refreshBindings()
+    queueMicrotask(() => {
+      refreshBindings()
+    })
     const onChanged = () => refreshBindings()
     window.addEventListener(PRESENTER_KEYS_CHANGED_EVENT, onChanged)
     window.addEventListener('storage', onChanged)

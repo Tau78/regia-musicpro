@@ -187,7 +187,9 @@ export default function SidebarFloatingOpenPanels() {
   )
 
   useEffect(() => {
-    setCardOrder((prev) => mergeFloatingSidebarOrder(prev, activeIds))
+    queueMicrotask(() => {
+      setCardOrder((prev) => mergeFloatingSidebarOrder(prev, activeIds))
+    })
   }, [activeKey, activeIds])
 
   const sessionById = useMemo(() => {

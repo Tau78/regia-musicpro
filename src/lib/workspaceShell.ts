@@ -231,7 +231,7 @@ function parsePreviewDisplayModeFromShell(
 ): PreviewDisplayMode {
   const m = s.previewDisplayMode
   if (m === 'docked' || m === 'floating' || m === 'hidden') return m
-  if (Boolean(s.previewDetached)) return 'floating'
+  if (s.previewDetached) return 'floating'
   return 'docked'
 }
 

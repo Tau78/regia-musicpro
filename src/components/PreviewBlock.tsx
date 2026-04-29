@@ -46,8 +46,7 @@ export default function PreviewBlock({
     outputTrackLoopMode,
     reportPreviewMediaTimes,
     stillImageDurationSec,
-    previewMediaTimesTick,
-    previewMediaTimesRef,
+    previewMediaTimes,
     programWatermarkAbsPath,
   } = useRegia()
 
@@ -63,12 +62,12 @@ export default function PreviewBlock({
 
   useEffect(() => {
     if (!programWatermarkAbsPath) {
-      setWatermarkUrl(null)
+      queueMicrotask(() => setWatermarkUrl(null))
       return
     }
     const api = window.electronAPI
     if (!api?.toFileUrl) {
-      setWatermarkUrl(null)
+      queueMicrotask(() => setWatermarkUrl(null))
       return
     }
     let cancelled = false
@@ -160,7 +159,9 @@ export default function PreviewBlock({
   ])
 
   useEffect(() => {
-    setVideoStalled(false)
+    queueMicrotask(() => {
+      setVideoStalled(false)
+    })
     if (stillPreview || !previewSrc || !videoPlaying) return
     const el = previewRef.current
     if (!el) return
@@ -208,9 +209,8 @@ export default function PreviewBlock({
       ? 'preview-video preview-video--cover'
       : 'preview-video'
 
-  void previewMediaTimesTick
-  const tCur = previewMediaTimesRef.current.currentTime
-  const tDur = previewMediaTimesRef.current.duration
+  const tCur = previewMediaTimes.currentTime
+  const tDur = previewMediaTimes.duration
   const endTimeWarn =
     Boolean(previewSrc) &&
     videoPlaying &&

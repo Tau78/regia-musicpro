@@ -62,7 +62,7 @@ function NextThumb({
 
   useEffect(() => {
     if (!path) {
-      setUrl(null)
+      queueMicrotask(() => setUrl(null))
       return
     }
     let cancelled = false
@@ -200,8 +200,7 @@ export default function NextQueueRail() {
     playbackControlSession,
     playbackLoadedTrack,
     outputTrackLoopMode,
-    previewMediaTimesTick,
-    previewMediaTimesRef,
+    previewMediaTimes,
     videoPlaying,
     stillImageDurationSec,
     selectItem,
@@ -210,9 +209,6 @@ export default function NextQueueRail() {
     floatingPlaylistSessions,
     playbackArmedNext,
   } = useRegia()
-
-  void previewMediaTimesTick
-  const tRef = previewMediaTimesRef.current
 
   /** In modalità launchpad il «prossimo» è la cella selezionata, non l’elemento lineare in lista. */
   const launchpadArmMode =
@@ -284,8 +280,8 @@ export default function NextQueueRail() {
         return 'Loop brano: nessun avanzamento in coda'
       }
       if (nextPath) {
-        const d = tRef.duration
-        const c = tRef.currentTime
+        const d = previewMediaTimes.duration
+        const c = previewMediaTimes.currentTime
         if (!Number.isFinite(d) || d <= 0) return 'Durata in corso…'
         const remaining = Math.max(0, d - c)
         const tail = playlistCrossfadeTailSec(
@@ -332,7 +328,7 @@ export default function NextQueueRail() {
     }
   }, [
     focusFloatingPanel,
-    launchCell?.samplePath,
+    launchCell,
     launchSess,
     launchSlot,
     effectiveNextIdx,

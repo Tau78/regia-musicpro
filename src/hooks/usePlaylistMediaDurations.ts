@@ -26,56 +26,60 @@ export function usePlaylistMediaDurations(
     const list = JSON.parse(fp) as string[]
     let needList: string[] = []
 
-    setMap((prev) => {
-      const next: Record<string, PlaylistDurationCell> = {}
-      for (const p of list) {
-        const o = prev[p]
-        if (typeof o === 'number' || o === null) next[p] = o
-        else next[p] = 'pending'
-      }
-      needList = list.filter((p) => next[p] === 'pending')
-      return next
-    })
-
-    const runOne = async (absPath: string) => {
+    void (async () => {
+      await Promise.resolve()
       if (cancelled) return
-      if (isStillImagePath(absPath)) {
-        if (!cancelled) setMap((prev) => ({ ...prev, [absPath]: null }))
-        return
-      }
-      try {
-        const url = await window.electronAPI.toFileUrl(absPath)
+      setMap((prev) => {
+        const next: Record<string, PlaylistDurationCell> = {}
+        for (const p of list) {
+          const o = prev[p]
+          if (typeof o === 'number' || o === null) next[p] = o
+          else next[p] = 'pending'
+        }
+        needList = list.filter((p) => next[p] === 'pending')
+        return next
+      })
+
+      const runOne = async (absPath: string) => {
         if (cancelled) return
-        const raw = await probeVideoDurationSec(url)
+        if (isStillImagePath(absPath)) {
+          if (!cancelled) setMap((prev) => ({ ...prev, [absPath]: null }))
+          return
+        }
+        try {
+          const url = await window.electronAPI.toFileUrl(absPath)
+          if (cancelled) return
+          const raw = await probeVideoDurationSec(url)
+          if (cancelled) return
+          const ok =
+            Number.isFinite(raw) && raw > 0 && raw !== Number.POSITIVE_INFINITY
+          if (!cancelled) setMap((prev) => ({ ...prev, [absPath]: ok ? raw : null }))
+        } catch {
+          if (!cancelled) setMap((prev) => ({ ...prev, [absPath]: null }))
+        } finally {
+          probing.current.delete(absPath)
+        }
+      }
+
+      const queue = needList.filter((p) => !probing.current.has(p))
+      let active = 0
+
+      const pump = () => {
         if (cancelled) return
-        const ok =
-          Number.isFinite(raw) && raw > 0 && raw !== Number.POSITIVE_INFINITY
-        if (!cancelled) setMap((prev) => ({ ...prev, [absPath]: ok ? raw : null }))
-      } catch {
-        if (!cancelled) setMap((prev) => ({ ...prev, [absPath]: null }))
-      } finally {
-        probing.current.delete(absPath)
+        while (active < MAX_CONCURRENT && queue.length > 0) {
+          const p = queue.shift()!
+          if (probing.current.has(p)) continue
+          probing.current.add(p)
+          active++
+          void runOne(p).finally(() => {
+            active--
+            pump()
+          })
+        }
       }
-    }
 
-    const queue = needList.filter((p) => !probing.current.has(p))
-    let active = 0
-
-    const pump = () => {
-      if (cancelled) return
-      while (active < MAX_CONCURRENT && queue.length > 0) {
-        const p = queue.shift()!
-        if (probing.current.has(p)) continue
-        probing.current.add(p)
-        active++
-        void runOne(p).finally(() => {
-          active--
-          pump()
-        })
-      }
-    }
-
-    pump()
+      pump()
+    })()
 
     return () => {
       cancelled = true

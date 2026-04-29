@@ -67,10 +67,7 @@ export function buildPlaylistFloaterSyncPayload(
     canUndo: v.canUndo,
     canRedo: v.canRedo,
     previewMediaTimesTick: v.previewMediaTimesTick,
-    previewMediaTimes: {
-      currentTime: v.previewMediaTimesRef.current.currentTime,
-      duration: v.previewMediaTimesRef.current.duration,
-    },
+    previewMediaTimes: { ...v.previewMediaTimes },
     savedPlaylistDirtyForFloater: v.savedPlaylistDirty(floaterSessionId),
     floatingCloseWouldInterruptForFloater:
       v.floatingCloseWouldInterruptPlay(floaterSessionId),
@@ -108,12 +105,12 @@ const noop = () => {}
 export function buildPlaylistFloaterMirrorRegiaValue(
   sync: PlaylistFloaterSyncPayload,
   floaterSessionId: string,
-  previewMediaTimesRef: MutableRefObject<{
-    currentTime: number
-    duration: number
-  }>,
   send: (method: string, args: unknown[]) => void,
 ): RegiaContextValue {
+  const previewMediaTimesRef: MutableRefObject<{
+    currentTime: number
+    duration: number
+  }> = { current: { ...sync.previewMediaTimes } }
   const call =
     (method: string) =>
     (...args: unknown[]) => {
@@ -253,6 +250,7 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     ) as RegiaContextValue['setPlaylistLoopMode'],
     outputTrackLoopMode: sync.outputTrackLoopMode,
     previewMediaTimesTick: sync.previewMediaTimesTick,
+    previewMediaTimes: sync.previewMediaTimes,
     previewMediaTimesRef,
     reportPreviewMediaTimes: noop as RegiaContextValue['reportPreviewMediaTimes'],
     stillImageDurationSec: sync.stillImageDurationSec,
@@ -400,7 +398,7 @@ export function buildPlaylistFloaterMirrorRegiaValue(
           secondScreenOn: sync.secondScreenOn,
           previewSrc: sync.previewSrc,
           previewSyncKey: sync.previewSyncKey,
-          previewMediaTimes: { ...previewMediaTimesRef.current },
+          previewMediaTimes: { ...sync.previewMediaTimes },
         },
         routing: {
           activeFloatingSessionId: sync.activeFloatingSessionId,

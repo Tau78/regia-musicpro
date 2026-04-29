@@ -47,7 +47,9 @@ export default function RegiaVideoCloudDrawer() {
   }, [])
 
   useEffect(() => {
-    void refresh()
+    queueMicrotask(() => {
+      void refresh()
+    })
   }, [refresh])
 
   const onRowActivate = useCallback(

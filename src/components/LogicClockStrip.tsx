@@ -220,7 +220,9 @@ export default function LogicClockStrip() {
 
   useEffect(() => {
     if (!open) return
-    clampPanelToViewport()
+    queueMicrotask(() => {
+      clampPanelToViewport()
+    })
   }, [open, clampPanelToViewport])
 
   useEffect(() => {
