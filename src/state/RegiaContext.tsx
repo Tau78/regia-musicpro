@@ -110,7 +110,9 @@ import {
   CHALKBOARD_DEFAULT_BG,
   CHALKBOARD_PANEL_SIZE,
   createChalkboardFloatingSession,
+  createGobboFloatingSession,
   createSottofondoFloatingSession,
+  GOBBO_PANEL_SIZE,
   normalizeChalkboardBackgroundHex,
   createEmptyFloatingSession,
   createLaunchPadFloatingSession,
@@ -127,6 +129,14 @@ import {
   normalizePlanciaDockMode,
   type PlanciaDockMode,
 } from './floatingPlaylistSession.ts'
+import {
+  defaultPlaylistItemsFromPaths,
+  effectivePlaylistRows,
+  normalizePlaylistTrackItemsFromUnknown,
+  syncPathsFromPlaylistItems,
+  trackListLength,
+  type PlaylistTrackItem,
+} from '../lib/playlistTrackItems.ts'
 
 function sessionHasSavedEditLink(
   s: FloatingPlaylistSession,
@@ -455,6 +465,8 @@ export type RegiaContextValue = {
   addFloatingLaunchPad: (kit?: 'base' | 'sfx') => Promise<void>
   /** Nuova lavagna (4 banchi PNG, risoluzione uscita). */
   addFloatingChalkboard: () => Promise<void>
+  /** Gobbo teleprompter: una sola sessione (singleton); focus se già aperta. */
+  ensureGobboSingleton: () => void
   /** Sottofondo: playlist a elenco con play/stop indipendente dal trasporto globale. */
   addFloatingSottofondo: () => void
   removeFloatingPlaylist: (id: string) => Promise<void>
@@ -1299,6 +1311,24 @@ function initialVideoOutputSessionId(
   return first?.id ?? null
 }
 
+function migrateFloatingSessionsPlaylistItems(
+  sessions: FloatingPlaylistSession[],
+): FloatingPlaylistSession[] {
+  return sessions.map((s) => {
+    if (!isTracksPlaylistMode(s.playlistMode)) return s
+    const rows = effectivePlaylistRows(s)
+    return {
+      ...s,
+      playlistItems: rows.map((it) =>
+        it.kind === 'macro'
+          ? { ...it, action: { ...it.action } }
+          : { ...it },
+      ),
+      paths: syncPathsFromPlaylistItems(rows),
+    }
+  })
+}
+
 function deepCloneFloatingSessions(
   sessions: FloatingPlaylistSession[],
 ): FloatingPlaylistSession[] {
@@ -1352,6 +1382,23 @@ function deepCloneFloatingSessions(
         : undefined,
     playlistWatermarkPngPath: s.playlistWatermarkPngPath ?? '',
     savedEditWatermarkBaseline: s.savedEditWatermarkBaseline ?? '',
+    playlistItems: s.playlistItems?.map((it) =>
+      it.kind === 'macro'
+        ? { ...it, action: { ...it.action } }
+        : { ...it },
+    ),
+    gobboBody: s.gobboBody,
+    gobboFontFamily: s.gobboFontFamily,
+    gobboFontSizePx: s.gobboFontSizePx,
+    gobboTextColor: s.gobboTextColor,
+    gobboLineHeight: s.gobboLineHeight,
+    gobboPaddingPx: s.gobboPaddingPx,
+    gobboBackgroundAbsPath: s.gobboBackgroundAbsPath,
+    gobboMirror: s.gobboMirror,
+    gobboScrollOffsetPx: s.gobboScrollOffsetPx,
+    gobboAutoScrollEnabled: s.gobboAutoScrollEnabled,
+    gobboAutoScrollSpeed: s.gobboAutoScrollSpeed,
+    gobboActiveDocId: s.gobboActiveDocId,
   }))
 }
 
@@ -1366,7 +1413,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
 
   const [floatingSessions, setFloatingSessions] = useState<
     FloatingPlaylistSession[]
-  >(() => deepCloneFloatingSessions(bootstrap.floating.sessions))
+  >(() =>
+    migrateFloatingSessionsPlaylistItems(
+      deepCloneFloatingSessions(bootstrap.floating.sessions),
+    ),
+  )
   const [activeFloatingSessionId, setActiveFloatingSessionId] = useState(
     () => bootstrap.floating.activeFloatingSessionId,
   )
@@ -1791,19 +1842,21 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         if (
           !sess ||
           sess.playlistMode === 'launchpad' ||
-          sess.playlistMode === 'chalkboard'
+          sess.playlistMode === 'chalkboard' ||
+          sess.playlistMode === 'gobbo'
         )
           return null
-        if (a.index < 0 || a.index >= sess.paths.length) return null
+        if (a.index < 0 || a.index >= trackListLength(sess)) return null
         return a
       })
     })
   }, [floatingSessions])
 
-  const pathsRef = useRef(paths)
+  const trackRowsRef = useRef<PlaylistTrackItem[]>([])
   const currentIndexRef = useRef(currentIndex)
   const loopModeRef = useRef(loopMode)
   const loadedIndexRef = useRef<number | null>(null)
+  const playlistMacroDepthRef = useRef(0)
   const secondScreenOnRef = useRef(secondScreenOn)
   const secondScreenToggleSyncSkipFirstRef = useRef(false)
   const prevSecondScreenOnForSyncRef = useRef(secondScreenOn)
@@ -1826,7 +1879,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     playbackArmedNextRef.current = playbackArmedNext
   }, [playbackArmedNext])
 
-  /** Sessione la cui playlist comanda pathsRef / goNext (stesso criterio di `outputTrackListSession`). */
+  /** Sessione la cui playlist comanda trackRowsRef / goNext (stesso criterio di `outputTrackListSession`). */
   const outputTrackListSessionIdRef = useRef<string | null>(null)
 
   useLayoutEffect(() => {
@@ -1842,7 +1895,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           ? playbackSession
           : null
     outputTrackListSessionIdRef.current = pathSource?.id ?? null
-    pathsRef.current = pathSource?.paths ?? []
+    trackRowsRef.current = pathSource ? effectivePlaylistRows(pathSource) : []
     currentIndexRef.current = pathSource?.currentIndex ?? 0
     loopModeRef.current =
       pathSource?.playlistLoopMode !== undefined
@@ -2644,6 +2697,26 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       return [...prev, s]
     })
   }, [recordUndoPoint])
+
+  const ensureGobboSingleton = useCallback(() => {
+    recordUndoPoint()
+    setFloatingSessions((prev) => {
+      const existing = prev.find((x) => x.playlistMode === 'gobbo')
+      if (existing) {
+        const id = existing.id
+        queueMicrotask(() => {
+          setActiveFloatingSessionId(id)
+          bringFloatingPanelToFront(id)
+        })
+        return prev
+      }
+      const k = prev.filter((s) => s.planciaDock !== 'right').length
+      const pos = computeNewFloatingPanelPos(GOBBO_PANEL_SIZE, k, prev)
+      const s = createGobboFloatingSession(pos)
+      setActiveFloatingSessionId(s.id)
+      return [...prev, s]
+    })
+  }, [recordUndoPoint, bringFloatingPanelToFront])
 
   const addFloatingSottofondo = useCallback(() => {
     recordUndoPoint()
@@ -3970,15 +4043,96 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const sess = floatingSessionsRef.current.find((x) => x.id === sid)
       if (
         sess?.playlistMode === 'launchpad' ||
-        sess?.playlistMode === 'chalkboard'
+        sess?.playlistMode === 'chalkboard' ||
+        sess?.playlistMode === 'gobbo'
       )
         return
       if (sess?.playlistMode === 'sottofondo') {
         await sottofondoLoadIndexAndPlay(index, sid)
         return
       }
-      const list = sess?.paths ?? []
-      if (list.length === 0 || index < 0 || index >= list.length) return
+      const rows =
+        sess && isTracksPlaylistMode(sess.playlistMode)
+          ? effectivePlaylistRows(sess)
+          : []
+      if (rows.length === 0 || index < 0 || index >= rows.length) return
+      const item = rows[index]
+      if (!item) return
+
+      if (item.kind === 'stop') {
+        const playlistMuted = Boolean(sess?.playlistOutputMuted)
+        const panelVol =
+          typeof sess?.playlistOutputVolume === 'number' &&
+          Number.isFinite(sess.playlistOutputVolume)
+            ? Math.min(1, Math.max(0, sess.playlistOutputVolume))
+            : 1
+        patchFloatingSession(sid, { currentIndex: index })
+        setPlaybackSessionId(sid)
+        setActiveFloatingSessionId(sid)
+        await send({ type: 'pause' })
+        await send({ type: 'setMuted', muted: muted || playlistMuted })
+        await send({
+          type: 'setVolume',
+          volume: outputVolumeRef.current * panelVol,
+        })
+        setVideoPlaying(false)
+        loadedIndexRef.current = index
+        setPlaybackLoadedTrack({ sessionId: sid, index })
+        setPlaybackArmedNext(null)
+        return
+      }
+
+      if (item.kind === 'macro') {
+        const action = item.action
+        if (action.type !== 'loadSavedPlaylistAndPlay') return
+        if (playlistMacroDepthRef.current >= 8) return
+        playlistMacroDepthRef.current++
+        try {
+          const data = await window.electronAPI.playlistsLoad(
+            action.savedPlaylistId,
+          )
+          if (!data || data.playlistMode !== 'tracks') return
+          const rawPi = (
+            data as {
+              playlistItems?: unknown
+            }
+          ).playlistItems
+          const parsed =
+            rawPi !== undefined
+              ? normalizePlaylistTrackItemsFromUnknown(rawPi)
+              : undefined
+          const nextRows =
+            parsed ?? defaultPlaylistItemsFromPaths(data.paths)
+          const loadedCf = normalizePlaylistCrossfadeSec(
+            (data as { crossfadeSec?: unknown }).crossfadeSec,
+            (data as { crossfade?: unknown }).crossfade,
+          )
+          const loadedLoop =
+            parsePersistedPlaylistLoopMode(data.loopMode) ?? 'off'
+          patchFloatingSession(sid, {
+            paths: syncPathsFromPlaylistItems(nextRows),
+            playlistItems: nextRows.map((it) =>
+              it.kind === 'macro'
+                ? { ...it, action: { ...it.action } }
+                : { ...it },
+            ),
+            playlistCrossfadeSec: loadedCf,
+            playlistLoopMode: loadedLoop,
+            editingSavedPlaylistId: action.savedPlaylistId,
+            currentIndex: 0,
+            savedEditPathsBaseline: syncPathsFromPlaylistItems(nextRows),
+            savedEditTitleBaseline: data.label.trim(),
+            savedEditCrossfadeSecBaseline: loadedCf,
+            savedEditPlaylistLoopBaseline: loadedLoop,
+          })
+          await loadIndexAndPlayRef.current(0, sid)
+        } finally {
+          playlistMacroDepthRef.current--
+        }
+        return
+      }
+
+      const p = item.path
       const playlistMuted = Boolean(sess?.playlistOutputMuted)
       const panelVol =
         typeof sess?.playlistOutputVolume === 'number' &&
@@ -3988,7 +4142,6 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       patchFloatingSession(sid, { currentIndex: index })
       setPlaybackSessionId(sid)
       setActiveFloatingSessionId(sid)
-      const p = list[index]
       const url = await window.electronAPI.toFileUrl(p)
       setVideoOutputSessionId(sid)
       setPreviewSrc(url)
@@ -4010,15 +4163,18 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         volume: outputVolumeRef.current * panelVol,
       })
       await send({ type: 'setSinkId', sinkId: outputSinkIdRef.current })
-      /* Sempre play: finestra uscita può essere nascosta ma deve restare il motore
-       * audio (anteprima muta); Schermo 2 controlla solo la visibilità. */
       await send({ type: 'play' })
       loadedIndexRef.current = index
       setPlaybackLoadedTrack({ sessionId: sid, index })
       setVideoPlaying(true)
       setPlaybackArmedNext(null)
     },
-    [muted, send, patchFloatingSession, sottofondoLoadIndexAndPlay],
+    [
+      muted,
+      send,
+      patchFloatingSession,
+      sottofondoLoadIndexAndPlay,
+    ],
   )
 
   const sottofondoLoadIndexAndPlayRef = useRef(sottofondoLoadIndexAndPlay)
@@ -4102,10 +4258,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       !sess ||
       sess.playlistMode === 'launchpad' ||
       sess.playlistMode === 'chalkboard' ||
-      sess.playlistMode === 'sottofondo'
+      sess.playlistMode === 'sottofondo' ||
+      sess.playlistMode === 'gobbo'
     )
       return
-    if (index < 0 || index >= sess.paths.length) return
+    if (index < 0 || index >= trackListLength(sess)) return
     setPlaybackArmedNext({ sessionId, index })
   }, [])
 
@@ -4676,11 +4833,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       setVideoPlaying(false)
       return
     }
-    const list = pathsRef.current
+    const list = trackRowsRef.current
     if (list.length > 0) {
       const idx = currentIndexRef.current
-      const p = list[idx]
-      if (!p) return
+      const row = list[idx]
+      if (!row || row.kind !== 'media') return
       if (loadedIndexRef.current === idx) {
         const vid = videoOutputSessionIdRef.current
         const playSess = vid
@@ -4747,7 +4904,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   ])
 
   const goNext = useCallback(async () => {
-    const list = pathsRef.current
+    const list = trackRowsRef.current
     const outSid = outputTrackListSessionIdRef.current
     const armed = playbackArmedNextRef.current
     if (
@@ -4783,7 +4940,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const goPrev = useCallback(async () => {
-    const list = pathsRef.current
+    const list = trackRowsRef.current
     if (list.length === 0) {
       const pb = resolvedPlaybackIdRef.current
       const sess =
@@ -4814,7 +4971,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
   }, [send])
 
   const handleEnded = useCallback(() => {
-    const len = pathsRef.current.length
+    const len = trackRowsRef.current.length
     if (len === 0) return
     const outSid = outputTrackListSessionIdRef.current
     const armed = playbackArmedNextRef.current
@@ -5034,14 +5191,15 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       const picked = rawPaths.filter(isMediaFilePath)
       if (!picked.length) return
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
-      if (!s0 || s0.playlistMode === 'launchpad') return
+      if (!s0 || !isTracksPlaylistMode(s0.playlistMode)) return
       if (s0.panelLocked === true) return
       recordUndoPoint()
-      const prev = s0.paths
+      const prevRows = effectivePlaylistRows(s0)
+      const prevPaths = s0.paths
       const insertAt =
         insertBeforeIndex != null && Number.isFinite(insertBeforeIndex)
-          ? Math.max(0, Math.min(prev.length, Math.floor(insertBeforeIndex)))
-          : prev.length
+          ? Math.max(0, Math.min(prevRows.length, Math.floor(insertBeforeIndex)))
+          : prevRows.length
 
       const playbackSid = videoOutputSessionIdRef.current
       const li = loadedIndexRef.current
@@ -5049,27 +5207,45 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         playbackSid === sessionId &&
         li != null &&
         li >= 0 &&
-        li < prev.length
-          ? prev[li]!
+        li < prevRows.length &&
+        prevRows[li]?.kind === 'media'
+          ? prevRows[li]!.path
           : null
 
-      const seen = new Set(prev)
-      const next = [...prev]
+      const seen = new Set(prevPaths)
+      const nextRows = [...prevRows]
       let idx = insertAt
       for (const f of picked) {
         if (seen.has(f)) continue
         seen.add(f)
-        next.splice(idx, 0, f)
+        nextRows.splice(idx, 0, {
+          kind: 'media',
+          path: f,
+          id: `tr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+        })
         idx++
       }
+      const nextPaths = syncPathsFromPlaylistItems(nextRows)
 
-      const selectedPath = prev[s0.currentIndex]
-      const ni = next.findIndex((p) => p === selectedPath)
+      const selectedPath =
+        (() => {
+          const cur = prevRows[s0.currentIndex]
+          return cur?.kind === 'media' ? cur.path : null
+        })()
+      const ni = selectedPath
+        ? nextRows.findIndex(
+            (r) => r.kind === 'media' && r.path === selectedPath,
+          )
+        : -1
       const nextCi =
-        ni >= 0 ? ni : Math.min(s0.currentIndex, Math.max(0, next.length - 1))
+        ni >= 0
+          ? ni
+          : Math.min(s0.currentIndex, Math.max(0, nextRows.length - 1))
 
       if (playbackSid === sessionId && loadedPath != null) {
-        const newLi = next.findIndex((p) => p === loadedPath)
+        const newLi = nextRows.findIndex(
+          (r) => r.kind === 'media' && r.path === loadedPath,
+        )
         if (newLi >= 0) {
           loadedIndexRef.current = newLi
           setPlaybackLoadedTrack({ sessionId: playbackSid, index: newLi })
@@ -5077,12 +5253,13 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       }
 
       let titleFromFirstFolder: string | null = null
-      if (prev.length === 0 && next.length > 0)
-        titleFromFirstFolder = folderBasenameFromPaths(next)
+      if (prevPaths.length === 0 && nextPaths.length > 0)
+        titleFromFirstFolder = folderBasenameFromPaths(nextPaths)
 
       patchFloatingSession(sessionId, {
         ...CLEAR_PLAYLIST_WATCH_FOLDER,
-        paths: next,
+        playlistItems: nextRows,
+        paths: nextPaths,
         currentIndex: nextCi,
         ...(titleFromFirstFolder
           ? { playlistTitle: titleFromFirstFolder }
@@ -5132,25 +5309,36 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     async (index: number, sessionId: string) => {
       const playbackSid = videoOutputSessionIdRef.current
       const s = floatingSessionsRef.current.find((x) => x.id === sessionId)
-      if (!s || s.playlistMode === 'launchpad' || s.playlistMode === 'chalkboard')
+      if (
+        !s ||
+        s.playlistMode === 'launchpad' ||
+        s.playlistMode === 'chalkboard' ||
+        s.playlistMode === 'gobbo'
+      )
         return
       if (s.panelLocked === true) return
-      const prev = s.paths
-      if (index < 0 || index >= prev.length) return
+      if (!isTracksPlaylistMode(s.playlistMode)) return
+      const prevRows = effectivePlaylistRows(s)
+      if (index < 0 || index >= prevRows.length) return
       recordUndoPoint()
 
       const affectsPlayback = sessionId === playbackSid
       const li = loadedIndexRef.current
-      const loadedPath =
-        affectsPlayback && li != null && li >= 0 && li < prev.length
-          ? prev[li]
+      const loadedRow =
+        affectsPlayback && li != null && li >= 0 && li < prevRows.length
+          ? prevRows[li]
           : null
 
-      const next = [...prev.slice(0, index), ...prev.slice(index + 1)]
+      const nextRows = [
+        ...prevRows.slice(0, index),
+        ...prevRows.slice(index + 1),
+      ]
+      const nextPaths = syncPathsFromPlaylistItems(nextRows)
 
-      if (next.length === 0) {
+      if (nextRows.length === 0) {
         patchFloatingSession(sessionId, {
           ...CLEAR_PLAYLIST_WATCH_FOLDER,
+          playlistItems: [],
           paths: [],
           currentIndex: 0,
         })
@@ -5167,11 +5355,11 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
 
       let nextCi = s.currentIndex
       if (index < nextCi) nextCi = nextCi - 1
-      else if (index === nextCi) nextCi = Math.min(index, next.length - 1)
+      else if (index === nextCi) nextCi = Math.min(index, nextRows.length - 1)
 
       if (affectsPlayback) {
         const newLi =
-          loadedPath != null ? next.findIndex((p) => p === loadedPath) : -1
+          loadedRow != null ? nextRows.findIndex((r) => r === loadedRow) : -1
         if (newLi < 0) {
           loadedIndexRef.current = null
           setPlaybackLoadedTrack(null)
@@ -5187,7 +5375,8 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
 
       patchFloatingSession(sessionId, {
         ...CLEAR_PLAYLIST_WATCH_FOLDER,
-        paths: next,
+        playlistItems: nextRows,
+        paths: nextPaths,
         currentIndex: Math.max(0, nextCi),
       })
     },
@@ -5203,7 +5392,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
           patchFloatingSession(sessionId, { currentIndex: index })
         return
       }
-      if (index >= 0 && index < s.paths.length)
+      if (index >= 0 && index < trackListLength(s))
         patchFloatingSession(sessionId, { currentIndex: index })
     },
     [patchFloatingSession],
@@ -5218,9 +5407,15 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     ) => {
       if (fromIndex === toIndex) return
       const s0 = floatingSessionsRef.current.find((x) => x.id === sessionId)
-      if (s0?.panelLocked === true) return
-      if (s0?.playlistMode === 'launchpad') return
-      const prev0 = s0?.paths ?? []
+      if (!s0 || s0.panelLocked === true) return
+      if (
+        !isTracksPlaylistMode(s0.playlistMode) ||
+        s0.playlistMode === 'launchpad' ||
+        s0.playlistMode === 'chalkboard' ||
+        s0.playlistMode === 'gobbo'
+      )
+        return
+      const prev0 = effectivePlaylistRows(s0)
       if (
         fromIndex < 0 ||
         fromIndex >= prev0.length ||
@@ -5231,39 +5426,44 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       if (!options?.skipUndo) recordUndoPoint()
       const playbackSid = videoOutputSessionIdRef.current
       patchFloatingSession(sessionId, (s) => {
-        const prev = s.paths
         if (
-          fromIndex < 0 ||
-          fromIndex >= prev.length ||
-          toIndex < 0 ||
-          toIndex >= prev.length
+          !isTracksPlaylistMode(s.playlistMode) ||
+          s.playlistMode === 'launchpad'
         )
           return s
-        const selectedPath = prev[s.currentIndex]
+        const prevRows = effectivePlaylistRows(s)
+        if (
+          fromIndex < 0 ||
+          fromIndex >= prevRows.length ||
+          toIndex < 0 ||
+          toIndex >= prevRows.length
+        )
+          return s
+        const selectedRow = prevRows[s.currentIndex]
         const affectsPlayback = sessionId === playbackSid
         const li = loadedIndexRef.current
-        const loadedPath =
-          affectsPlayback && li != null && li >= 0 && li < prev.length
-            ? prev[li]
+        const loadedRow =
+          affectsPlayback && li != null && li >= 0 && li < prevRows.length
+            ? prevRows[li]
             : null
-        const next = [...prev]
-        const [item] = next.splice(fromIndex, 1)
-        next.splice(toIndex, 0, item)
+        const nextRows = [...prevRows]
+        const [item] = nextRows.splice(fromIndex, 1)
+        nextRows.splice(toIndex, 0, item)
         let newCi = s.currentIndex
-        const ni = next.findIndex((p) => p === selectedPath)
+        const ni = nextRows.indexOf(selectedRow)
         if (ni >= 0) newCi = ni
         const nli =
-          affectsPlayback && loadedPath != null
-            ? next.findIndex((p) => p === loadedPath)
-            : -1
+          loadedRow != null ? nextRows.indexOf(loadedRow) : -1
         if (affectsPlayback && nli >= 0) {
           loadedIndexRef.current = nli
           setPlaybackLoadedTrack({ sessionId: playbackSid, index: nli })
         }
+        const nextPaths = syncPathsFromPlaylistItems(nextRows)
         return {
           ...s,
           ...CLEAR_PLAYLIST_WATCH_FOLDER,
-          paths: next,
+          playlistItems: nextRows,
+          paths: nextPaths,
           currentIndex: newCi,
         }
       })
@@ -6240,6 +6440,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       addFloatingPlaylist,
       addFloatingLaunchPad,
       addFloatingChalkboard,
+      ensureGobboSingleton,
       addFloatingSottofondo,
       removeFloatingPlaylist,
       floatingCloseWouldInterruptPlay,
@@ -6368,6 +6569,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
       addFloatingPlaylist,
       addFloatingLaunchPad,
       addFloatingChalkboard,
+      ensureGobboSingleton,
       addFloatingSottofondo,
       removeFloatingPlaylist,
       floatingCloseWouldInterruptPlay,
@@ -6562,6 +6764,7 @@ const FLOATER_ACTION_ALLOWLIST = new Set([
   'addFloatingPlaylist',
   'addFloatingLaunchPad',
   'addFloatingChalkboard',
+  'ensureGobboSingleton',
   'addFloatingSottofondo',
   'stopSottofondoPlayback',
   'patchFloatingPlaylistSession',

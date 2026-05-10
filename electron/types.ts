@@ -27,6 +27,13 @@ export type PlaybackCommand =
       imagePath?: string | null
     }
   | { type: 'setOutputProgramLogoVisible'; visible: boolean }
+  /** Titoli PGM (JSON serializzato; validato nel main). */
+  | {
+      type: 'titlesLayer'
+      visible: boolean
+      doc?: Record<string, unknown>
+      bust?: number
+    }
   | { type: 'sottofondoLoad'; src: string; loop?: boolean; crossfadeMs?: number }
   | { type: 'sottofondoPlay' }
   | { type: 'sottofondoPause' }

@@ -282,6 +282,9 @@ export function buildPlaylistFloaterMirrorRegiaValue(
     addFloatingChalkboard: call(
       'addFloatingChalkboard',
     ) as RegiaContextValue['addFloatingChalkboard'],
+    ensureGobboSingleton: call(
+      'ensureGobboSingleton',
+    ) as RegiaContextValue['ensureGobboSingleton'],
     addFloatingSottofondo: call(
       'addFloatingSottofondo',
     ) as RegiaContextValue['addFloatingSottofondo'],

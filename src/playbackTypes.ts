@@ -1,3 +1,5 @@
+import type { RegiaTitleDocumentV1 } from './lib/regiaTitleDocument.ts'
+
 export type PlaybackCommand =
   | {
       type: 'load'
@@ -53,6 +55,13 @@ export type PlaybackCommand =
     }
   /** Logo marchio in alto a sinistra sulla finestra Schermo 2. */
   | { type: 'setOutputProgramLogoVisible'; visible: boolean }
+  /** Titoli PGM (payload tipizzato lato renderer; IPC verso Output serializza doc). */
+  | {
+      type: 'titlesLayer'
+      visible: boolean
+      doc?: RegiaTitleDocumentV1
+      bust?: number
+    }
   /**
    * Canale audio «sottofondo» separato dal video program: stesso device di uscita,
    * mix indipendente da play/pausa del programma.

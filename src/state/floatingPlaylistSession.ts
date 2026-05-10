@@ -1,5 +1,6 @@
 import { readLaunchPadDefaultKeyMode } from '../lib/launchPadSettings.ts'
 import type { PlaylistCrossfadeSec } from '../lib/playlistCrossfade.ts'
+import type { PlaylistTrackItem } from '../lib/playlistTrackItems.ts'
 
 export type FloatingPlaylistPos = { x: number; y: number }
 
@@ -26,7 +27,12 @@ export const LAUNCHPAD_BANK_COUNT = 4 as const
 /** Dopo questa durata su pad o tasto assegnato parte il CUE (solo fino al rilascio). */
 export const LAUNCHPAD_CUE_HOLD_MS = 380
 
-export type PlaylistMode = 'tracks' | 'sottofondo' | 'launchpad' | 'chalkboard'
+export type PlaylistMode =
+  | 'tracks'
+  | 'sottofondo'
+  | 'launchpad'
+  | 'chalkboard'
+  | 'gobbo'
 
 /** Stesso conteggio delle pagine Launchpad (4 banchi lavagna). */
 export const CHALKBOARD_BANK_COUNT = LAUNCHPAD_BANK_COUNT
@@ -158,13 +164,19 @@ export function chalkboardPlacementsEqual(
  * Esclude sottofondo, launchpad e lavagna.
  */
 export function isTracksPlaylistMode(m?: PlaylistMode): boolean {
-  if (m === 'launchpad' || m === 'chalkboard' || m === 'sottofondo') return false
+  if (
+    m === 'launchpad' ||
+    m === 'chalkboard' ||
+    m === 'sottofondo' ||
+    m === 'gobbo'
+  )
+    return false
   return true
 }
 
-/** Pannello con elenco file (playlist classica, sottofondo, …), non griglia o lavagna. */
+/** Pannello con elenco file (playlist classica, sottofondo, …), non griglia o lavagna o Gobbo. */
 export function isListPlaylistWithPaths(m?: PlaylistMode): boolean {
-  return m !== 'launchpad' && m !== 'chalkboard'
+  return m !== 'launchpad' && m !== 'chalkboard' && m !== 'gobbo'
 }
 
 /** Comportamento del tasto assegnato (solo tastiera). */
@@ -274,6 +286,8 @@ export type FloatingPlaylistSession = {
   /** Indice banco 0…`LAUNCHPAD_BANK_COUNT`-1. */
   launchPadBankIndex?: number
   paths: string[]
+  /** Righe playlist (media / stop / macro); assente = solo `paths` legacy. */
+  playlistItems?: PlaylistTrackItem[]
   currentIndex: number
   playlistTitle: string
   /** Dissolvenza tra brani: 0 = off, 3 o 6 secondi. */
@@ -339,6 +353,22 @@ export type FloatingPlaylistSession = {
    * Si azzera se modifichi l’elenco a mano (aggiungi, rimuovi, riordina, …).
    */
   playlistWatchFolder?: string
+
+  /** --- Gobbo (teleprompter), solo se `playlistMode === 'gobbo'` --- */
+  gobboBody?: string
+  gobboFontFamily?: string
+  gobboFontSizePx?: number
+  gobboTextColor?: string
+  gobboLineHeight?: number
+  gobboPaddingPx?: number
+  /** Path assoluto immagine sfondo (copia in userData se da doc salvato). */
+  gobboBackgroundAbsPath?: string | null
+  gobboMirror?: boolean
+  gobboScrollOffsetPx?: number
+  gobboAutoScrollEnabled?: boolean
+  gobboAutoScrollSpeed?: '1x' | '2x' | '4x' | '8x'
+  /** Cartella `gobbo-docs/<id>` se il testo è legato a un salvataggio su disco. */
+  gobboActiveDocId?: string | null
 }
 
 function newSessionId(): string {
@@ -386,6 +416,11 @@ export const CHALKBOARD_PANEL_SIZE: FloatingPlaylistPanelSize = {
   height: 520,
 }
 
+export const GOBBO_PANEL_SIZE: FloatingPlaylistPanelSize = {
+  width: 440,
+  height: 480,
+}
+
 export function createSottofondoFloatingSession(
   pos?: FloatingPlaylistPos,
 ): FloatingPlaylistSession {
@@ -394,6 +429,35 @@ export function createSottofondoFloatingSession(
     ...base,
     playlistMode: 'sottofondo',
     playlistTitle: 'Sottofondo',
+  }
+}
+
+export function createGobboFloatingSession(
+  pos?: FloatingPlaylistPos,
+): FloatingPlaylistSession {
+  const base = createEmptyFloatingSession(pos)
+  return {
+    ...base,
+    playlistMode: 'gobbo',
+    paths: [],
+    playlistItems: undefined,
+    currentIndex: 0,
+    playlistTitle: 'Gobbo',
+    panelSize: { ...GOBBO_PANEL_SIZE },
+    gobboBody: '',
+    gobboFontFamily:
+      'system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial',
+    gobboFontSizePx: 28,
+    gobboTextColor: '#f8fafc',
+    gobboLineHeight: 1.45,
+    gobboPaddingPx: 48,
+    gobboBackgroundAbsPath: null,
+    gobboMirror: false,
+    gobboScrollOffsetPx: 0,
+    gobboAutoScrollEnabled: false,
+    gobboAutoScrollSpeed: '1x',
+    gobboActiveDocId: null,
+    playlistCrossfadeSec: 0,
   }
 }
 
@@ -521,6 +585,19 @@ export function cloneFloatingSession(
       s.savedEditChalkboardBackgroundBaseline !== undefined
         ? normalizeChalkboardBackgroundHex(s.savedEditChalkboardBackgroundBaseline)
         : undefined,
+    playlistItems: s.playlistItems?.map((it) => ({ ...it })),
+    gobboBody: s.gobboBody,
+    gobboFontFamily: s.gobboFontFamily,
+    gobboFontSizePx: s.gobboFontSizePx,
+    gobboTextColor: s.gobboTextColor,
+    gobboLineHeight: s.gobboLineHeight,
+    gobboPaddingPx: s.gobboPaddingPx,
+    gobboBackgroundAbsPath: s.gobboBackgroundAbsPath,
+    gobboMirror: s.gobboMirror,
+    gobboScrollOffsetPx: s.gobboScrollOffsetPx,
+    gobboAutoScrollEnabled: s.gobboAutoScrollEnabled,
+    gobboAutoScrollSpeed: s.gobboAutoScrollSpeed,
+    gobboActiveDocId: s.gobboActiveDocId,
   }
 }
 

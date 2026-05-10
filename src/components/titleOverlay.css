@@ -1,0 +1,76 @@
+.title-overlay-root {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 26;
+}
+
+.title-overlay-anchor--lower {
+  align-items: flex-end;
+  padding: clamp(12px, 4vmin, 48px);
+}
+
+.title-overlay-anchor--center {
+  align-items: center;
+  padding: clamp(12px, 4vmin, 48px);
+}
+
+.title-overlay-anchor--top {
+  align-items: flex-start;
+  padding: clamp(12px, 4vmin, 48px);
+}
+
+.title-overlay-anchor--ticker {
+  align-items: flex-end;
+  padding: clamp(8px, 2vmin, 28px) 0;
+}
+
+.title-overlay-inner {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.title-overlay-anchor--ticker .title-overlay-inner {
+  justify-content: flex-start;
+}
+
+.title-overlay-box {
+  display: inline-block;
+}
+
+.title-overlay-text {
+  word-break: break-word;
+}
+
+.title-overlay-text--crawl {
+  display: inline-block;
+  padding-left: 100%;
+  animation: regia-title-crawl linear infinite;
+  animation-duration: var(--regia-crawl-ms, 16000ms);
+}
+
+@keyframes regia-title-crawl {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+.title-overlay-text--roll {
+  animation: regia-title-roll linear infinite;
+  animation-duration: var(--regia-roll-ms, 20000ms);
+}
+
+@keyframes regia-title-roll {
+  0% {
+    transform: translateY(100%);
+  }
+  100% {
+    transform: translateY(-120%);
+  }
+}

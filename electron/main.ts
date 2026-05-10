@@ -771,6 +771,10 @@ let lastPlaylistWatermarkForOutput: Extract<
   PlaybackCommand,
   { type: 'playlistWatermark' }
 > | null = null
+let lastTitlesLayerForOutput: Extract<
+  PlaybackCommand,
+  { type: 'titlesLayer' }
+> | null = null
 /** Playlist / launchpad in finestra OS separata (puntina). */
 const playlistFloaterWindows = new Map<string, BrowserWindow>()
 /** Evita due `playlistFloater:open` concorrenti per la stessa sessione (doppia finestra / leak). */
@@ -1442,6 +1446,7 @@ function createOutputWindow(): BrowserWindow {
       forwardOutputProgramLogoFromDiskToOutput()
       flushLastChalkboardLayerToOutput()
       flushLastPlaylistWatermarkToOutput()
+      flushLastTitlesLayerToOutput()
     })
   })
 
@@ -1490,6 +1495,24 @@ function flushLastPlaylistWatermarkToOutput() {
   forwardToOutput(c)
 }
 
+function flushLastTitlesLayerToOutput() {
+  const c = lastTitlesLayerForOutput
+  if (!c || c.type !== 'titlesLayer') return
+  if (!c.visible) {
+    forwardToOutput(c)
+    return
+  }
+  const doc = c.doc
+  if (!doc || typeof doc !== 'object') return
+  try {
+    const ser = JSON.stringify(doc)
+    if (ser.length > 400_000) return
+  } catch {
+    return
+  }
+  forwardToOutput(c)
+}
+
 function forwardOutputIdleCapFromDiskToOutput(): void {
   const cap = readOutputIdleCapFromDisk()
   forwardToOutput({
@@ -1513,6 +1536,7 @@ function setOutputPresentationVisible(visible: boolean): void {
       forwardOutputProgramLogoFromDiskToOutput()
       flushLastChalkboardLayerToOutput()
       flushLastPlaylistWatermarkToOutput()
+      flushLastTitlesLayerToOutput()
     })
   } else {
     /* Non inviare pause: la regia comanda play/pause; con finestra nascosta
@@ -1784,6 +1808,47 @@ function setupIpc() {
         src,
       }
       lastPlaylistWatermarkForOutput = out
+      forwardToOutput(out)
+      return
+    }
+    if (cmd.type === 'titlesLayer') {
+      const visible = cmd.visible === true
+      if (!visible) {
+        const out: Extract<PlaybackCommand, { type: 'titlesLayer' }> = {
+          type: 'titlesLayer',
+          visible: false,
+        }
+        lastTitlesLayerForOutput = out
+        forwardToOutput(out)
+        return
+      }
+      const rawDoc = cmd.doc
+      if (!rawDoc || typeof rawDoc !== 'object') {
+        const out: Extract<PlaybackCommand, { type: 'titlesLayer' }> = {
+          type: 'titlesLayer',
+          visible: false,
+        }
+        lastTitlesLayerForOutput = out
+        forwardToOutput(out)
+        return
+      }
+      try {
+        const ser = JSON.stringify(rawDoc)
+        if (ser.length > 400_000) return
+      } catch {
+        return
+      }
+      const bust =
+        typeof cmd.bust === 'number' && Number.isFinite(cmd.bust)
+          ? Math.floor(cmd.bust)
+          : undefined
+      const out: Extract<PlaybackCommand, { type: 'titlesLayer' }> = {
+        type: 'titlesLayer',
+        visible: true,
+        doc: rawDoc as Record<string, unknown>,
+        ...(bust !== undefined ? { bust } : {}),
+      }
+      lastTitlesLayerForOutput = out
       forwardToOutput(out)
       return
     }
