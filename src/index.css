@@ -5987,3 +5987,73 @@ html.regia-safe-mode .floating-close-play-confirm-backdrop {
 html.regia-safe-mode .floating-playlist-panel {
   box-shadow: 0 0 0 1px var(--border) !important;
 }
+
+.new-panel-fan-menu-root {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.saved-playlists-new-fan {
+  font-weight: 700;
+  font-size: 1.25rem;
+}
+
+.new-panel-fan-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+}
+
+.new-panel-fan-arc {
+  position: absolute;
+  z-index: 40;
+  left: 50%;
+  top: 100%;
+  transform: translate(-50%, 6px);
+  pointer-events: none;
+}
+
+.new-panel-fan-arc .new-panel-fan-item {
+  pointer-events: auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  border: 1px solid var(--border);
+  background: rgba(22, 28, 38, 0.94);
+  color: var(--fg);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+.new-panel-fan-arc .new-panel-fan-item:hover {
+  filter: brightness(1.08);
+}
+
+.floating-playlist-gobbo-root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 140px;
+  padding: 10px 12px;
+}
+
+.floating-playlist-gobbo-textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.38);
+  color: inherit;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.floating-playlist-panel-kind.is-gobbo {
+  background: rgba(99, 102, 241, 0.22);
+}

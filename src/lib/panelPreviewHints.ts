@@ -1,6 +1,6 @@
 import type { SavedPlaylistKind } from '../playlistTypes.ts'
 
-type PanelKind = SavedPlaylistKind | 'sottofondo' | undefined
+type PanelKind = SavedPlaylistKind | 'sottofondo' | 'gobbo' | undefined
 
 /** Voce nella lista «Preset» (salvati su disco). */
 export function previewHintSavedListRow(mode: PanelKind): string {
@@ -26,6 +26,9 @@ export function previewHintSidebarOpenPanelRow(mode: PanelKind): string {
   if (m === 'sottofondo') {
     return 'Sottofondo aperto: audio in uscita indipendente dal trasporto globale; un solo pannello (non compare tra i preset su disco). Clic per primo piano; trascina per riordinare.'
   }
+  if (m === 'gobbo') {
+    return 'Gobbo (promemoria): testo e sfondo per il presentatore; clic per primo piano; trascina per riordinare nella sidebar.'
+  }
   return 'Playlist aperta: clic per portarla in primo piano sulla plancia. Trascina per riordinare l’elenco nella sidebar.'
 }
 
@@ -40,6 +43,12 @@ export const previewHintNewLaunchpadSfx =
 
 export const previewHintNewChalkboard =
   'Nuova lavagna: apre un pannello chalkboard (disegno e testo) sulla plancia.'
+
+export const previewHintNewGobbo =
+  'Gobbo (teleprompter): apre o focalizza l’unico pannello Gobbo sul desktop della regia.'
+
+export const previewHintNewTitles =
+  'Titoli PGM (in arrivo): overlay sul programma; rendering Output già supporta `titlesLayer` — resta il pannello editor nella regia.'
 
 export const previewHintNewSottofondo =
   'Nuovo sottofondo: pannello unico con play/stop sul pannello e audio in uscita indipendente; elenco e impostazioni restano nel workspace (niente salvataggio in PLAYLIST; in futuro: setlist interne).'

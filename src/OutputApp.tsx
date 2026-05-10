@@ -21,6 +21,12 @@ import {
   OUTPUT_PROGRAM_LOGO_LS_KEY,
   readOutputProgramLogoVisibleFromLs,
 } from './lib/outputProgramLogoStorage.ts'
+import TitleOverlayView from './components/TitleOverlayView.tsx'
+import {
+  clampRegiaTitleDocument,
+  REGIA_TITLE_DOC_EMPTY_V1,
+  type RegiaTitleDocumentV1,
+} from './lib/regiaTitleDocument.ts'
 
 const DEFAULT_STILL_IMAGE_DURATION_MS = 8000
 
@@ -157,6 +163,16 @@ export default function OutputApp() {
     visible: boolean
     src: string | null
   }>({ visible: false, src: null })
+
+  const [titlesLayer, setTitlesLayer] = useState<{
+    visible: boolean
+    doc: RegiaTitleDocumentV1 | null
+    bust: number
+  }>({
+    visible: false,
+    doc: REGIA_TITLE_DOC_EMPTY_V1,
+    bust: 0,
+  })
 
   const [idleCap, setIdleCap] = useState<OutputIdleCapPersist>(() =>
     readOutputIdleCapFromLs(),
@@ -651,6 +667,23 @@ export default function OutputApp() {
         case 'setOutputProgramLogoVisible':
           setProgramLogoVisible(cmd.visible === true)
           break
+        case 'titlesLayer': {
+          if (!cmd.visible) {
+            setTitlesLayer((p) => ({
+              ...p,
+              visible: false,
+            }))
+            break
+          }
+          const doc =
+            clampRegiaTitleDocument(cmd.doc ?? {}) ?? REGIA_TITLE_DOC_EMPTY_V1
+          setTitlesLayer((p) => ({
+            visible: true,
+            doc,
+            bust: p.bust + 1,
+          }))
+          break
+        }
         case 'sottofondoLoad': {
           cancelSottofondoRamp()
           sottofondoLoadGenRef.current += 1
@@ -1248,6 +1281,9 @@ export default function OutputApp() {
             draggable={false}
           />
         </div>
+      ) : null}
+      {titlesLayer.visible && titlesLayer.doc ? (
+        <TitleOverlayView key={titlesLayer.bust} doc={titlesLayer.doc} />
       ) : null}
       {showIdleCapLayer ? (
         <div

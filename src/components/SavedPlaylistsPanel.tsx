@@ -12,12 +12,9 @@ import {
 import { createPortal } from 'react-dom'
 import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
 import {
-  previewHintNewChalkboard,
-  previewHintNewEmptyLaunchpad,
-  previewHintNewEmptyPlaylist,
-  previewHintNewLaunchpadSfx,
   previewHintSavedListRow,
 } from '../lib/panelPreviewHints.ts'
+import NewPanelFanMenu from './NewPanelFanMenu.tsx'
 import { sumMediaDurationsSec } from '../lib/sumMediaDurationsSec.ts'
 import type { SavedPlaylistKind, SavedPlaylistMeta } from '../playlistTypes.ts'
 import type { FloatingPlaylistSession } from '../state/floatingPlaylistSession.ts'
@@ -74,89 +71,6 @@ function IconSavedCardLaunchpad() {
   )
 }
 
-function IconNewPlaylistPanel() {
-  return (
-    <svg
-      className="saved-playlists-icon-svg"
-      viewBox="0 0 24 24"
-      width={18}
-      height={18}
-      aria-hidden="true"
-    >
-      <rect
-        x="4"
-        y="6"
-        width="13"
-        height="11"
-        rx="2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        d="M15 3v4M13 5h4"
-      />
-    </svg>
-  )
-}
-
-function IconLaunchPadGrid() {
-  return (
-    <svg
-      className="saved-playlists-icon-svg"
-      viewBox="0 0 24 24"
-      width={18}
-      height={18}
-      aria-hidden="true"
-    >
-      <rect
-        x="3"
-        y="3"
-        width="7.5"
-        height="7.5"
-        rx="1.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-      <rect
-        x="13.5"
-        y="3"
-        width="7.5"
-        height="7.5"
-        rx="1.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-      <rect
-        x="3"
-        y="13.5"
-        width="7.5"
-        height="7.5"
-        rx="1.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-      <rect
-        x="13.5"
-        y="13.5"
-        width="7.5"
-        height="7.5"
-        rx="1.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-      />
-    </svg>
-  )
-}
-
 function IconSavedCardChalkboard() {
   return (
     <svg
@@ -180,33 +94,6 @@ function IconSavedCardChalkboard() {
         stroke="#b2bec3"
         strokeWidth={2}
         strokeLinecap="round"
-      />
-    </svg>
-  )
-}
-
-/** Griglia launchpad + badge “pronto” (kit precaricato). */
-function IconLaunchPadSfx() {
-  return (
-    <svg
-      className="saved-playlists-icon-svg"
-      viewBox="0 0 24 24"
-      width={18}
-      height={18}
-      aria-hidden="true"
-    >
-      <rect x="2" y="2" width="6.75" height="6.75" rx="1.4" fill="#e8435c" />
-      <rect x="9.5" y="2" width="6.75" height="6.75" rx="1.4" fill="#27ae60" />
-      <rect x="2" y="9.5" width="6.75" height="6.75" rx="1.4" fill="#2980ef" />
-      <rect x="9.5" y="9.5" width="6.75" height="6.75" rx="1.4" fill="#f39c12" />
-      <circle cx="17.8" cy="17.8" r="3.6" fill="#22c55e" />
-      <path
-        fill="none"
-        stroke="#ecfdf5"
-        strokeWidth="1.25"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M16.1 17.9l0.85 0.85 2.35-2.7"
       />
     </svg>
   )
@@ -278,6 +165,7 @@ export default function SavedPlaylistsPanel({
     addFloatingPlaylist,
     addFloatingLaunchPad,
     addFloatingChalkboard,
+    ensureGobboSingleton,
     openFloatingPlaylist,
     floatingPlaylistSessions,
     playlistFloaterOsSessionIds,
@@ -447,64 +335,38 @@ export default function SavedPlaylistsPanel({
           role="group"
           aria-label="Crea nuovo pannello"
         >
-          <button
-            type="button"
-            className="btn-icon saved-playlists-icon-btn saved-playlists-new-playlist"
-            onClick={() => {
+          <NewPanelFanMenu
+            listOnly={listOnly}
+            onNewPlaylist={() => {
               addFloatingPlaylist()
               openFloatingPlaylist()
             }}
-            title="Nuova PlayList Vuota"
-            aria-label="Nuova playlist vuota"
-            data-preview-hint={previewHintNewEmptyPlaylist}
-          >
-            <IconNewPlaylistPanel />
-          </button>
-          <button
-            type="button"
-            className="btn-icon saved-playlists-icon-btn saved-playlists-new-launchpad"
-            onClick={() => {
+            onNewLaunchpadBase={() => {
               void (async () => {
                 await addFloatingLaunchPad('base')
                 openFloatingPlaylist()
               })()
             }}
-            title="Nuovo LaunchPad Vuoto"
-            aria-label="Nuovo launchpad vuoto"
-            data-preview-hint={previewHintNewEmptyLaunchpad}
-          >
-            <IconLaunchPadGrid />
-          </button>
-          <button
-            type="button"
-            className="btn-icon saved-playlists-icon-btn saved-playlists-new-launchpad-sfx"
-            onClick={() => {
+            onNewLaunchpadSfx={() => {
               void (async () => {
                 await addFloatingLaunchPad('sfx')
                 openFloatingPlaylist()
               })()
             }}
-            title="Nuovo LaunchPad Preset"
-            aria-label="Nuovo launchpad preset"
-            data-preview-hint={previewHintNewLaunchpadSfx}
-          >
-            <IconLaunchPadSfx />
-          </button>
-          <button
-            type="button"
-            className="btn-icon saved-playlists-icon-btn saved-playlists-new-chalkboard"
-            onClick={() => {
+            onNewChalkboard={() => {
               void (async () => {
                 await addFloatingChalkboard()
                 openFloatingPlaylist()
               })()
             }}
-            title="Nuova Chalkboard Vuota"
-            aria-label="Nuova Chalkboard Vuota"
-            data-preview-hint={previewHintNewChalkboard}
-          >
-            <IconSavedCardChalkboard />
-          </button>
+            onNewGobbo={() => {
+              ensureGobboSingleton()
+              openFloatingPlaylist()
+            }}
+            onNewTitles={() => {
+              openFloatingPlaylist()
+            }}
+          />
         </div>
       ) : null}
       {displayedPlaylists.length === 0 ? (

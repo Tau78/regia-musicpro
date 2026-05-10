@@ -69,11 +69,17 @@ import {
 import { normalizePlaylistWatermarkAbsPath } from '../lib/playlistWatermarkPath.ts'
 import { formatDurationMmSs } from '../lib/formatDurationMmSs.ts'
 import { sessionIsLiveOnRegiaOutput } from '../lib/sessionLiveOutput.ts'
-import { normalizePlaylistCrossfadeSec } from '../lib/playlistCrossfade.ts'
+import {
+  effectivePlaylistRows,
+  mediaPathsFromPlaylistItems,
+} from '../lib/playlistTrackItems.ts'
 import {
   cycleLoopMode,
   loopCycleModeShortLabel,
 } from '../lib/loopModeCycle.ts'
+import {
+  normalizePlaylistCrossfadeSec,
+} from '../lib/playlistCrossfade.ts'
 import {
   formatPlaylistDurationLabel,
   usePlaylistMediaDurations,
@@ -98,6 +104,7 @@ import {
   type ChalkboardPlacedImage,
   type LaunchPadCell,
   type FloatingPlaylistPanelSize,
+  isListPlaylistWithPaths,
 } from '../state/floatingPlaylistSession.ts'
 
 /** Evita `?? []` inline: nuovo array a ogni render → useEffect Chalkboard in loop. */
@@ -1081,6 +1088,7 @@ export default function FloatingPlaylist({
   ])
   const isLaunchpad = session?.playlistMode === 'launchpad'
   const isChalkboard = session?.playlistMode === 'chalkboard'
+  const isGobbo = session?.playlistMode === 'gobbo'
   const isSottofondo = session?.playlistMode === 'sottofondo'
   const panelDefaultHint = useMemo(() => {
     if (isLaunchpad) {
@@ -1089,8 +1097,11 @@ export default function FloatingPlaylist({
     if (isChalkboard) {
       return 'Lavagna: passa il mouse su intestazione, strumenti e area disegno per le descrizioni. Tab per i banchi; tasto angoli per tutto schermo.'
     }
+    if (isGobbo) {
+      return 'Gobbo: teleprompter con testo lungo; contro tipografia e finestra presentatore (in sviluppo).'
+    }
     return 'Playlist: passa il mouse su intestazione, barra controlli, loop ed elenco brani per le descrizioni.'
-  }, [isLaunchpad, isChalkboard])
+  }, [isLaunchpad, isChalkboard, isGobbo])
   const panelHeaderStripHint = useMemo(() => {
     if (isLaunchpad) {
       return 'Intestazione launchpad: nome modificabile, aiuto «?», puntina finestra separata, riduci e chiudi. Sotto: pagine e griglia 4×4.'
@@ -1098,9 +1109,26 @@ export default function FloatingPlaylist({
     if (isChalkboard) {
       return 'Intestazione lavagna: nome, tutto schermo (angoli), aiuto «?», puntina finestra separata, riduci e chiudi.'
     }
+    if (isGobbo) {
+      return 'Intestazione Gobbo: nome pannello, aiuto «?», puntina, riduci e chiudi.'
+    }
     return 'Intestazione playlist: nome, tema colore, file/cartella, carica e salva, loop (se visibile), aiuto «?», puntina, riduci e chiudi.'
-  }, [isLaunchpad, isChalkboard])
-  const paths = session?.paths ?? EMPTY_PLAYLIST_PATHS
+  }, [isLaunchpad, isChalkboard, isGobbo])
+  const playlistQueueRows =
+    session && isListPlaylistWithPaths(session.playlistMode)
+      ? effectivePlaylistRows(session)
+      : null
+  const paths =
+    playlistQueueRows != null
+      ? mediaPathsFromPlaylistItems(playlistQueueRows)
+      : (session?.paths ?? EMPTY_PLAYLIST_PATHS)
+  const playlistRenderRows =
+    playlistQueueRows ??
+    paths.map((path) => ({
+      kind: 'media' as const,
+      path,
+    }))
+  const playlistQueueLen = playlistRenderRows.length
   const trackDurations = usePlaylistMediaDurations(paths)
   const launchPadCells =
     session?.launchPadCells ??
@@ -1206,7 +1234,7 @@ export default function FloatingPlaylist({
   const launchpadDndDepth = useRef(0)
   const listRef = useRef<HTMLUListElement>(null)
   const [playlistGridCols, setPlaylistGridCols] = useState(1)
-  /** Inserimento DnD interno (0…paths.length) durante passaggio su questa lista. */
+  /** Inserimento DnD interno (0…playlistQueueLen) durante passaggio su questa lista. */
   const [internalDropInsertBefore, setInternalDropInsertBefore] = useState<
     number | null
   >(null)
@@ -1410,14 +1438,14 @@ export default function FloatingPlaylist({
     return () => {
       ro.disconnect()
     }
-  }, [collapsed, isLaunchpad, paths.length, sessionId])
+  }, [collapsed, isLaunchpad, playlistQueueLen, sessionId])
 
   useLayoutEffect(() => {
     if (
       isLaunchpad ||
       collapsed ||
       currentPlayIndexInThisPanel == null ||
-      paths.length === 0
+      playlistQueueLen === 0
     )
       return
     const root = listRef.current
@@ -1495,7 +1523,7 @@ export default function FloatingPlaylist({
     collapsed,
     isLaunchpad,
     isPlaylistOsFloaterWindow,
-    paths.length,
+    playlistQueueLen,
     panelSize,
     planciaDockRight,
     reclampIntoView,
@@ -2034,7 +2062,12 @@ export default function FloatingPlaylist({
       }
       e.dataTransfer.effectAllowed = 'move'
       setPlaylistRowDragSourceIndex(index)
-      const p = paths[index]
+      const row = playlistRenderRows[index]
+      if (!row || row.kind !== 'media') {
+        e.preventDefault()
+        return
+      }
+      const p = row.path
       const label = p ? (p.split(/[/\\]/).pop() ?? p) : `Brano ${index + 1}`
       setRegiaDnDDragImage(e, label)
       const payload = {
@@ -2047,7 +2080,7 @@ export default function FloatingPlaylist({
       e.dataTransfer.setData(REGIA_FLOATING_DND_MIME, raw)
       e.dataTransfer.setData('text/plain', raw)
     },
-    [isLaunchpad, panelLocked, paths, session, sessionId],
+    [isLaunchpad, panelLocked, playlistRenderRows, session, sessionId],
   )
 
   const onPlaylistRowContextMenu = useCallback(
@@ -2459,7 +2492,7 @@ export default function FloatingPlaylist({
             listRef.current,
             e.clientX,
             e.clientY,
-            paths.length,
+            playlistQueueLen,
           ),
         )
       } else if (dataTransferHasFileList(e.dataTransfer)) {
@@ -2468,14 +2501,14 @@ export default function FloatingPlaylist({
             listRef.current,
             e.clientX,
             e.clientY,
-            paths.length,
+            playlistQueueLen,
           ),
         )
       } else {
         setInternalDropInsertBefore(null)
       }
     },
-    [panelLocked, paths.length, playlistListDragAllowed],
+    [panelLocked, playlistQueueLen, playlistListDragAllowed],
   )
 
   const onPlaylistDragLeave = useCallback(
@@ -2505,7 +2538,7 @@ export default function FloatingPlaylist({
             listRef.current,
             e.clientX,
             e.clientY,
-            paths.length,
+            playlistQueueLen,
           ),
         )
       } else if (dataTransferHasFileList(dt)) {
@@ -2515,7 +2548,7 @@ export default function FloatingPlaylist({
             listRef.current,
             e.clientX,
             e.clientY,
-            paths.length,
+            playlistQueueLen,
           ),
         )
       } else {
@@ -2523,7 +2556,7 @@ export default function FloatingPlaylist({
         setInternalDropInsertBefore(null)
       }
     },
-    [panelLocked, paths.length, playlistListDragAllowed],
+    [panelLocked, playlistQueueLen, playlistListDragAllowed],
   )
 
   const onPlaylistDrop = useCallback(
@@ -2541,7 +2574,7 @@ export default function FloatingPlaylist({
           listRef.current,
           e.clientX,
           e.clientY,
-          paths.length,
+          playlistQueueLen,
         )
         setActiveFloatingSession(sessionId)
         await applyFloatingInternalDrop({
@@ -2561,7 +2594,7 @@ export default function FloatingPlaylist({
         listRef.current,
         e.clientX,
         e.clientY,
-        paths.length,
+        playlistQueueLen,
       )
       addPathsToPlaylistFromPaths(sessionId, pathsDropped, insertBefore)
     },
@@ -2569,7 +2602,7 @@ export default function FloatingPlaylist({
       addPathsToPlaylistFromPaths,
       applyFloatingInternalDrop,
       panelLocked,
-      paths.length,
+      playlistQueueLen,
       playlistListDragAllowed,
       sessionId,
       setActiveFloatingSession,
@@ -2688,9 +2721,9 @@ export default function FloatingPlaylist({
   )
 
   const onSottofondoPanelPlay = useCallback(() => {
-    if (!paths.length) return
+    if (!playlistQueueLen) return
     void loadIndexAndPlay(currentIndex, sessionId)
-  }, [paths.length, currentIndex, sessionId, loadIndexAndPlay])
+  }, [playlistQueueLen, currentIndex, sessionId, loadIndexAndPlay])
 
   const onSottofondoPanelStop = useCallback(() => {
     void stopSottofondoPlayback()
@@ -2698,7 +2731,7 @@ export default function FloatingPlaylist({
 
   const onPanelKeyDownCapture = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
-      if (collapsed || isLaunchpad || isChalkboard || !paths.length) return
+      if (collapsed || isLaunchpad || isChalkboard || !playlistQueueLen) return
       const root = panelRef.current
       if (!root?.contains(e.target as Node)) return
       const listEl = root.querySelector('ul.floating-playlist-list')
@@ -2717,7 +2750,7 @@ export default function FloatingPlaylist({
         e.stopPropagation()
         const down = e.code === 'ArrowDown' || e.code === 'ArrowRight'
         const next = down
-          ? Math.min(currentIndex + 1, paths.length - 1)
+          ? Math.min(currentIndex + 1, playlistQueueLen - 1)
           : Math.max(currentIndex - 1, 0)
         void loadIndexAndPlay(next, sessionId)
       }
@@ -2726,7 +2759,7 @@ export default function FloatingPlaylist({
       collapsed,
       isLaunchpad,
       isChalkboard,
-      paths.length,
+      playlistQueueLen,
       currentIndex,
       loadIndexAndPlay,
       sessionId,
@@ -2912,7 +2945,7 @@ export default function FloatingPlaylist({
     <Fragment>
     <div
       ref={panelRef}
-      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${isChalkboard ? 'is-chalkboard' : ''} ${isSottofondo ? 'is-sottofondo' : ''} ${chalkboardFullscreen ? 'is-chalkboard-fullscreen' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}${isLiveOnRegiaOutput ? ' is-live-output' : ''}${planciaDockRight ? ' floating-playlist--plancia-dock-right' : ''}`}
+      className={`floating-playlist ${isLaunchpad ? 'is-launchpad' : ''} ${isChalkboard ? 'is-chalkboard' : ''} ${isSottofondo ? 'is-sottofondo' : ''} ${isGobbo ? 'is-gobbo' : ''} ${chalkboardFullscreen ? 'is-chalkboard-fullscreen' : ''} ${collapsed ? 'is-collapsed' : ''} ${isResizing ? 'is-panel-resizing' : ''} ${themeHex ? 'has-theme' : ''}${isLiveOnRegiaOutput ? ' is-live-output' : ''}${planciaDockRight ? ' floating-playlist--plancia-dock-right' : ''}`}
       style={{
         ...(chalkboardFullscreen
           ? {
@@ -2997,6 +3030,8 @@ export default function FloatingPlaylist({
                   ? 'is-launchpad'
                   : isChalkboard
                     ? 'is-chalkboard'
+                    : isGobbo
+                      ? 'is-gobbo'
                     : isSottofondo
                       ? 'is-sottofondo'
                       : 'is-playlist'
@@ -3006,6 +3041,8 @@ export default function FloatingPlaylist({
                 ? 'Launchpad'
                 : isChalkboard
                   ? 'Chalkboard'
+                  : isGobbo
+                    ? 'Gobbo'
                   : isSottofondo
                     ? 'Sottofondo'
                     : 'Playlist'}
@@ -3030,6 +3067,8 @@ export default function FloatingPlaylist({
                   ? 'Nome o titolo…'
                   : isChalkboard
                     ? 'Nome o titolo…'
+                    : isGobbo
+                      ? 'Nome Gobbo…'
                     : isSottofondo
                       ? 'Nome sottofondo…'
                       : 'Nuova playlist'
@@ -3039,6 +3078,8 @@ export default function FloatingPlaylist({
                   ? 'Nome del pannello Launchpad'
                   : isChalkboard
                     ? 'Nome del pannello Chalkboard'
+                    : isGobbo
+                      ? 'Nome del pannello Gobbo'
                     : isSottofondo
                       ? 'Nome del pannello Sottofondo'
                       : 'Nome della playlist'
@@ -3335,7 +3376,7 @@ export default function FloatingPlaylist({
                   : undefined
               }
             >
-              {!isLaunchpad && !isChalkboard ? (
+              {!isLaunchpad && !isChalkboard && !isGobbo ? (
                 <Fragment key="chrome-slot-media">
                   <div
                     className="floating-playlist-chrome-group floating-playlist-chrome-group--media"
@@ -3370,7 +3411,7 @@ export default function FloatingPlaylist({
                   />
                 </Fragment>
               ) : null}
-              {!isLaunchpad && !isChalkboard ? (
+              {!isLaunchpad && !isChalkboard && !isGobbo ? (
                 <Fragment key="chrome-slot-presenter-collapsed">
                   <span className="floating-playlist-chrome-sep" aria-hidden />
                   <button
@@ -3538,7 +3579,7 @@ export default function FloatingPlaylist({
       {!collapsed && (
         <div
           className={
-            isLaunchpad || isChalkboard
+            isLaunchpad || isChalkboard || isGobbo
               ? 'floating-playlist-launchpad-stack'
               : 'floating-playlist-panel-body-slot'
           }
@@ -3604,7 +3645,7 @@ export default function FloatingPlaylist({
                 </div>
               }
             >
-              {!isLaunchpad && !isChalkboard ? (
+              {!isLaunchpad && !isChalkboard && !isGobbo ? (
                 <Fragment key="chrome-slot-media">
                   <div
                     className="floating-playlist-chrome-group floating-playlist-chrome-group--media"
@@ -3636,7 +3677,7 @@ export default function FloatingPlaylist({
                   <span className="floating-playlist-chrome-sep" aria-hidden />
                 </Fragment>
               ) : null}
-              {!isLaunchpad && !isChalkboard ? (
+              {!isLaunchpad && !isChalkboard && !isGobbo ? (
                 <Fragment key="chrome-slot-presenter-expanded">
                   <span className="floating-playlist-chrome-sep" aria-hidden />
                   <button
@@ -3797,7 +3838,7 @@ export default function FloatingPlaylist({
                   </button>
                 </div>
               </Fragment>
-              {!isLaunchpad && !isChalkboard ? (
+              {!isLaunchpad && !isChalkboard && !isGobbo ? (
                 <Fragment key="chrome-slot-xfade">
                   <span className="floating-playlist-chrome-sep" aria-hidden />
                   <div
@@ -3848,7 +3889,7 @@ export default function FloatingPlaylist({
               <button
                 type="button"
                 className="floating-playlist-loop-btn floating-playlist-sottofondo-play"
-                disabled={panelLocked || paths.length === 0}
+                disabled={panelLocked || playlistQueueLen === 0}
                 onClick={() => onSottofondoPanelPlay()}
                 title="Avvia dal brano evidenziato in elenco (audio in uscita, indipendente da play/pausa globale)"
               >
@@ -3865,7 +3906,7 @@ export default function FloatingPlaylist({
               </button>
             </div>
           ) : null}
-          {!isLaunchpad && !isChalkboard ? (
+          {!isLaunchpad && !isChalkboard && !isGobbo ? (
             <div
               className="floating-playlist-loop-row"
               role="group"
@@ -4331,10 +4372,28 @@ export default function FloatingPlaylist({
             }}
           />
           </div>
+        ) : isGobbo ? (
+          <div
+            className="floating-playlist-gobbo-root"
+            data-preview-hint="Gobbo (teleprompter): incolla il testo lungo qui; tipografia avanzata, sfondo, finestra lettore e telecomando saranno estesi nelle prossime revisioni."
+          >
+            <textarea
+              className="floating-playlist-gobbo-textarea"
+              disabled={panelLocked}
+              value={session.gobboBody ?? ''}
+              spellCheck={false}
+              onChange={(e) =>
+                patchFloatingPlaylistSession(sessionId, {
+                  gobboBody: e.target.value,
+                })
+              }
+              placeholder="Incolla qui il testo per il presentatore…"
+            />
+          </div>
         ) : null}
         </div>
       )}
-      {!collapsed && !isLaunchpad && !isChalkboard && (
+      {!collapsed && !isLaunchpad && !isChalkboard && !isGobbo && (
         <div
           className="floating-playlist-list-scroll"
           data-preview-hint="Elenco brani: clic per caricare in anteprima/uscita, trascina per riordinare, tasto destro per opzioni. Trascina file dall’esplora risorse per aggiungerli."
@@ -4349,14 +4408,120 @@ export default function FloatingPlaylist({
             onDragOver={onPlaylistDragOver}
             onDrop={(e) => void onPlaylistDrop(e)}
           >
-          {paths.length === 0 && (
+          {playlistQueueLen === 0 && (
             <li
               className={`floating-playlist-empty${playlistEmptyDropCueClasses(internalDropInsertBefore)}`}
             >
               Nessun file. Apri una cartella, usa Aggiungi o trascina file qui.
             </li>
           )}
-          {paths.map((p, i) => {
+          {playlistRenderRows.map((row, i) => {
+            if (row.kind === 'stop') {
+              const name = row.message
+              const isCurrentRow =
+                !isSottofondo &&
+                playbackLoadedTrack != null &&
+                playbackLoadedTrack.sessionId === sessionId &&
+                playbackLoadedTrack.index === i
+              return (
+                <li
+                  key={`${sessionId}-stop-${row.id}-${i}`}
+                  data-pl-idx={i}
+                  className={`floating-playlist-item floating-playlist-item--cue-stop${playlistRowDragSourceIndex === i ? ' is-dragging-source' : ''}${playlistDropCueClasses(internalDropInsertBefore, i, playlistQueueLen, playlistGridCols)}`}
+                  style={{ borderLeftWidth: 4, borderLeftStyle: 'solid', borderLeftColor: row.color }}
+                >
+                  <button
+                    type="button"
+                    className={`playlist-row${isCurrentRow ? ' is-current' : ''}`}
+                    onClick={() => {
+                      if (suppressPlaylistRowClickRef.current) {
+                        suppressPlaylistRowClickRef.current = false
+                        return
+                      }
+                      void loadIndexAndPlay(i, sessionId)
+                    }}
+                    onContextMenu={(e) => onPlaylistRowContextMenu(i, e)}
+                    title={`STOP cabina — ${name}`}
+                  >
+                    <span className="playlist-index">{i + 1}</span>
+                    <span className="playlist-name">STOP · {name}</span>
+                  </button>
+                  <span className="floating-playlist-item-duration" aria-hidden />
+                  <button
+                    type="button"
+                    draggable={false}
+                    className="playlist-remove-btn"
+                    disabled={panelLocked}
+                    title="Rimuovi dalla playlist"
+                    aria-label={`Rimuovi stop ${name}`}
+                    onClick={(ev) => {
+                      ev.stopPropagation()
+                      void removePathAt(i, sessionId)
+                    }}
+                  >
+                    ×
+                  </button>
+                </li>
+              )
+            }
+            if (row.kind === 'macro') {
+              const name =
+                row.label.trim() ||
+                (row.action.type === 'loadSavedPlaylistAndPlay'
+                  ? `Macro · playlist`
+                  : 'Macro')
+              const isCurrentRow =
+                !isSottofondo &&
+                playbackLoadedTrack != null &&
+                playbackLoadedTrack.sessionId === sessionId &&
+                playbackLoadedTrack.index === i
+              const hue =
+                typeof row.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(row.color)
+                  ? row.color
+                  : '#6366f1'
+              return (
+                <li
+                  key={`${sessionId}-macro-${row.id}-${i}`}
+                  data-pl-idx={i}
+                  className={`floating-playlist-item floating-playlist-item--macro${playlistRowDragSourceIndex === i ? ' is-dragging-source' : ''}${playlistDropCueClasses(internalDropInsertBefore, i, playlistQueueLen, playlistGridCols)}`}
+                  style={{ borderLeftWidth: 4, borderLeftStyle: 'solid', borderLeftColor: hue }}
+                >
+                  <button
+                    type="button"
+                    className={`playlist-row${isCurrentRow ? ' is-current' : ''}`}
+                    onClick={() => {
+                      if (suppressPlaylistRowClickRef.current) {
+                        suppressPlaylistRowClickRef.current = false
+                        return
+                      }
+                      void loadIndexAndPlay(i, sessionId)
+                    }}
+                    onContextMenu={(e) => onPlaylistRowContextMenu(i, e)}
+                    title={`Macro — clic per eseguire · ${name}`}
+                  >
+                    <span className="playlist-index">{i + 1}</span>
+                    <span className="playlist-name">⚙ {name}</span>
+                  </button>
+                  <span className="floating-playlist-item-duration" aria-hidden />
+                  <button
+                    type="button"
+                    draggable={false}
+                    className="playlist-remove-btn"
+                    disabled={panelLocked}
+                    title="Rimuovi dalla playlist"
+                    aria-label={`Rimuovi macro ${name}`}
+                    onClick={(ev) => {
+                      ev.stopPropagation()
+                      void removePathAt(i, sessionId)
+                    }}
+                  >
+                    ×
+                  </button>
+                </li>
+              )
+            }
+
+            const p = row.path
             const name = p.split(/[/\\]/).pop() ?? p
             const durationLabel = formatPlaylistDurationLabel(
               trackDurations[p],
@@ -4383,7 +4548,7 @@ export default function FloatingPlaylist({
                 draggable
                 onDragStart={(ev) => onPlaylistRowDragStart(i, ev)}
                 onDragEnd={onPlaylistRowDragEnd}
-                className={`floating-playlist-item${playlistRowDragSourceIndex === i ? ' is-dragging-source' : ''}${playlistDropCueClasses(internalDropInsertBefore, i, paths.length, playlistGridCols)}`}
+                className={`floating-playlist-item${playlistRowDragSourceIndex === i ? ' is-dragging-source' : ''}${playlistDropCueClasses(internalDropInsertBefore, i, playlistQueueLen, playlistGridCols)}`}
               >
                 <button
                   type="button"
