@@ -20,7 +20,8 @@ Dopo il push, **Vercel** deploya tramite integrazione Git.
 Quando l’utente dice **VAI VERSIONE** (o equivalente chiaro: release installer, GitHub Release, aggiornamento app installata):
 
 1. Esegui: `bash scripts/release-github-desktop.sh` oppure `npm run release:github-desktop`
-2. Stesse regole su working tree pulito e su non sostituire lo script.
-3. Effetto: bump patch, **tag** `v*` (commit da `npm version patch`), `git push origin main --follow-tags` → parte di solito **`.github/workflows/release.yml`** (build Windows/macOS e pubblicazione su GitHub Releases / feed `electron-updater`).
+2. Non sostituire lo script con passi manuali salvo errori chiari.
+3. Se il working tree **non è pulito**, lo script fa **`git add -A`** e un **commit** con messaggio da `PRE_RELEASE_COMMIT_MSG` oppure un default; nel corpo del commit include il **`git diff --stat`** dello snapshot. Subito dopo: pull, eventuale sync lockfile, **`npm version patch`** (commit `release: …` + **tag semver `v*`** coerente con la nuova versione in `package.json`), **`git push origin main --follow-tags`** → parte di solito **`.github/workflows/release.yml`**.
+4. Per un messaggio di commit pre-release esplicito: `PRE_RELEASE_COMMIT_MSG='feat: …' bash scripts/release-github-desktop.sh`
 
 Seguire su GitHub **Actions** finché le job «Release» sono verdi; in caso di errore CI non c’è un rollback automatico del tag lato agent.
