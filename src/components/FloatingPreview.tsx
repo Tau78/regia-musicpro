@@ -133,8 +133,14 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
       clampOptsWithDock,
     )
     queueMicrotask(() => {
-      setPos(np)
-      setPanelSize(ns)
+      setPos((cur) =>
+        cur.x === np.x && cur.y === np.y ? cur : { x: np.x, y: np.y },
+      )
+      setPanelSize((cur) =>
+        cur.width === ns.width && cur.height === ns.height ?
+          cur
+        : { width: ns.width, height: ns.height },
+      )
     })
   }, [clampOptsWithDock, rightPlanciaDockWidthPx])
 
@@ -148,8 +154,14 @@ export default function FloatingPreview({ onDock }: { onDock: () => void }) {
         MIN_H,
         clampOptsWithDock,
       )
-      setPos(np)
-      setPanelSize(ns)
+      setPos((cur) =>
+        cur.x === np.x && cur.y === np.y ? cur : { x: np.x, y: np.y },
+      )
+      setPanelSize((cur) =>
+        cur.width === ns.width && cur.height === ns.height ?
+          cur
+        : { width: ns.width, height: ns.height },
+      )
     }
     window.addEventListener(PREVIEW_LAYOUT_APPLIED_EVENT, onApplied)
     return () => window.removeEventListener(PREVIEW_LAYOUT_APPLIED_EVENT, onApplied)

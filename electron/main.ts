@@ -1315,6 +1315,22 @@ function getSecondaryDisplay() {
   return other ?? primary
 }
 
+/** Se true, la finestra Uscita usa lo stesso monitor della regia (nessun secondo schermo). Mostrarla sopra blocca tutta la UI. */
+function outputSharesPrimaryDisplay(): boolean {
+  const primary = screen.getPrimaryDisplay()
+  return getSecondaryDisplay().id === primary.id
+}
+
+function bringRegiaAboveOutput(): void {
+  if (!regiaWindow || regiaWindow.isDestroyed()) return
+  try {
+    regiaWindow.moveTop()
+    void regiaWindow.focus()
+  } catch {
+    /* ignore */
+  }
+}
+
 let pkgMetaForTitleCache: {
   version: string
   regiaProgramCreatedOn?: string
@@ -1395,8 +1411,9 @@ function createRegiaWindow(): BrowserWindow {
 
   if (isDev) {
     void w.loadURL(getDevServerUrl() + '/')
-    // DevTools solo su richiesta: `ELECTRON_OPEN_DEVTOOLS=1 npm run dev`
-    if (process.env.ELECTRON_OPEN_DEVTOOLS === '1') {
+    // In dev apriamo DevTools di default (schermata nera = quasi sempre errore JS nel renderer).
+    // Disattiva: `ELECTRON_OPEN_DEVTOOLS=0 npm run dev`
+    if (process.env.ELECTRON_OPEN_DEVTOOLS !== '0') {
       w.webContents.openDevTools({ mode: 'detach' })
     }
   } else {
@@ -1505,8 +1522,16 @@ function setOutputPresentationVisible(visible: boolean): void {
   if (!outputWindow || outputWindow.isDestroyed()) return
   if (visible) {
     placeOutputWindowOnSecondaryDisplay(outputWindow)
-    outputWindow.show()
+    /* showInactive: sul secondo monitor non rubiamo il focus alla regia; sul mono-monitor
+     * la finestra Uscita resterebbe sopra — sistemato sotto con moveTop sulla regia. */
+    outputWindow.showInactive()
     outputWindow.setFullScreen(false)
+    if (outputSharesPrimaryDisplay()) {
+      bringRegiaAboveOutput()
+      setImmediate(() => {
+        bringRegiaAboveOutput()
+      })
+    }
     /* Dopo show: riallinea tappo (race con caricamento regia / disco). */
     setImmediate(() => {
       forwardOutputIdleCapFromDiskToOutput()

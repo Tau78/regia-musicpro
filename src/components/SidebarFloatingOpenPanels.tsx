@@ -187,10 +187,21 @@ export default function SidebarFloatingOpenPanels() {
   )
 
   useEffect(() => {
+    const idsForMerge =
+      activeKey.length === 0 ? ([] as string[]) : activeKey.split('\u0001')
     queueMicrotask(() => {
-      setCardOrder((prev) => mergeFloatingSidebarOrder(prev, activeIds))
+      setCardOrder((prev) => {
+        const next = mergeFloatingSidebarOrder(prev, idsForMerge)
+        if (
+          prev.length === next.length &&
+          prev.every((id, i) => id === next[i])
+        ) {
+          return prev
+        }
+        return next
+      })
     })
-  }, [activeKey, activeIds])
+  }, [activeKey])
 
   const sessionById = useMemo(() => {
     const m = new Map<string, FloatingPlaylistSession>()

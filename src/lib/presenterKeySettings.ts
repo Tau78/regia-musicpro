@@ -46,16 +46,39 @@ export function readPresenterPlayPauseCode(): string {
   return readOne(LS_PRESENTER_KEY_PLAY, DEFAULT_PRESENTER_PLAY_CODE)
 }
 
-export function readPresenterKeyBindings(): {
+export type PresenterKeyBindingsSnapshot = {
   prevCode: string
   nextCode: string
   playPauseCode: string
-} {
-  return {
-    prevCode: readPresenterPrevCode(),
-    nextCode: readPresenterNextCode(),
-    playPauseCode: readPresenterPlayPauseCode(),
+}
+
+/** Cache per `useSyncExternalStore`: getSnapshot deve restituire la stessa identità se i valori non cambiano. */
+let presenterKeyBindingsSnapshotCache: PresenterKeyBindingsSnapshot | null =
+  null
+
+function getPresenterKeyBindingsSnapshot(): PresenterKeyBindingsSnapshot {
+  const prevCode = readPresenterPrevCode()
+  const nextCode = readPresenterNextCode()
+  const playPauseCode = readPresenterPlayPauseCode()
+  const c = presenterKeyBindingsSnapshotCache
+  if (
+    c &&
+    c.prevCode === prevCode &&
+    c.nextCode === nextCode &&
+    c.playPauseCode === playPauseCode
+  ) {
+    return c
   }
+  presenterKeyBindingsSnapshotCache = {
+    prevCode,
+    nextCode,
+    playPauseCode,
+  }
+  return presenterKeyBindingsSnapshotCache
+}
+
+export function readPresenterKeyBindings(): PresenterKeyBindingsSnapshot {
+  return getPresenterKeyBindingsSnapshot()
 }
 
 export function writePresenterKey(
@@ -97,18 +120,16 @@ function subscribePresenterKeys(onStoreChange: () => void): () => void {
   }
 }
 
-export function usePresenterKeyBindings(): {
-  prevCode: string
-  nextCode: string
-  playPauseCode: string
-} {
+const serverPresenterKeyBindingsSnapshot: PresenterKeyBindingsSnapshot = {
+  prevCode: DEFAULT_PRESENTER_PREV_CODE,
+  nextCode: DEFAULT_PRESENTER_NEXT_CODE,
+  playPauseCode: DEFAULT_PRESENTER_PLAY_CODE,
+}
+
+export function usePresenterKeyBindings(): PresenterKeyBindingsSnapshot {
   return useSyncExternalStore(
     subscribePresenterKeys,
-    () => readPresenterKeyBindings(),
-    () => ({
-      prevCode: DEFAULT_PRESENTER_PREV_CODE,
-      nextCode: DEFAULT_PRESENTER_NEXT_CODE,
-      playPauseCode: DEFAULT_PRESENTER_PLAY_CODE,
-    }),
+    getPresenterKeyBindingsSnapshot,
+    () => serverPresenterKeyBindingsSnapshot,
   )
 }

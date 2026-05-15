@@ -2215,6 +2215,7 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
+    const pendingNewSessionId: { id: string | null } = { id: null }
     setFloatingSessions((prev) => {
       if (prev.length > 0) return prev
       const pos = computeNewFloatingPanelPos(
@@ -2223,8 +2224,12 @@ export function RegiaProvider({ children }: { children: ReactNode }) {
         prev,
       )
       const s = createEmptyFloatingSession(pos)
-      setActiveFloatingSessionId(s.id)
+      pendingNewSessionId.id = s.id
       return [s]
+    })
+    queueMicrotask(() => {
+      const id = pendingNewSessionId.id
+      if (id) setActiveFloatingSessionId(id)
     })
   }, [])
 
@@ -6753,7 +6758,7 @@ function FloaterOsPlaylistBridge({
     return () => {
       if (pushTimerRef.current != null) clearTimeout(pushTimerRef.current)
     }
-  }, [regia, playlistFloaterOsSessionIds, buildFloaterPayload])
+  }, [playlistFloaterOsSessionIds, buildFloaterPayload])
 
   return null
 }

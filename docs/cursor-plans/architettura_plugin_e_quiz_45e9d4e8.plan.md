@@ -21,18 +21,18 @@ isProject: false
 
 ## Telecomando = primo plugin
 
-Sì: il modello plugin può (e conviene) **iniziare dal telecomando**. Il piano [telecomando_qr_launchpad_8f3ad2a1.plan.md](./telecomando_qr_launchpad_8f3ad2a1.plan.md) è aggiornato in questo senso: **host** con server LAN unico + **plugin `remote`** che monta `/remote/`, `/api/remote/v1`, messaggi WS `channel: "remote"`. Il Quiz diventa naturalmente il **secondo** plugin (`quiz`, `/quiz/`, `channel: "quiz"`) senza duplicare il trasporto.
+Sì: il modello plugin può (e conviene) **iniziare dal telecomando**. Nell’implementazione corrente è modellato così: **host** con server LAN unico + **plugin `remote`** che monta `/remote/`, `/api/remote/v1`, messaggi WS `channel: "remote"`. Il Quiz diventa naturalmente il **secondo** plugin (`quiz`, `/quiz/`, `channel: "quiz"`) senza duplicare il trasporto.
 
 Esempio naming pacchetti: `packages/regia-plugin-api` (tipi contratto), `packages/regia-plugin-remote` (telecomando), `packages/regia-plugin-quiz` — oppure cartelle `plugins/remote` e `plugins/quiz` finché non estrai i package.
 
 ---
 
-## Allineamento con il piano Telecomando (LAN + QR)
+## Allineamento con Telecomando (LAN + QR)
 
-Il lavoro in [telecomando_qr_launchpad_8f3ad2a1.plan.md](./telecomando_qr_launchpad_8f3ad2a1.plan.md) non è solo “infrastruttura”: è **prima implementazione del contratto plugin** + feature telecomando.
+Il lavoro sul telecomando non è stato solo infrastruttura: è stata la **prima implementazione del contratto plugin** oltre alle feature telecomando.
 
-- **Opzione A**: server HTTP (+ WebSocket) nel **main**, bind LAN, **token nel QR** (URL sotto `/remote/?token=…` come in quel piano).
-- Il plugin `remote` usa la pipeline regia: playlist via IPC, `playback:send` / `PlaybackCommand` (dettagli nel piano telecomando).
+- **Opzione A**: server HTTP (+ WebSocket) nel **main**, bind LAN, **token nel QR** (URL sotto `/remote/?token=…` come nell’app).
+- Il plugin `remote` usa la pipeline regia: playlist via IPC, `playback:send` / `PlaybackCommand` (dettaglio in codice host e modulo remote sotto [`electron/`](/Users/mauroandreoni/Regia%20Video/electron/)).
 
 **Plugin Quiz**: stesso server, route e channel dedicati, secondo QR o link dalla regia; token e policy LAN restano nell’host.
 
@@ -93,7 +93,7 @@ sequenceDiagram
 
 ## Prossimi passi se vorrai implementarlo
 
-1. **Contratto plugin + host LAN** nello stesso incremento: registry, avvio/stop server, smistamento envelope WS; vedi todo `plugin-host-minimum` nel piano [telecomando](./telecomando_qr_launchpad_8f3ad2a1.plan.md).
+1. **Contratto plugin + host LAN** nello stesso incremento: registry, avvio/stop server, smistamento envelope WS; l’equivalente di `plugin-host-minimum` è già presente nell’host con il plugin `remote` attivo.
 2. **Plugin `remote`**: tutto ciò che oggi è descritto come telecomando (token QR `/remote/`, schede playlist/launchpad, `playback:send`).
 3. **Plugin `quiz`**: UI mobile, round, classifica su [`OutputApp`](/Users/mauroandreoni/Regia%20Video/src/OutputApp.tsx) o finestra dedicata, mount `/quiz/` e `channel: "quiz"`.
 

@@ -1402,7 +1402,8 @@ export default function FloatingPlaylist({
     const ul = listRef.current
     if (!ul) return
     const update = () => {
-      setPlaylistGridCols(readPlaylistGridColumnCount(ul))
+      const n = readPlaylistGridColumnCount(ul)
+      setPlaylistGridCols((cols) => (cols === n ? cols : n))
     }
     update()
     const ro = new ResizeObserver(update)

@@ -8,9 +8,10 @@ import {
   REGIA_SAFE_MODE_CHANGED_EVENT,
 } from './lib/regiaSafeModeSettings.ts'
 import App from './App.tsx'
+import PlaylistFloaterEntry from './floater/PlaylistFloaterEntry.tsx'
+import RegiaAppErrorBoundary from './RegiaAppErrorBoundary.tsx'
 
 document.title = regiaProgramDocumentTitle()
-import PlaylistFloaterEntry from './floater/PlaylistFloaterEntry.tsx'
 
 const playlistFloaterParams = new URLSearchParams(window.location.search)
 const playlistFloaterSessionId =
@@ -42,14 +43,18 @@ if (playlistFloaterSessionId) {
   createRoot(rootEl).render(
     <StrictMode>
       <SafeModeClassSync />
-      <PlaylistFloaterEntry sessionId={playlistFloaterSessionId} />
+      <RegiaAppErrorBoundary>
+        <PlaylistFloaterEntry sessionId={playlistFloaterSessionId} />
+      </RegiaAppErrorBoundary>
     </StrictMode>,
   )
 } else {
   createRoot(rootEl).render(
     <StrictMode>
       <SafeModeClassSync />
-      <App />
+      <RegiaAppErrorBoundary>
+        <App />
+      </RegiaAppErrorBoundary>
     </StrictMode>,
   )
 }
