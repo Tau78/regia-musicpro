@@ -12,4 +12,4 @@ Quando l’utente dice **VAI** inteso come *mandare in produzione la prossima ve
 3. Non sostituire lo script con passi inventati salvo problemi evidenti (percorso, permessi): lo script gestisce pull, sync lockfile se serve, bump **patch**, push `main`, e **non** crea tag (così non parte il workflow Electron sui tag `v*`).
 4. Se l’utente chiede esplicitamente anche build installer / tag semver: `bash scripts/release-vercel-prod.sh --with-tag`
 
-Dopo il push, il deploy è lato Vercel (integrazione Git) e/o workflow GitHub se configurati.
+Dopo il push, **Vercel** fa il deploy tramite **integrazione Git** (collegamento repo → progetto). Non c’è un secondo deploy obbligatorio da GitHub Actions per il web.
