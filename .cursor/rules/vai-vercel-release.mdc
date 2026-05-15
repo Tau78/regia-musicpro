@@ -1,0 +1,15 @@
+---
+description: Comando VAI → release produzione Vercel (bump versione, push main)
+alwaysApply: true
+---
+
+# «VAI» = release produzione su Vercel
+
+Quando l’utente dice **VAI** inteso come *mandare in produzione la prossima versione su Vercel* (senza altre istruzioni contrastanti):
+
+1. Esegui dalla root del repo: `bash scripts/release-vercel-prod.sh`
+2. Se lo script termina con errore per **working tree non pulito**, chiedi di committare o fare stash e ripeti solo dopo.
+3. Non sostituire lo script con passi inventati salvo problemi evidenti (percorso, permessi): lo script gestisce pull, sync lockfile se serve, bump **patch**, push `main`, e **non** crea tag (così non parte il workflow Electron sui tag `v*`).
+4. Se l’utente chiede esplicitamente anche build installer / tag semver: `bash scripts/release-vercel-prod.sh --with-tag`
+
+Dopo il push, il deploy è lato Vercel (integrazione Git) e/o workflow GitHub se configurati.
