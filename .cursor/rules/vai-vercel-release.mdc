@@ -9,7 +9,7 @@ alwaysApply: true
 
 Quando l’utente dice **VAI** nel senso di *mettere in produzione la prossima versione **web** (Vercel)*:
 
-1. Esegui: `bash scripts/release-vercel-prod.sh`
+1. **Esegui davvero** dalla root del repo (terminale / tool shell): `bash scripts/release-vercel-prod.sh` — non limitarti a descrivere i passi o a modificare file senza lanciare lo script (salvo impossibilità tecnica: chiedi permessi `network` + `git_write` se servono).
 2. Se fallisce per **working tree non pulito**: chiedi commit o stash, poi ripeti.
 3. Non reinventare i passi: lo script fa pull, eventuale sync lockfile, bump **patch** **senza tag** git, commit `release: x.y.z`, push `main` → **non** attiva il workflow release desktop.
 
@@ -19,8 +19,8 @@ Dopo il push, **Vercel** deploya tramite integrazione Git.
 
 Quando l’utente dice **VAI VERSIONE** (o equivalente chiaro: release installer, GitHub Release, aggiornamento app installata):
 
-1. Esegui: `bash scripts/release-github-desktop.sh` oppure `npm run release:github-desktop`
-2. Non sostituire lo script con passi manuali salvo errori chiari.
+1. **Esegui davvero** dalla root del repo: `bash scripts/release-github-desktop.sh` oppure `npm run release:github-desktop` — obbligo operativo, non solo spiegazione. Se il push richiede rete o scrittura git, usa i permessi necessari (`network`, `git_write`).
+2. Non sostituire lo script con passi manuali salvo errori chiari dopo un tentativo di esecuzione.
 3. Se il working tree **non è pulito**, lo script fa **`git add -A`** e un **commit** con messaggio da `PRE_RELEASE_COMMIT_MSG` oppure un default; nel corpo del commit include il **`git diff --stat`** dello snapshot. Subito dopo: pull, eventuale sync lockfile, **`npm version patch`** (commit `release: …` + **tag semver `v*`** coerente con la nuova versione in `package.json`), **`git push origin main --follow-tags`** → parte di solito **`.github/workflows/release.yml`**.
 4. Per un messaggio di commit pre-release esplicito: `PRE_RELEASE_COMMIT_MSG='feat: …' bash scripts/release-github-desktop.sh`
 
