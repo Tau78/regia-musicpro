@@ -1,15 +1,26 @@
 ---
-description: Comando VAI → release produzione Vercel (bump versione, push main)
+description: VAI / VAI VERSIONE → release Vercel web o GitHub desktop (tag)
 alwaysApply: true
 ---
 
-# «VAI» = release produzione su Vercel
+# «VAI» e «VAI VERSIONE»
 
-Quando l’utente dice **VAI** inteso come *mandare in produzione la prossima versione su Vercel* (senza altre istruzioni contrastanti):
+## VAI (solo web / Vercel)
 
-1. Esegui dalla root del repo: `bash scripts/release-vercel-prod.sh`
-2. Se lo script termina con errore per **working tree non pulito**, chiedi di committare o fare stash e ripeti solo dopo.
-3. Non sostituire lo script con passi inventati salvo problemi evidenti (percorso, permessi): lo script gestisce pull, sync lockfile se serve, bump **patch**, push `main`, e **non** crea tag (così non parte il workflow Electron sui tag `v*`).
-4. Se l’utente chiede esplicitamente anche build installer / tag semver: `bash scripts/release-vercel-prod.sh --with-tag`
+Quando l’utente dice **VAI** nel senso di *mettere in produzione la prossima versione **web** (Vercel)*:
 
-Dopo il push, **Vercel** fa il deploy tramite **integrazione Git** (collegamento repo → progetto). Non c’è un secondo deploy obbligatorio da GitHub Actions per il web.
+1. Esegui: `bash scripts/release-vercel-prod.sh`
+2. Se fallisce per **working tree non pulito**: chiedi commit o stash, poi ripeti.
+3. Non reinventare i passi: lo script fa pull, eventuale sync lockfile, bump **patch** **senza tag** git, commit `release: x.y.z`, push `main` → **non** attiva il workflow release desktop.
+
+Dopo il push, **Vercel** deploya tramite integrazione Git.
+
+## VAI VERSIONE (GitHub Release + auto-update desktop)
+
+Quando l’utente dice **VAI VERSIONE** (o equivalente chiaro: release installer, GitHub Release, aggiornamento app installata):
+
+1. Esegui: `bash scripts/release-github-desktop.sh` oppure `npm run release:github-desktop`
+2. Stesse regole su working tree pulito e su non sostituire lo script.
+3. Effetto: bump patch, **tag** `v*` (commit da `npm version patch`), `git push origin main --follow-tags` → parte di solito **`.github/workflows/release.yml`** (build Windows/macOS e pubblicazione su GitHub Releases / feed `electron-updater`).
+
+Seguire su GitHub **Actions** finché le job «Release» sono verdi; in caso di errore CI non c’è un rollback automatico del tag lato agent.
